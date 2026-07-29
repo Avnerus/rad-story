@@ -2,155 +2,208 @@
 
 ## Objective
 
-Add one source-synced object named exactly `Spark` to the Threlte Studio hierarchy. Selecting it must expose the important Spark 2.1 rendering-quality and LOD controls in Studio, and edits must affect the active splat rendering in real time.
+Add exactly one source-synced object named `Spark` to the Threlte Studio outline. Selecting it must expose the important Spark 2.1 rendering-quality, LOD, foveation, and paging-budget controls, and edits must affect active splat rendering in real time.
 
-At the same time, investigate and document why RAD content outside the app/default camera frustum can still be refined or fetched. Prove whether this is Spark 2.1's intended angular foveation behavior or a camera-routing defect in this app's dual-`SparkRenderer` setup, and fix an app bug if evidence establishes one.
+Every numeric value currently passed from `DeviceProfile.sparkRenderer` into `SparkRenderer` is mandatory:
 
-The user specifically wants the angle-related refinement controls exposed. In installed Spark 2.1 these are `coneFov0` and `coneFov`, with `coneFoveate` and `behindFoveate` controlling the retained detail. Do not invent a nonexistent `outsideFoveate` property.
+- `lodSplatScale`
+- `lodRenderScale`
+- `maxStdDev`
+- `maxPagedSplats`
+- `coneFov0`
+- `coneFov`
+- `coneFoveate`
+- `behindFoveate`
 
-## Important findings to verify before implementation
+Do not omit or present any of these as an ineffective/read-only field. `maxPagedSplats` is consumed when Spark creates its pager, so changing it live will require a safe controlled renderer/pager reconfiguration rather than ordinary property assignment.
 
-Use the installed `@sparkjsdev/spark` 2.1.0 declarations and implementation as the authority:
+Also investigate why RAD objects outside the app/default camera frustum can still be refined or fetched. Establish whether this is intended Spark 2.1 angular foveation behavior, a consequence of current values, update latency, or an app camera-routing defect. Fix only a proven app bug.
+
+## Installed Spark findings to verify
+
+Use the installed `@sparkjsdev/spark` 2.1.0 declarations, implementation, and source maps as the primary authority:
 
 - `node_modules/@sparkjsdev/spark/dist/types/SparkRenderer.d.ts`
-- the corresponding implementation/source map under `node_modules/@sparkjsdev/spark/dist/`
-- official Spark 2.1 docs if clarification is needed
+- `node_modules/@sparkjsdev/spark/dist/types/SplatMesh.d.ts`
+- corresponding files under `node_modules/@sparkjsdev/spark/dist/`
+- official Spark 2.1 documentation where clarification is needed
 
 Current evidence:
 
 - `SparkRenderer.frustumCulled` is set to `false`.
-- LOD traversal includes visible `SplatMesh` generators and supplies view-to-object transforms plus `lodScale`, `coneFov0`, `coneFov`, `coneFoveate`, and `behindFoveate` to the LOD worker. It is not a strict “inside camera frustum only” traversal.
-- Spark 2.1 uses a full-width angular foveation cone. `coneFov0` is the full-detail angle in degrees; `coneFov` is the reduced-detail cone angle in degrees; detail interpolates toward `behindFoveate` out to 180 degrees.
-- Nonzero `coneFoveate`/`behindFoveate` intentionally retains coarser LOD outside the central cone and behind the viewer. This can cause out-of-frustum RAD pages to remain selected/refined.
-- `clipXY` is a shader draw-clipping multiplier for splat centers (`1` is the exact rectangular X/Y frustum, default `1.4`). It is not documented or implemented as an LOD paging/refinement cutoff, so changing it alone must not be presented as preventing out-of-frustum refinement.
-- `driveLod()` derives its view from the camera passed to the renderer update and `current.viewToWorld`. The app intends only the real/default-camera renderer (`enableDriveLod: true`) to drive LOD; the editor renderer shares its `lodInstances`.
-- The current device profiles pass `coneFov0: 0.2`/`0.3` and `coneFov: 1`/`0.7`, but Spark 2.1 interprets these as **degrees**, not normalized scalar factors. Determine whether these values are an accidental carry-over from an older API. Replace them with justified degree-based defaults if so, preserving separate mobile/desktop tuning only where useful.
-- Changing public renderer fields is possible at runtime, but Spark does not automatically mark every LOD/foveation field change as dirty. Parameter application must explicitly trigger the correct LOD regeneration/render invalidation.
-- Allocation/construction fields such as `maxPagedSplats`, `numLodFetchers`, and `pagedExtSplats` are consumed when the pager/renderers are created and are not automatically live-reconfigurable after paging starts. Do not imply they are real-time controls unless a safe, tested recreation path is implemented.
+- LOD traversal includes visible LOD-capable `SplatMesh` generators and passes view-to-object transforms plus `lodScale`, `coneFov0`, `coneFov`, `coneFoveate`, and `behindFoveate` into the LOD worker. This is not strict inside-frustum-only traversal.
+- `coneFov0` is the full-detail cone's full-width angle in degrees.
+- `coneFov` is the reduced-detail cone's full-width angle in degrees.
+- Detail interpolates through `coneFoveate` and toward `behindFoveate` out to 180 degrees. Nonzero outer/behind foveation intentionally retains coarser refinement outside the central view.
+- Spark 2.1 exposes no independent `outsideFoveate` or “outside-frustum cutoff angle” property. Do not invent one.
+- `clipXY` controls shader draw clipping of splat centers. `1` matches the rectangular X/Y frustum and the Spark default `1.4` permits centers 40% beyond it. It does not control LOD paging/refinement.
+- `driveLod()` derives its viewpoint from the camera passed to renderer update/current view transform.
+- This app intends only the real/default-camera renderer (`enableDriveLod: true`) to drive LOD and paging. The editor renderer (`enableDriveLod: false`) receives shared `lodInstances`.
+- Current profiles pass `coneFov0: 0.2`/`0.3` and `coneFov: 1`/`0.7`; Spark 2.1 interprets these as degrees, not normalized scalar factors. Determine whether these are accidental old-API values and replace them with justified degree-based defaults if so.
+- Runtime mutation of ordinary renderer fields is possible, but Spark does not automatically mark all LOD/foveation changes dirty.
+- `maxPagedSplats`, `numLodFetchers`, and `pagedExtSplats` are used when creating a `SplatPager`. Mutating the field after pager creation does not resize/reconfigure that pager.
 
 ## Files likely involved
 
 - `src/lib/components/RadStoryScene.svelte`
 - `src/lib/components/SparkStudioBridge.svelte`
 - `src/lib/spark/createSparkStudioRenderer.ts`
-- a new small `Object3D` controller/model under `src/lib/spark/` (suggested name `SparkControls.ts`)
+- a new small `Object3D` controller/model under `src/lib/spark/`, such as `SparkControls.ts`
 - `src/lib/types.ts`
 - `src/lib/spark/deviceProfile.ts`
 - `tests/unit/createSparkStudioRenderer.test.ts`
 - `tests/unit/deviceProfile.test.ts`
-- new unit tests for the controller/apply logic
+- new controller/settings tests
 - `tests/e2e/rad-story.spec.ts`
 - `AGENTS.md`
 
-Keep the exact file set as small as the clean design permits.
+Keep the file set as small as a clean implementation permits.
 
 ## Required design
 
-### Studio object
+### Studio object and source sync
 
-- Add exactly one literal Threlte `<T>` node to the scene hierarchy with `name="Spark"`, backed by an owned custom `Object3D`-compatible controller/proxy. It must appear as `Spark` in the Studio outline and be selectable.
-- Do not add the real LOD-driving `SparkRenderer` to the Three scene. Preserve the dual-renderer ownership and camera-routing architecture.
-- Make the controller source-sync friendly so authored values persist in the Svelte source through Studio. Avoid private Studio imports.
-- Prevent meaningless transform authoring if Studio exposes transform fields for this controller. Use the narrowest public transaction guard or other established project pattern necessary, without weakening the existing `ScrollAnimator` guard.
-- Initialize the controller from the selected device profile, while keeping literal/source-synced props clear enough for Studio authoring. Avoid two competing sources of truth.
+- Add one literal Threlte `<T>` node with `name="Spark"`, backed by an owned custom `Object3D`-compatible settings controller.
+- It must appear exactly once in the outline, be selectable, and expose its supported fields in the normal Studio Inspector.
+- Supported authored values must persist through Studio source sync.
+- Avoid private Studio APIs.
+- Prevent meaningless transform source sync for this controller using the narrowest public transaction pattern needed. Do not weaken the existing `ScrollAnimator` guard.
+- Initialize settings from the device profile while keeping one clear source of truth.
+- Do not add the real LOD-driving `SparkRenderer` to the Three scene.
 
-### Controls to expose and apply live
+### Mandatory live controls
 
-At minimum expose these important, runtime-safe controls with appropriate names, types, finite-value validation, ranges, and invariants:
+All eight current device-profile renderer numbers must be editable and live:
 
-- General/render quality: `maxStdDev`, `minPixelRadius`, `maxPixelRadius`, `minAlpha`, `preBlurAmount`, `blurAmount`, `falloff`, `clipXY`, `focalAdjustment`, `sortRadial`, `minSortIntervalMs`
-- LOD: `enableLod`, `enableLodFetching`, `lodSplatCount` (use a clear numeric convention if “automatic/default” must be represented), `lodSplatScale`, `lodRenderScale`, `lodInflate`
-- Angular refinement/foveation: `coneFov0`, `coneFov`, `coneFoveate`, `behindFoveate`
+| Control | Meaning / requirement |
+|---|---|
+| `lodSplatScale` | LOD splat budget multiplier |
+| `lodRenderScale` | Minimum projected LOD splat size scale |
+| `maxStdDev` | Gaussian extent/quality bound |
+| `maxPagedSplats` | Paged-splat allocation; integer multiple of Spark page size `65,536` |
+| `coneFov0` | Full-detail full-width cone angle in degrees |
+| `coneFov` | Reduced-detail full-width cone angle in degrees |
+| `coneFoveate` | Detail scale at `coneFov` |
+| `behindFoveate` | Detail scale toward 180 degrees/behind viewer |
 
-Required angular semantics:
+Also expose these important runtime-safe quality and LOD controls unless the installed API proves one unsafe:
 
-- Label/document `coneFov0` and `coneFov` as full-width angles in **degrees**.
-- Enforce or normalize a coherent relationship such as `0 <= coneFov0 <= coneFov <= 360` based on the installed Spark implementation's accepted domain; confirm whether 180 or 360 is the correct practical maximum before choosing.
-- `coneFoveate` and `behindFoveate` must use safe nonnegative ranges consistent with Spark's worker implementation.
-- Explain in AGENTS.md and the completion report that these controls bias refinement beyond the view direction; Spark 2.1 has no independent public “outside-frustum cutoff angle.”
-- Include `clipXY` because it is useful for experimenting with visible frustum-edge clipping, but clearly distinguish it from LOD selection/fetching.
+- `minPixelRadius`
+- `maxPixelRadius`
+- `minAlpha`
+- `preBlurAmount`
+- `blurAmount`
+- `falloff`
+- `clipXY`
+- `focalAdjustment`
+- `sortRadial`
+- `minSortIntervalMs`
+- `enableLod`
+- `enableLodFetching`
+- `lodSplatCount`, with a clear representation for automatic/platform default
+- `lodInflate`
 
-For every edit:
+Optional construction/allocation controls such as `numLodFetchers` or encoding flags may be included only if their live lifecycle is implemented honestly and tested.
 
-- Propagate the setting consistently to both renderer instances where applicable so editor-camera rendering and default-camera rendering do not visually diverge.
-- Preserve `editorRenderer.enableDriveLod === false` and `realRenderer.enableDriveLod === true`; the controller must never allow Studio to break this invariant.
-- Mark renderer/sort/LOD state dirty as required. In particular, foveation changes must force a fresh LOD traversal even when the camera did not move. Call `onDirty`/Threlte invalidation through the established ownership path.
-- Avoid reconstructing renderers or the pager for ordinary live fields.
+For all numeric fields:
 
-If you include creation-only/allocation fields (`maxPagedSplats`, `numLodFetchers`, `pagedExtSplats`, accumulator encoding flags), either implement and test a safe lifecycle reset/recreation with the loaded `SplatMesh` preserved, or present them as non-editable/documented exclusions. Do not silently mutate ineffective fields.
+- Reject or normalize NaN, infinities, negatives where invalid, fractional integer-only values, and unsafe ranges.
+- Use field-specific bounds based on installed Spark semantics, not arbitrary generic bounds.
+- Preserve coherent angle relationships. Confirm the installed worker's practical range, then enforce `0 <= coneFov0 <= coneFov` and the correct upper bound.
+- Clearly identify `coneFov0` and `coneFov` as full-width **degree** values.
+- Ensure `maxPagedSplats` is a safe positive multiple of `65,536`; define deterministic rounding/validation behavior.
 
-### Controller-to-renderer bridge
+### Live propagation
 
-- Extend `createSparkStudioRenderer` with a small, testable public method/subscription mechanism for applying a validated settings snapshot or individual change.
-- Applying settings before `attach`, after `attach`, and during repeated idempotent disposal must be safe.
-- Do not leak renderer objects into unrelated Svelte components.
-- Do not use a per-frame polling loop. Changes should propagate reactively/event-driven.
-- Avoid unnecessary allocations during normal rendering.
+- Propagate applicable ordinary settings to both the editor and real renderer so the two views do not diverge.
+- Preserve the invariant `editorRenderer.enableDriveLod === false` and `realRenderer.enableDriveLod === true`. Do not expose `enableDriveLod`.
+- Mark render, sort, and LOD state dirty as required. Foveation changes must trigger a new LOD traversal even if the camera did not move.
+- Use reactive/event-driven propagation, not per-frame polling.
+- Support settings applied before attach, after attach, and during idempotent disposal safely.
+
+### Live `maxPagedSplats` reconfiguration
+
+Changing `maxPagedSplats` in Studio must actually change the live paging allocation. A bare assignment to `SparkRenderer.maxPagedSplats` is not acceptable after `realRenderer.pager` exists.
+
+Design and test a controlled reconfiguration path that:
+
+- safely disposes/recreates the affected Spark renderers and pager, or uses another supported public lifecycle that truly applies the new capacity;
+- preserves the loaded `SplatMesh`, its scene transform, URL/source-sync metadata, and authored settings;
+- preserves the dual-renderer ownership and camera routing;
+- does not leave the old pager attached to `PagedSplats`;
+- does not leak workers, textures, renderers, callbacks, or scene objects;
+- cannot race repeated rapid capacity edits into multiple live renderer pairs;
+- keeps the last valid settings snapshot when recreation completes;
+- invalidates rendering and resumes RAD refinement automatically;
+- remains safe if the viewer is destroyed during reconfiguration.
+
+It is acceptable for this one allocation setting to briefly restart paging, but it must not require a full page reload or manual viewer remount. Document that behavioral distinction in the Inspector-facing naming/help if possible, AGENTS.md, and the completion report.
+
+If installed Spark public APIs make safe live `maxPagedSplats` reconfiguration impossible while retaining the loaded mesh, stop and report the concrete blocker before substituting fake behavior or private internals.
 
 ## Frustum and camera-routing investigation
 
-Perform an evidence-based investigation, not only a visual guess:
+Perform an evidence-based investigation:
 
-1. Trace the installed Spark 2.1 LOD worker inputs and confirm how cone foveation treats regions inside the cone, outside the perspective frustum, and behind the viewer.
-2. Confirm `clipXY` affects shader draw clipping only and does not remove pages/chunks from LOD traversal.
-3. Instrument or test the dual renderer callback enough to prove which exact camera object, world position, world quaternion/direction, FOV, aspect, and projection matrix reach the `enableDriveLod` renderer when:
-   - Studio Editor Camera is off and the app/default `PerspectiveCamera` is active.
-   - Studio Editor Camera is on.
-   - The camera is toggled back off.
-4. Verify that editor-camera rendering never changes the real renderer's LOD viewpoint or drives its pager, and that the existing `sparkOverride` is restored even on errors.
-5. Reproduce the reported behavior with the lightweight RAD if feasible. Compare the loaded/refined LOD state while rotating/moving content outside the default camera view and while changing `coneFov0`, `coneFov`, `coneFoveate`, and `behindFoveate`.
-6. Determine whether the observation is:
-   - expected Spark angular foveation/prefetch behavior,
-   - caused by the suspicious current degree values,
-   - caused by update latency/background fetches,
-   - or an actual app camera-routing/matrix bug.
-7. Fix only a proven app bug. Do not patch `node_modules` or fork Spark. If strict frustum-only refinement is impossible through Spark 2.1's public API, state that clearly and recommend the closest achievable settings (for example very low/zero outer/behind foveation, if confirmed safe).
-
-Add temporary diagnostics only if needed and remove them before finalizing unless they are small, useful, and explicitly tested.
+1. Trace Spark 2.1 LOD worker inputs and explain how refinement behaves inside the cone, outside the perspective frustum, and behind the camera.
+2. Confirm `clipXY` affects draw clipping only and does not prune LOD pages/chunks.
+3. Prove which exact camera object, world position/quaternion/direction, FOV, aspect, and projection matrix reach the driving renderer during default → editor → default camera transitions.
+4. Prove the editor camera cannot drive the real renderer's LOD viewpoint or pager.
+5. Preserve and test `SparkRenderer.sparkOverride` restoration on success and errors.
+6. Reproduce the behavior with the lightweight RAD if feasible. Compare LOD/refinement while changing `coneFov0`, `coneFov`, `coneFoveate`, and `behindFoveate` without moving the camera.
+7. Determine whether the report is explained by intended angular foveation, the suspicious current degree values, background fetch/update latency, or an app routing/matrix bug.
+8. Fix only proven app defects. Do not patch `node_modules`.
+9. If strict frustum-only refinement is unavailable through Spark's public API, state that and document the closest confirmed settings for minimizing off-screen refinement.
 
 ## Constraints
 
-- Use installed `@sparkjsdev/spark` 2.1.0 API semantics; no `any`-based guesses and no private Spark internals in production code.
+- Use installed Spark 2.1 public APIs in production code; no `any`-based guesses, private fields typed through casts, or dependency patches.
+- Using documented public renderer state such as `lodDirty` is allowed only if it is part of the installed public declaration; encapsulate it in the renderer bridge.
 - Use only public Threlte Studio APIs.
-- Preserve the dual `SparkRenderer` architecture and existing `sparkOverride` `try/finally` behavior.
-- Preserve RAD paging (`paged: true`), `pagedExtSplats: true`, real-camera-driven LOD, editor-camera shared LOD, `renderMode="always"`, and current SplatMesh lifecycle.
-- Preserve mobile/desktop defaults unless correcting the degree-unit issue with documented evidence.
-- Do not add a custom Studio extension/pane unless the normal Studio Inspector genuinely cannot provide usable controls; prefer the requested outline object plus Inspector.
-- Do not change camera scroll animation, ScrollAnimator behavior, landing/viewer state, or unrelated styling.
-- Do not modify generated dependency files or anything under `node_modules`.
-- Do not include the user's unrelated `package-lock.json` working-tree change in your commits unless you establish it is required for this feature and explicitly explain why in the report.
+- Preserve the dual-renderer architecture, `sparkOverride` `try/finally`, RAD `paged: true`, `pagedExtSplats: true`, real-camera LOD ownership, editor shared LOD, `renderMode="always"`, and SplatMesh lifecycle.
+- Do not alter ScrollAnimator behavior, ScrollTrigger semantics, camera animation, landing/viewer flow, or unrelated styling.
+- Do not add a custom Studio pane unless normal Inspector controls cannot meet the requirement.
+- Do not update dependencies or modify generated/dependency files.
+- Do not commit the user's unrelated `package-lock.json` working-tree change unless it is proven necessary and explicitly accounted for.
 
 ## Acceptance criteria
 
 - The Studio outline contains exactly one selectable object named `Spark`.
-- Selecting `Spark` exposes the listed quality and LOD parameters with usable editing behavior.
-- `coneFov0`, `coneFov`, `coneFoveate`, and `behindFoveate` are present and affect refinement live; angle fields are clearly degrees.
-- A value edit is reflected by the relevant real and editor renderer fields without remounting the viewer or moving the camera.
-- Foveation edits force LOD recomputation; rendering invalidates appropriately.
-- Source sync persists supported authored control values.
-- Invalid/NaN/infinite/out-of-range input cannot corrupt renderer state; angle relationships remain coherent.
-- The fixed dual-renderer invariants cannot be edited away: only the real/default-camera renderer drives LOD/paging.
-- Tests prove that Editor Camera on/off does not take ownership of default-camera LOD selection and that the camera handed to the driving renderer is correct.
-- The frustum investigation has a specific conclusion backed by installed-source references and runtime/test evidence.
-- `clipXY` is not mislabeled as an LOD refinement cutoff.
-- Creation-only parameters are either safely recreated and tested or deliberately excluded/documented.
-- Existing behavior and existing tests remain green.
-- `AGENTS.md` is updated with concise, current architecture/features and relevant source references for a fresh agent session; do not turn it into a full implementation log.
+- Every numeric field currently provided by `DeviceProfile.sparkRenderer` is present, source-synced, validated, and live.
+- Representative additional quality/LOD controls listed above are present and live.
+- Ordinary edits affect both renderers immediately without a viewer remount or camera movement.
+- `maxPagedSplats` edits actually apply to a newly configured live pager/renderer lifecycle without page reload, losing the mesh, leaking resources, or breaking camera routing.
+- `maxPagedSplats` accepts only normalized positive multiples of `65,536`.
+- `coneFov0`, `coneFov`, `coneFoveate`, and `behindFoveate` visibly affect LOD selection live; the two cone angles are clearly degrees.
+- Foveation edits force LOD recomputation.
+- Invalid values cannot corrupt renderer state.
+- Editor/real `enableDriveLod` ownership cannot be edited away.
+- Tests prove correct camera routing through default → editor → default transitions.
+- The frustum conclusion is specific and backed by installed-source and runtime/test evidence.
+- `clipXY` is not described as an LOD cutoff.
+- Current suspicious cone defaults are either corrected with evidence or explicitly justified.
+- Existing behavior and tests remain green.
+- `AGENTS.md` is updated with concise current architecture, feature behavior, live-versus-recreate settings semantics, and relevant source references.
 
-Before finalizing, re-check every acceptance criterion above and explicitly account for each one in the status report.
+Before finalizing, re-check and explicitly account for every acceptance criterion.
 
 ## Tests to create and run
 
-Create tests for this new feature, not only implementation:
+Create new tests covering:
 
-- Unit tests for the new controller's defaults, branding/type/name, validation, finite-value handling, angle normalization/invariants, change notifications, and idempotent disposal/unsubscription.
-- Unit tests for applying every supported setting before/after renderer creation and to both renderers.
-- Unit tests proving foveation changes set `lodDirty`/trigger recomputation and render invalidation without camera movement.
-- Unit tests proving `enableDriveLod` remains false/true for editor/real renderers even when controller settings are applied.
-- Unit tests for correct camera routing through default → editor → default transitions, including error restoration.
-- Update device-profile tests for justified degree-based cone defaults.
-- E2E coverage that `Spark` appears exactly once in the outline, can be selected, exposes representative general/LOD/angular fields, and source-sync/live behavior works in the Spark stub environment.
-- If stable, add a focused regression demonstrating the default camera remains the LOD driver while Editor Camera is active.
+- Controller name/type/defaults and all current profile fields.
+- Validation, finite values, field-specific ranges, integer/page-size normalization, and angle invariants.
+- Change notifications and idempotent unsubscribe/disposal.
+- Applying each ordinary setting before/after renderer creation and to both renderers.
+- Render/sort/LOD invalidation, especially foveation changes without camera movement.
+- Immutable `enableDriveLod` ownership.
+- `maxPagedSplats` recreation before pager creation, after pager creation, during rapid repeated changes, and during viewer disposal.
+- Old pager/renderer cleanup and new pager capacity.
+- Loaded mesh, transform, and settings preservation across capacity recreation.
+- Default → editor → default camera routing and error restoration.
+- Updated device-profile degree defaults.
+- E2E proof that `Spark` appears once, is selectable, exposes all eight profile fields plus representative additional controls, and Studio edits persist/apply.
+- E2E or stable integration proof that `maxPagedSplats` triggers the controlled lifecycle and returns to rendering.
 
 Run:
 
@@ -160,36 +213,37 @@ Run:
 - `npm run test:e2e`
 - `npm run build`
 
-Also perform a concise manual check with `https://avner.us/baby_yoda-lod.rad` if the environment permits, specifically exercising angle/foveation changes without moving the camera.
+If feasible, manually verify with `https://avner.us/baby_yoda-lod.rad`, including cone/foveation edits without camera movement and a `maxPagedSplats` change.
 
-## Things you must not change
+## Things Pi must not change
 
-- Do not replace or collapse the two Spark renderers.
-- Do not let the Studio editor camera drive LOD fetching.
-- Do not add the real-camera renderer to the scene.
-- Do not alter ScrollTrigger scrub semantics or ScrollAnimator playback/source-sync behavior.
-- Do not expose `enableDriveLod`, renderer ownership, raw renderer/worker/pager objects, or unsafe allocation internals as editable Studio fields.
-- Do not claim strict frustum-only paging unless it is actually proven.
-- Do not patch dependency source, update dependencies, or commit unrelated user changes.
+- Do not collapse or replace the two-renderer architecture.
+- Do not let the editor camera drive LOD/paging.
+- Do not add the real renderer to the scene.
+- Do not expose `enableDriveLod`, raw renderer/worker/pager objects, or unsafe internals in Studio.
+- Do not implement an Inspector field that silently has no runtime effect.
+- Do not claim strict frustum-only paging without proof.
+- Do not patch Spark or use private Threlte/Spark imports.
+- Do not change animation, source-sync, app flow, unrelated UI, dependencies, or unrelated user changes.
 
 ## Expected completion report
 
 Write `.codex-handoff/status.md` with:
 
-1. Summary of implementation
+1. Summary
 2. Files changed
-3. Studio controls added, including defaults/ranges/units and whether each is live or creation-only
-4. Frustum/LOD investigation:
-   - installed Spark source locations examined
-   - exact LOD/foveation behavior found
-   - exact camera-routing evidence
-   - whether a bug was found and what was fixed
-   - closest settings for minimizing out-of-frustum refinement
-5. Acceptance criteria checklist (every item explicitly checked)
-6. Tests created
-7. Tests run and results
-8. Manual verification performed and observations
-9. Remaining limitations or follow-ups
-10. Commit hash(es)
+3. Complete controls table: default, range, units, validation, and live mechanism
+4. Explicit accounting for all eight current device-profile numbers
+5. `maxPagedSplats` lifecycle/recreation design and cleanup evidence
+6. Frustum/LOD findings with installed source references
+7. Camera-routing evidence and bug conclusion
+8. Acceptance criteria checklist
+9. Tests created
+10. Exact test commands/results
+11. Manual verification and observations
+12. Remaining limitations/follow-ups
+13. Commit hash(es)
 
-Always write `status.md` as the **last action before committing and pushing**. Re-check that every acceptance criterion is met before writing it. After the final push, do not run more verifications, inspect files, or make further modifications.
+Request: update `AGENTS.md` with concise, up-to-date feature and architecture information plus source references suitable for a fresh agent session; do not add a chronological implementation log.
+
+Always write `status.md` as the **last action before committing and pushing**. Re-check that all acceptance criteria are met before writing it. After the final push, do not run more verification, inspect files, or make further modifications.
