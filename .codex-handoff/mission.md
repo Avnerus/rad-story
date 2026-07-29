@@ -1,126 +1,128 @@
-# Final follow-up mission: wire reload state and verify capacity/source sync
+# Surgical follow-up: make status reactive and complete pager handoff
 
 ## Objective
 
-Keep the current `SparkReloadCoordinator`, stable `SplatWrapper`, Spark Controls extension, and all-green test setup. Close the remaining wiring and evidence gaps without another architectural rewrite.
+Correct four specific remaining problems without redesigning the Spark controls feature:
 
-The current code is close, but the status checks requirements that it later admits were not verified.
+1. reload status must actually update the open pane reactively;
+2. success must mean the replacement mesh is attached to the new driving pager;
+3. capacity e2e must assert identities/capacity rather than input text;
+4. verification must stop describing the Spark-stub build as real splat rendering.
 
-## Required work
+Keep the current coordinator, stable wrapper, extension UI, settings system, and all-green baseline.
 
-### 1. Connect reload progress and errors to the pane
+## Verified code defects
 
-`SparkControlsExtension` defines `uiState.reloading` and `uiState.reloadError`, but nothing updates either field. `SparkSplats` never registers `coordinator.onReloadError()`. The coordinator catches factory errors internally, so the bridge's `.catch()` will not receive them.
+### Status is not reactive
 
-Add a small instance-owned runtime/status channel associated with the current `SparkControls` or scene:
+`RadStoryScene.handleReloadStatus()` assigns a plain property:
 
-- capacity commit immediately reports reload pending/in progress;
-- success clears progress only after replacement mesh initialization and scene swap;
-- failure exposes a useful message in `spark-error`;
-- a later successful request clears the prior error;
-- superseded requests do not flash false completion/errors;
-- destruction clears state and cannot update a dead pane;
-- source-sync-unavailable mode still shows correct live reload progress.
+```ts
+sparkControls.reloadStatus = status
+```
 
-Do not introduce a new global singleton.
+`SparkControlsExtension` reads that property only in an effect driven by selection and transaction `revision`. A reload status update is neither a Svelte reactive mutation visible to that effect nor a transaction, so `uiState.reloading` and `uiState.reloadError` do not update.
 
-### 2. Verify real pager handoff using public fields
+`SparkReloadStatusBridge` receives `update()` calls but nothing subscribes to it.
 
-Installed Spark 2.1 declarations publicly expose `SparkRenderer.pager`, `SplatMesh.paged`, and `PagedSplats.pager`. Use those public fields through an owned bridge/test diagnostic to verify:
+Implement one coherent instance-owned mechanism:
 
-- old driving renderer/pager identity;
-- old mesh/PagedSplats identity;
-- replacement renderer/pager identity;
-- replacement mesh/PagedSplats identity;
-- old objects are no longer active;
-- replacement `mesh.paged.pager === realRenderer.pager`;
-- replacement pager capacity corresponds to normalized `maxPagedSplats`;
-- the reload completion signal used by the pane does not claim full completion before this handoff is observed.
+- expose a subscribe/unsubscribe API from `SparkControls` or attach the existing bridge to the selected controller;
+- the extension must subscribe when one Spark controller is selected and clean up on selection change/destroy;
+- update `uiState.reloading`/`reloadError` directly from notifications;
+- remove redundant unused bridge layers;
+- test live start, success, failure, supersession, selection change, and destroy behavior.
 
-If pager attachment occurs on the next render/update after `SplatMesh.initialized`, model that explicitly rather than equating mesh initialization with pager readiness. Use a bounded event/frame-driven readiness check with cancellation—not an arbitrary sleep.
+### Success occurs before pager handoff
 
-### 3. Exercise `maxPagedSplats`
+The coordinator calls `status.success()` immediately after synchronous `onReloadComplete`, while AGENTS.md correctly states `SplatMesh.initialized` precedes pager attachment. Therefore the pane can claim completion before:
 
-Add a capacity e2e test in the stub build with diagnostic counters/IDs:
+```ts
+replacementMesh.paged?.pager === newRealRenderer.pager
+```
 
-- edit `maxPagedSplats` through the actual pane;
-- verify normalization to a `65,536` multiple;
-- verify reload progress appears and clears;
-- verify renderer pair and mesh identities change;
-- verify only one wrapper/active mesh remains;
-- verify other edited settings and wrapper transform persist;
-- perform rapid edits and verify the final value wins;
-- verify no late replacement after viewer destruction/remount.
+Make activation/readiness asynchronous:
 
-Extend the Spark stub narrowly to model pager identity/capacity and disposal sufficiently for this test.
+- attach the initialized replacement mesh to the stable wrapper;
+- wait through a bounded, cancellation-aware render/update mechanism for public pager identity equality;
+- confirm the pager is not disposed and has the normalized capacity;
+- only then resolve reload and emit success;
+- on timeout/failure, emit error and leave a deterministic recoverable scene state;
+- superseded/destroyed generations must cancel readiness and dispose their replacement.
 
-### 4. Verify source sync and undo honestly
+Use animation/render events or another public event-driven mechanism, not fixed sleeps.
 
-Preview/stub e2e lacks the Vite source-sync plugin, so it cannot prove persistence or undo. Add the strongest suitable evidence:
+### Stub and e2e do not model/assert handoff
 
-- unit/component tests with a mocked public `useTransactions()` contract that assert the root `settings` transaction's `value`, `historicValue`, `sync: true`, and `createHistoryRecord: true`;
-- prove undo applies the historic full settings snapshot through the writable setter and re-propagates live values;
-- manually use the dev server with source sync enabled, edit one harmless representative field, observe the actual Svelte source change and Studio undo/redo, then restore the desired authored value before finalizing.
+The stub defines pager objects but never assigns `mesh.paged.pager` during its render/update path. Existing capacity tests only verify the input is rounded and no error text appears.
 
-Report exact observed source attribute/object and undo/redo values. Do not check source sync/undo acceptance based only on code inspection.
+Extend the stub so its public behavior models Spark's relevant handoff:
 
-### 5. Strengthen field-level evidence
+- driving renderer discovers the active nested stub SplatMesh during render/update;
+- assigns its pager to `mesh.paged.pager`;
+- exposes stable test diagnostics for renderer, pager, mesh, generation, active-mesh count, disposed state, and capacity.
 
-- Numeric e2e must assert controller/renderer diagnostic state, not only that the input retains typed text.
-- Boolean e2e must assert live state outside the checkbox.
-- Nullable test must verify numeric → renderer value and empty → automatic/undefined.
-- Cone invariant test must verify both `coneFov0` and the adjusted `coneFov`.
-- Capacity test must verify actual reload/handoff as above.
+Capacity e2e must assert:
 
-### 6. Perform the omitted real capacity check
+- reload progress becomes visible, then clears;
+- old/new renderer IDs differ;
+- old/new pager IDs differ and old is disposed;
+- old/new mesh IDs differ and old is disposed;
+- new `PagedSplats.pager` ID equals the new driving renderer pager ID;
+- capacity equals the normalized input;
+- exactly one active mesh remains;
+- rapid edits settle on the final capacity/generation;
+- wrapper transform and another Spark setting persist;
+- destroy/remount produces no late activation.
 
-With the real Baby Yoda RAD:
+### Verification report confuses stub with real Spark
 
-- wait until initial paging/rendering is active;
-- edit an ordinary quality value and observe it live;
-- change `maxPagedSplats`;
-- observe progress, mesh replacement, new pager handoff/capacity, and rendering/refinement recovery;
-- verify camera/scroll behavior and wrapper transform remain unchanged.
+When `VITE_E2E_STUB_SPARK=true`, Spark classes and splat rendering are stubbed. A remote Baby Yoda URL in that build is not real Spark paging/rendering.
 
-The report must clearly distinguish real Spark from the stub build.
+- Describe stub verification only as stub behavior.
+- Perform a real non-stub check for the actual RAD capacity reload.
+- If GPU stalls block native pointer commands, use handler-level DOM dispatch/evaluate for the pane input as allowed by AGENTS.md, then inspect public debug state and screenshots. State clearly which parts prove handler behavior versus native actionability.
+- Do not claim real splat rendering from the stub.
+
+## Source-sync test quality
+
+The new transaction tests manually reproduce the extension's transaction object rather than testing production code. Extract a small production helper used by the extension to build/describe the root `settings` transaction, then test that helper with the public transactions contract. Keep writable-setter undo/redo tests.
+
+Direct dev-server source-sync/undo remains desirable. If GPU stalls prevent native actions, use the same DOM-dispatch diagnostic and inspect the actual source edit/history result. Restore the intended authored value before final status.
 
 ## Files likely involved
 
+- `src/lib/spark/SparkReloadRuntime.ts`
+- `src/lib/spark/SparkReloadStatusBridge.ts` (remove or connect properly)
+- `src/lib/spark/SparkControls.ts`
 - `src/lib/components/SparkSplats.svelte`
 - `src/lib/components/SparkStudioBridge.svelte`
 - `src/lib/components/RadStoryScene.svelte`
-- `src/lib/spark/SparkReloadRuntime.ts`
 - `src/lib/studio/spark-controls/SparkControlsExtension.svelte`
-- a small instance-owned status/diagnostic bridge
-- `tests/fixtures/spark-stub.ts`
-- `tests/unit/SparkReloadCoordinator.test.ts`
-- component/transaction tests for the extension logic
-- `tests/e2e/rad-story.spec.ts`
+- a small production transaction helper
+- Spark stub, coordinator/transaction unit tests, e2e tests
 - `AGENTS.md`
 
 ## Constraints
 
-- Preserve the current coordinator/wrapper design and all prior correct fixes.
-- Use public Spark and Studio APIs only.
-- No fixed timing sleeps as pager-readiness logic.
-- Preserve dual renderers, default-camera LOD ownership, camera/ScrollAnimator state, source-authored wrapper transform, and all Spark settings.
+- Preserve public API use, dual renderers, real-camera LOD ownership, stable wrapper, coordinator generation cancellation, and settings behavior.
+- No fixed delays for readiness.
 - Do not expose `enableDriveLod`.
-- Do not regress the 48/48 e2e suite.
+- Do not regress existing tests.
 - Do not commit the user's unrelated `package-lock.json`.
 
 ## Acceptance criteria
 
-- Pane progress/error UI is driven by real coordinator state.
-- Completion means replacement mesh is active and its public `PagedSplats.pager` is the new driving renderer's pager.
-- Requested normalized pager capacity is directly observed.
-- Capacity pane edit, rapid edits, and destroy/remount are covered end to end.
-- Representative numeric, boolean, nullable, and cone tests verify live state beyond input appearance.
-- Source-sync transaction contents and undo behavior are tested.
-- Dev-server manual source sync and undo/redo are directly observed.
-- Real Baby Yoda capacity reload and rendering recovery are directly observed.
-- Stub and real verification are clearly distinguished.
-- Check, lint, unit, full e2e, and build all pass.
-- Status checklist contains no item contradicted by limitations.
+- Open pane visibly transitions idle → reloading → success/error from coordinator notifications.
+- Status subscriptions clean up on selection change, remount, and destroy.
+- Reload success occurs only after public mesh/renderer pager identity matches and capacity is confirmed.
+- Stub genuinely models pager attachment.
+- Capacity e2e directly verifies old/new identities, disposal, attachment, capacity, single active mesh, rapid final-wins, and preserved state.
+- Production transaction helper is exercised by tests.
+- Real non-stub Baby Yoda capacity reload is performed and clearly distinguished from stub verification.
+- Source-sync/undo evidence uses production transaction logic and, if feasible, actual dev source/history.
+- Check, lint, all unit tests, full e2e, and build pass.
+- AGENTS.md/status contain no contradictory claims.
 
 ## Tests to run
 
@@ -132,31 +134,30 @@ The report must clearly distinguish real Spark from the stub build.
 
 ## Things Pi must not change
 
-- Do not replace the reload architecture again.
-- Do not claim pager readiness from `SplatMesh.initialized` alone.
-- Do not treat input text/checkbox state as proof of renderer state.
-- Do not claim source sync/undo from a preview build where it is disabled.
-- Do not omit the real capacity edit.
+- Do not add another unconnected status bridge.
+- Do not signal success at mesh initialization alone.
+- Do not assert pager handoff from input normalization.
+- Do not call a stub build real Spark rendering.
+- Do not duplicate production transaction logic only inside tests.
 - Do not include unrelated changes.
 
 ## Expected completion report
 
 Write `.codex-handoff/status.md` with:
 
-1. Reload status/error wiring
-2. Direct old/new mesh, PagedSplats, renderer, pager, and capacity evidence
-3. Capacity/rapid/destroy e2e evidence
-4. Live state assertions for representative fields
-5. Transaction and undo unit evidence
-6. Dev-server source-sync and undo/redo observations
-7. Real Baby Yoda capacity/recovery observations
-8. Stub-versus-real distinction
-9. Acceptance checklist
-10. Exact all-green command results
-11. Files changed
-12. Remaining non-core limitations
-13. Commit hash(es)
+1. Reactive status subscription lifecycle
+2. Async pager-readiness mechanism and cancellation
+3. Direct old/new identity/capacity evidence
+4. Stub modeling and capacity e2e assertions
+5. Production transaction helper/source-sync evidence
+6. Real non-stub Baby Yoda capacity/recovery evidence
+7. Stub versus real distinction
+8. Acceptance checklist
+9. Exact all-green results
+10. Files changed
+11. Remaining non-core limitations
+12. Commit hash(es)
 
-Update `AGENTS.md` concisely with verified final behavior and relevant source references. Remove any stale statement equating initialization with pager readiness.
+Update `AGENTS.md` concisely with verified final behavior. Remove the unused bridge or document its real subscription path.
 
-Always write `status.md` as the **last action before committing and pushing**. Re-check every acceptance item first. After the final push, do not run more verification, inspect files, or modify anything.
+Always write `status.md` as the last action before committing and pushing. Re-check every acceptance item first. After the final push, do not verify, inspect, or modify anything.
