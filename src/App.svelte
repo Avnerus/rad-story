@@ -7,6 +7,7 @@
   import { getDeviceProfile } from '$lib/spark/deviceProfile'
   import RadStoryScene from '$lib/components/RadStoryScene.svelte'
   import ScrollAnimatorExtension from '$lib/studio/scroll-animator/ScrollAnimatorExtension.svelte'
+  import SparkControlsExtension from '$lib/studio/spark-controls/SparkControlsExtension.svelte'
   import type { DeviceProfile } from '$lib/types'
 
   const SAMPLE_URL = 'https://storage.googleapis.com/forge-dev-public/asundqui/rad/260217/cozy-spaceship_2-lod.rad'
@@ -107,7 +108,7 @@
         })
       }
     >
-      <Studio extensions={[ScrollAnimatorExtension]}>
+      <Studio extensions={[ScrollAnimatorExtension, SparkControlsExtension]}>
         <RadStoryScene
           url={activeUrl}
           {profile}

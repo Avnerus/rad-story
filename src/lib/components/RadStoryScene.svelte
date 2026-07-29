@@ -183,7 +183,7 @@
   <T is={cameraTarget} name="CameraTarget" />
 </T>
 
-<SparkStudioBridge {profile} {sparkControls} />
+<SparkStudioBridge {profile} {sparkControls} radUrl={url} />
 
 <!-- SparkControls: Studio-editable Spark quality/LOD settings -->
 <T is={sparkControls} name="Spark" settings={sparkControls.settings} />

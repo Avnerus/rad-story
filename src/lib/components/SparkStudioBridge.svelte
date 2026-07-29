@@ -2,6 +2,7 @@
   import { useThrelte } from '@threlte/core'
   import { onMount, onDestroy } from 'svelte'
   import { createSparkStudioRenderer } from '$lib/spark/createSparkStudioRenderer'
+  import { triggerReload } from '$lib/spark/SparkReloadRuntime'
   import type { DeviceProfile } from '$lib/types'
   import type { SparkRendererOptions } from '@sparkjsdev/spark'
   import type { SparkControls, SparkSettings } from '$lib/spark/SparkControls'
@@ -9,9 +10,10 @@
   interface Props {
     profile: DeviceProfile
     sparkControls?: SparkControls | null
+    radUrl?: string
   }
 
-  let { profile, sparkControls = null }: Props = $props()
+  let { profile, sparkControls = null, radUrl = '' }: Props = $props()
 
   const threlte = useThrelte()
   let handle = $state<{
@@ -19,14 +21,12 @@
     applySettings: (oldSettings: SparkSettings, newSettings: SparkSettings) => boolean
     reconfigureMaxPagedSplats: (settings: SparkSettings) => void
   } | null>(null)
-  // Track the last-applied settings snapshot
   let lastSettings: SparkSettings | null = $state(null)
 
   onMount(() => {
     const { scene, renderer, invalidate } = threlte
     if (!scene || !renderer) return
 
-    // Build SparkRenderer options from device profile
     const sparkOptions: SparkRendererOptions = {
       renderer,
       onDirty: invalidate,
@@ -50,37 +50,37 @@
       reconfigureMaxPagedSplats: studioHandle.reconfigureMaxPagedSplats,
     }
 
-    // If SparkControls is provided, subscribe to its settings changes
     if (sparkControls) {
-      // Apply initial settings immediately
       const initialSettings = sparkControls.settings
       lastSettings = initialSettings
       studioHandle.applySettings(initialSettings, initialSettings)
 
-      // Subscribe to future changes
       const unsubscribe = sparkControls.onChange((changed) => {
         const oldSettings = lastSettings ?? sparkControls.settings
         const newSettings = sparkControls.settings
 
         if (changed.has('maxPagedSplats')) {
-          // maxPagedSplats requires renderer/pager recreation.
-          // Pass the complete current settings so all fields survive recreation.
+          // Reconfigure renderers with complete settings
           studioHandle.reconfigureMaxPagedSplats(newSettings)
+
+          // Trigger SplatMesh reload so new PagedSplats gets fresh pager
+          if (radUrl) {
+            triggerReload(radUrl).catch(() => {
+              // Reload failure is non-fatal — rendering continues with old mesh
+            })
+          }
         } else {
-          // All other fields can be applied live with change detection
           studioHandle.applySettings(oldSettings, newSettings)
         }
 
         lastSettings = newSettings
       })
 
-      // Store unsubscribe for cleanup
       ;(handle as Record<string, unknown>)._unsubscribe = unsubscribe
     }
   })
 
   onDestroy(() => {
-    // Unsubscribe from SparkControls changes
     const unsub = (handle as Record<string, unknown>)?._unsubscribe as (() => void) | undefined
     unsub?.()
     handle?.dispose()

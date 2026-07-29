@@ -2,26 +2,44 @@
   import { T } from '@threlte/core'
   import { onMount, onDestroy } from 'svelte'
   import { SplatMesh } from '@sparkjsdev/spark'
+  import { setReloadCallback } from '$lib/spark/SparkReloadRuntime'
 
-  let {
-    url,
-  } = $props()
+  interface Props {
+    url: string
+  }
+
+  let { url }: Props = $props()
 
   let mesh: SplatMesh | null = $state(null)
 
+  function createMesh(): SplatMesh | null {
+    if (!url) return null
+    return new SplatMesh({
+      url,
+      paged: true,
+      raycastable: false,
+    })
+  }
+
   onMount(() => {
-    // Create SplatMesh — owned by Threlte <T> below for declarative transforms.
-    // SparkRenderer lifecycle is managed by SparkStudioBridge.
-    if (url) {
-      mesh = new SplatMesh({
-        url,
-        paged: true,
-        raycastable: false,
-      })
-    }
+    mesh = createMesh()
+
+    // Register reload callback
+    setReloadCallback(async () => {
+      // Dispose old mesh
+      mesh?.dispose()
+      mesh = null
+
+      // Small delay to ensure disposal completes
+      await new Promise((r) => setTimeout(r, 50))
+
+      // Create new mesh with the same URL
+      mesh = createMesh()
+    })
   })
 
   onDestroy(() => {
+    setReloadCallback(null)
     mesh?.dispose()
   })
 </script>

@@ -143,7 +143,7 @@ describe('SparkControls', () => {
       expect(c.maxPixelRadius).toBe(100) // raised to match min
     })
 
-    it('validates boolean input', () => {
+    it('validates boolean input strictly', () => {
       const c = new SparkControls()
       c.sortRadial = false
       expect(c.sortRadial).toBe(false)
@@ -151,7 +151,13 @@ describe('SparkControls', () => {
       expect(c.sortRadial).toBe(true)
       c.sortRadial = 'false' // string "false" → false
       expect(c.sortRadial).toBe(false)
-      c.sortRadial = 'anything' // truthy string → true
+      c.sortRadial = 'true' // string "true" → true
+      expect(c.sortRadial).toBe(true)
+      c.sortRadial = 1 // number 1 → true
+      expect(c.sortRadial).toBe(true)
+      c.sortRadial = 0 // number 0 → false
+      expect(c.sortRadial).toBe(false)
+      c.sortRadial = 'anything' // unrecognized string → default (true for sortRadial)
       expect(c.sortRadial).toBe(true)
     })
 

@@ -148,13 +148,14 @@ function validateNumber(value: unknown, def: FieldDef): number | null {
 }
 
 /**
- * Validate a boolean field. Only `true` and `false` are accepted.
- * Truthy strings like `"false"` are treated as `true` (JS Boolean behavior),
- * but we explicitly handle the string `"false"` as `false`.
+ * Validate a boolean field. Accepts boolean values, the strings "true"/"false",
+ * and the numbers 1/0. All other values fall back to the field default.
  */
-function validateBoolean(value: unknown): boolean {
-  if (value === 'false' || value === '0') return false
-  return Boolean(value)
+function validateBoolean(value: unknown, def: FieldDef): boolean {
+  if (typeof value === 'boolean') return value
+  if (value === 'true' || value === 1) return true
+  if (value === 'false' || value === 0) return false
+  return def.default as boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -170,7 +171,7 @@ function validateField<K extends keyof SparkSettings>(
 ): SparkSettings[K] {
   const def = FIELD_DEFS[key]
   if (typeof def.default === 'boolean') {
-    return validateBoolean(raw) as SparkSettings[K]
+    return validateBoolean(raw, def) as SparkSettings[K]
   }
   return validateNumber(raw, def) as SparkSettings[K]
 }
