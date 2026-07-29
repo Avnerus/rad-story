@@ -1,188 +1,195 @@
-# Mission: Keep Scroll Animator Pane Open Across Object Selection
-
-This is a fresh feature/behavior mission, not a continuation of the prior positioning verification pass.
+# Mission: Studio-editable Spark quality and LOD controls
 
 ## Objective
 
-Make the Scroll Animator authoring pane persistent while the user changes selection in Threlte Studio's hierarchy. Once opened, it must remain open and reactively update its contents for the newly selected object. It should close only through an explicit user action: the Scroll Animator toolbar toggle or Escape.
+Add one source-synced object named exactly `Spark` to the Threlte Studio hierarchy. Selecting it must expose the important Spark 2.1 rendering-quality and LOD controls in Studio, and edits must affect the active splat rendering in real time.
 
-## Confirmed Root Cause
+At the same time, investigate and document why RAD content outside the app/default camera frustum can still be refined or fetched. Prove whether this is Spark 2.1's intended angular foveation behavior or a camera-routing defect in this app's dual-`SparkRenderer` setup, and fix an app bug if evidence establishes one.
 
-`FixedToolbarPane.svelte` currently installs a document-level capture-phase `pointerdown` listener. Any pointer interaction outside the panel or its anchor calls `closePanel()`. A hierarchy selection is necessarily outside both, so selecting another object dismisses the pane even though `ScrollAnimatorExtension.svelte` already reacts to `objectSelection.selectedObjects` and can update its content correctly.
+The user specifically wants the angle-related refinement controls exposed. In installed Spark 2.1 these are `coneFov0` and `coneFov`, with `coneFoveate` and `behindFoveate` controlling the retained detail. Do not invent a nonexistent `outsideFoveate` property.
 
-Do not solve this by special-casing Studio hierarchy CSS classes. That would depend on private DOM and would still close the pane when the user interacts with other useful authoring UI such as the Inspector or transform controls.
+## Important findings to verify before implementation
 
-The intended interaction model is a persistent authoring pane:
+Use the installed `@sparkjsdev/spark` 2.1.0 declarations and implementation as the authority:
 
-- toolbar toggle opens/closes it;
-- Escape closes it;
-- hierarchy, Inspector, canvas, transform-control, and other outside interactions do not close it;
-- selection changes update the content in place.
+- `node_modules/@sparkjsdev/spark/dist/types/SparkRenderer.d.ts`
+- the corresponding implementation/source map under `node_modules/@sparkjsdev/spark/dist/`
+- official Spark 2.1 docs if clarification is needed
 
-## Files Likely Involved
+Current evidence:
 
-- `src/lib/studio/scroll-animator/FixedToolbarPane.svelte`
-- `src/lib/studio/scroll-animator/ScrollAnimatorExtension.svelte` only if a narrow selection/content key or test hook is needed
-- `tests/e2e/rad-viewer.spec.ts`
+- `SparkRenderer.frustumCulled` is set to `false`.
+- LOD traversal includes visible `SplatMesh` generators and supplies view-to-object transforms plus `lodScale`, `coneFov0`, `coneFov`, `coneFoveate`, and `behindFoveate` to the LOD worker. It is not a strict “inside camera frustum only” traversal.
+- Spark 2.1 uses a full-width angular foveation cone. `coneFov0` is the full-detail angle in degrees; `coneFov` is the reduced-detail cone angle in degrees; detail interpolates toward `behindFoveate` out to 180 degrees.
+- Nonzero `coneFoveate`/`behindFoveate` intentionally retains coarser LOD outside the central cone and behind the viewer. This can cause out-of-frustum RAD pages to remain selected/refined.
+- `clipXY` is a shader draw-clipping multiplier for splat centers (`1` is the exact rectangular X/Y frustum, default `1.4`). It is not documented or implemented as an LOD paging/refinement cutoff, so changing it alone must not be presented as preventing out-of-frustum refinement.
+- `driveLod()` derives its view from the camera passed to the renderer update and `current.viewToWorld`. The app intends only the real/default-camera renderer (`enableDriveLod: true`) to drive LOD; the editor renderer shares its `lodInstances`.
+- The current device profiles pass `coneFov0: 0.2`/`0.3` and `coneFov: 1`/`0.7`, but Spark 2.1 interprets these as **degrees**, not normalized scalar factors. Determine whether these values are an accidental carry-over from an older API. Replace them with justified degree-based defaults if so, preserving separate mobile/desktop tuning only where useful.
+- Changing public renderer fields is possible at runtime, but Spark does not automatically mark every LOD/foveation field change as dirty. Parameter application must explicitly trigger the correct LOD regeneration/render invalidation.
+- Allocation/construction fields such as `maxPagedSplats`, `numLodFetchers`, and `pagedExtSplats` are consumed when the pager/renderers are created and are not automatically live-reconfigurable after paging starts. Do not imply they are real-time controls unless a safe, tested recreation path is implemented.
+
+## Files likely involved
+
+- `src/lib/components/RadStoryScene.svelte`
+- `src/lib/components/SparkStudioBridge.svelte`
+- `src/lib/spark/createSparkStudioRenderer.ts`
+- a new small `Object3D` controller/model under `src/lib/spark/` (suggested name `SparkControls.ts`)
+- `src/lib/types.ts`
+- `src/lib/spark/deviceProfile.ts`
+- `tests/unit/createSparkStudioRenderer.test.ts`
+- `tests/unit/deviceProfile.test.ts`
+- new unit tests for the controller/apply logic
+- `tests/e2e/rad-story.spec.ts`
 - `AGENTS.md`
-- `.codex-handoff/status.md` as the final write
 
-## Detailed Design
+Keep the exact file set as small as the clean design permits.
 
-### 1. Remove outside-pointer dismissal
+## Required design
 
-- Remove the document `pointerdown` listener, `handlePointerDown`, its capture-phase registration, and its cleanup.
-- Do not add hierarchy-specific exceptions or inspect private Studio DOM classes.
-- Preserve the existing toggle and Escape close paths.
-- Preserve `autoUpdate`, body portal, fixed positioning strategy, stale-result guard, overflow behavior, and cleanup.
-- Update comments and `AGENTS.md` so they no longer claim outside pointer interaction closes the pane.
+### Studio object
 
-The core change should be small:
+- Add exactly one literal Threlte `<T>` node to the scene hierarchy with `name="Spark"`, backed by an owned custom `Object3D`-compatible controller/proxy. It must appear as `Spark` in the Studio outline and be selectable.
+- Do not add the real LOD-driving `SparkRenderer` to the Three scene. Preserve the dual-renderer ownership and camera-routing architecture.
+- Make the controller source-sync friendly so authored values persist in the Svelte source through Studio. Avoid private Studio imports.
+- Prevent meaningless transform authoring if Studio exposes transform fields for this controller. Use the narrowest public transaction guard or other established project pattern necessary, without weakening the existing `ScrollAnimator` guard.
+- Initialize the controller from the selected device profile, while keeping literal/source-synced props clear enough for Studio authoring. Avoid two competing sources of truth.
 
-```ts
-onMount(() => {
-  document.addEventListener('keydown', handleKeydown)
-})
+### Controls to expose and apply live
 
-onDestroy(() => {
-  document.removeEventListener('keydown', handleKeydown)
-  stopAutoUpdate?.()
-  stopAutoUpdate = undefined
-})
-```
+At minimum expose these important, runtime-safe controls with appropriate names, types, finite-value validation, ranges, and invariants:
 
-Keep cleanup idempotent; avoid redundant observer teardown if a single `closePanel()` call can own it safely.
+- General/render quality: `maxStdDev`, `minPixelRadius`, `maxPixelRadius`, `minAlpha`, `preBlurAmount`, `blurAmount`, `falloff`, `clipXY`, `focalAdjustment`, `sortRadial`, `minSortIntervalMs`
+- LOD: `enableLod`, `enableLodFetching`, `lodSplatCount` (use a clear numeric convention if “automatic/default” must be represented), `lodSplatScale`, `lodRenderScale`, `lodInflate`
+- Angular refinement/foveation: `coneFov0`, `coneFov`, `coneFoveate`, `behindFoveate`
 
-### 2. Update content reactively without remounting the pane
+Required angular semantics:
 
-`ScrollAnimatorExtension.svelte` already derives `singleAnimator` from Studio selection and refreshes `uiState.animator`/`uiState.keyframes`. Preserve and verify this behavior:
+- Label/document `coneFov0` and `coneFov` as full-width angles in **degrees**.
+- Enforce or normalize a coherent relationship such as `0 <= coneFov0 <= coneFov <= 360` based on the installed Spark implementation's accepted domain; confirm whether 180 or 360 is the correct practical maximum before choosing.
+- `coneFoveate` and `behindFoveate` must use safe nonnegative ranges consistent with Spark's worker implementation.
+- Explain in AGENTS.md and the completion report that these controls bias refinement beyond the view direction; Spark 2.1 has no independent public “outside-frustum cutoff angle.”
+- Include `clipXY` because it is useful for experimenting with visible frustum-edge clipping, but clearly distinguish it from LOD selection/fetching.
 
-- Selecting `Camera ScrollAnimator` shows its name and its keyframes.
-- Selecting `Camera Target ScrollAnimator` while the pane is open keeps the same pane open and replaces the displayed name/keyframe list with that animator's data.
-- Selecting a non-ScrollAnimator object while open keeps the pane open and shows the existing `Select one ScrollAnimator` state.
-- Selecting multiple objects or clearing selection also keeps it open and shows the non-single-animator state.
-- Returning to a ScrollAnimator updates the panel again without requiring close/reopen.
-- Current percentage remains driven by the shared runtime and must not reset merely because selection changes.
-- Unsaved Studio transform edits and the on-scroll-only ScrollTrigger invariant remain unchanged.
+For every edit:
 
-Do not key/remount `FixedToolbarPane` on selection. The open state and portal element should remain stable; only the content changes.
+- Propagate the setting consistently to both renderer instances where applicable so editor-camera rendering and default-camera rendering do not visually diverge.
+- Preserve `editorRenderer.enableDriveLod === false` and `realRenderer.enableDriveLod === true`; the controller must never allow Studio to break this invariant.
+- Mark renderer/sort/LOD state dirty as required. In particular, foveation changes must force a fresh LOD traversal even when the camera did not move. Call `onDirty`/Threlte invalidation through the established ownership path.
+- Avoid reconstructing renderers or the pager for ordinary live fields.
 
-### 3. Preserve explicit close and focus behavior
+If you include creation-only/allocation fields (`maxPagedSplats`, `numLodFetchers`, `pagedExtSplats`, accumulator encoding flags), either implement and test a safe lifecycle reset/recreation with the loaded `SplatMesh` preserved, or present them as non-editable/documented exclusions. Do not silently mutate ineffective fields.
 
-- Clicking the active Scroll Animator toolbar button closes the pane.
-- Pressing Escape closes it.
-- Escape should restore focus to the actual toolbar `<button>`, not merely the non-focusable anchor wrapper. Since public `ToolbarButton` does not expose `bind:this`, a narrow query inside the owned anchor wrapper is acceptable:
+### Controller-to-renderer bridge
 
-```ts
-function focusToggle(): void {
-  anchorEl?.querySelector<HTMLButtonElement>('button')?.focus()
-}
-```
+- Extend `createSparkStudioRenderer` with a small, testable public method/subscription mechanism for applying a validated settings snapshot or individual change.
+- Applying settings before `attach`, after `attach`, and during repeated idempotent disposal must be safe.
+- Do not leak renderer objects into unrelated Svelte components.
+- Do not use a per-frame polling loop. Changes should propagate reactively/event-driven.
+- Avoid unnecessary allocations during normal rendering.
 
-- Do not add a modal focus trap. The pane remains a nonmodal labelled dialog so users can interact with the hierarchy and Inspector while it stays open.
+## Frustum and camera-routing investigation
 
-### 4. Add behavior-focused regression tests
+Perform an evidence-based investigation, not only a visual guess:
 
-Use native Playwright interactions where reliable in the Spark-stub e2e environment. Test at least:
+1. Trace the installed Spark 2.1 LOD worker inputs and confirm how cone foveation treats regions inside the cone, outside the perspective frustum, and behind the viewer.
+2. Confirm `clipXY` affects shader draw clipping only and does not remove pages/chunks from LOD traversal.
+3. Instrument or test the dual renderer callback enough to prove which exact camera object, world position, world quaternion/direction, FOV, aspect, and projection matrix reach the `enableDriveLod` renderer when:
+   - Studio Editor Camera is off and the app/default `PerspectiveCamera` is active.
+   - Studio Editor Camera is on.
+   - The camera is toggled back off.
+4. Verify that editor-camera rendering never changes the real renderer's LOD viewpoint or drives its pager, and that the existing `sparkOverride` is restored even on errors.
+5. Reproduce the reported behavior with the lightweight RAD if feasible. Compare the loaded/refined LOD state while rotating/moving content outside the default camera view and while changing `coneFov0`, `coneFov`, `coneFoveate`, and `behindFoveate`.
+6. Determine whether the observation is:
+   - expected Spark angular foveation/prefetch behavior,
+   - caused by the suspicious current degree values,
+   - caused by update latency/background fetches,
+   - or an actual app camera-routing/matrix bug.
+7. Fix only a proven app bug. Do not patch `node_modules` or fork Spark. If strict frustum-only refinement is impossible through Spark 2.1's public API, state that clearly and recommend the closest achievable settings (for example very low/zero outer/behind foveation, if confirmed safe).
 
-1. Open Scroll Animator with `Camera ScrollAnimator` selected; verify panel, heading, name, and camera keyframes.
-2. Without closing, select `Camera Target ScrollAnimator`; assert:
-   - the same panel remains visible;
-   - only one `.sa-panel-tooltip` exists;
-   - displayed animator name changes;
-   - keyframe list changes to the target animator's data.
-3. Select a non-ScrollAnimator such as `PerspectiveCamera`, `CameraTarget`, or SplatMesh; assert panel remains visible and shows `Select one ScrollAnimator`.
-4. Select the camera animator again; assert content returns without reopening.
-5. Click elsewhere in Studio/the canvas and confirm the panel remains open.
-6. Verify explicit toolbar-toggle close.
-7. Reopen, press Escape, verify close and actual toggle-button focus.
-8. Repeat selection switching after scrolling to 50% to ensure `autoUpdate` keeps the persistent panel in the viewport.
-
-Prefer assertions against semantic text/roles and owned `.sa-*` selectors. Do not rely on private hierarchy class names when accessible text selection is available.
+Add temporary diagnostics only if needed and remove them before finalizing unless they are small, useful, and explicitly tested.
 
 ## Constraints
 
-- Do not add hierarchy-specific, Inspector-specific, or Tweakpane-private click exceptions.
-- Do not restore click-outside dismissal in another component/action.
-- Do not change Floating UI `strategy: 'fixed'`, `autoUpdate`, portal behavior, positioning middleware, or viewport overflow.
-- Do not change ScrollAnimator schema, interpolation, runtime progress, keyframe transactions, source-sync guard, or undo/redo.
-- Do not change GSAP/ScrollTrigger or allow per-frame playback to overwrite stationary editor modifications.
-- Do not change camera ownership, CameraTarget look-at, CameraControls bridge, Spark renderer/LOD routing, or SparkSplats API/origin.
-- Do not reintroduce free navigation.
-- Do not patch/deep-import dependencies or broadly restyle Studio.
-- Do not perform unrelated refactors.
+- Use installed `@sparkjsdev/spark` 2.1.0 API semantics; no `any`-based guesses and no private Spark internals in production code.
+- Use only public Threlte Studio APIs.
+- Preserve the dual `SparkRenderer` architecture and existing `sparkOverride` `try/finally` behavior.
+- Preserve RAD paging (`paged: true`), `pagedExtSplats: true`, real-camera-driven LOD, editor-camera shared LOD, `renderMode="always"`, and current SplatMesh lifecycle.
+- Preserve mobile/desktop defaults unless correcting the degree-unit issue with documented evidence.
+- Do not add a custom Studio extension/pane unless the normal Studio Inspector genuinely cannot provide usable controls; prefer the requested outline object plus Inspector.
+- Do not change camera scroll animation, ScrollAnimator behavior, landing/viewer state, or unrelated styling.
+- Do not modify generated dependency files or anything under `node_modules`.
+- Do not include the user's unrelated `package-lock.json` working-tree change in your commits unless you establish it is required for this feature and explicitly explain why in the report.
 
-## Acceptance Criteria
+## Acceptance criteria
 
-- [ ] Once opened, the Scroll Animator pane remains open during hierarchy selection, Inspector interaction, canvas clicks, and other outside pointer interactions.
-- [ ] Switching between Camera and Camera Target ScrollAnimators updates name and keyframes in place with exactly one panel instance.
-- [ ] Selecting a non-ScrollAnimator, multiple objects, or no object keeps the pane open and shows the correct neutral state.
-- [ ] Returning to a ScrollAnimator repopulates content without close/reopen.
-- [ ] Selection changes do not reset scroll percentage or mutate source/animator transforms.
-- [ ] Toolbar toggle and Escape remain the only close mechanisms.
-- [ ] Escape returns focus to the actual Scroll Animator toolbar button.
-- [ ] Persistent pane remains correctly fixed/in viewport while selection changes at nonzero scroll.
-- [ ] Outside-pointer listener and related documentation/tests are fully removed.
-- [ ] Existing positioning, camera, animation, source-sync, and Spark behavior remains intact.
-- [ ] New e2e tests cover the complete selection-switching sequence and explicit close paths.
+- The Studio outline contains exactly one selectable object named `Spark`.
+- Selecting `Spark` exposes the listed quality and LOD parameters with usable editing behavior.
+- `coneFov0`, `coneFov`, `coneFoveate`, and `behindFoveate` are present and affect refinement live; angle fields are clearly degrees.
+- A value edit is reflected by the relevant real and editor renderer fields without remounting the viewer or moving the camera.
+- Foveation edits force LOD recomputation; rendering invalidates appropriately.
+- Source sync persists supported authored control values.
+- Invalid/NaN/infinite/out-of-range input cannot corrupt renderer state; angle relationships remain coherent.
+- The fixed dual-renderer invariants cannot be edited away: only the real/default-camera renderer drives LOD/paging.
+- Tests prove that Editor Camera on/off does not take ownership of default-camera LOD selection and that the camera handed to the driving renderer is correct.
+- The frustum investigation has a specific conclusion backed by installed-source references and runtime/test evidence.
+- `clipXY` is not mislabeled as an LOD refinement cutoff.
+- Creation-only parameters are either safely recreated and tested or deliberately excluded/documented.
+- Existing behavior and existing tests remain green.
+- `AGENTS.md` is updated with concise, current architecture/features and relevant source references for a fresh agent session; do not turn it into a full implementation log.
 
-Re-check every acceptance item immediately before finalizing. Test implementation details pragmatically; prioritize the user-visible persistent-pane behavior and honest reporting.
+Before finalizing, re-check every acceptance criterion above and explicitly account for each one in the status report.
 
-## Tests to Run
+## Tests to create and run
 
-Add/update tests, then run:
+Create tests for this new feature, not only implementation:
 
-```bash
-npm run check
-npm run lint
-npm run test:unit
-npm run test:e2e
-npm run build
-```
+- Unit tests for the new controller's defaults, branding/type/name, validation, finite-value handling, angle normalization/invariants, change notifications, and idempotent disposal/unsubscription.
+- Unit tests for applying every supported setting before/after renderer creation and to both renderers.
+- Unit tests proving foveation changes set `lodDirty`/trigger recomputation and render invalidation without camera movement.
+- Unit tests proving `enableDriveLod` remains false/true for editor/real renderers even when controller settings are applied.
+- Unit tests for correct camera routing through default → editor → default transitions, including error restoration.
+- Update device-profile tests for justified degree-based cone defaults.
+- E2E coverage that `Spark` appears exactly once in the outline, can be selected, exposes representative general/LOD/angular fields, and source-sync/live behavior works in the Spark stub environment.
+- If stable, add a focused regression demonstrating the default camera remains the LOD driver while Editor Camera is active.
 
-Manual verification with `https://avner.us/baby_yoda-lod.rad`:
+Run:
 
-1. Open Scroll Animator.
-2. Select Camera ScrollAnimator, Camera Target ScrollAnimator, the camera child, and the SplatMesh in succession.
-3. Confirm the pane never closes and its content follows selection.
-4. Scroll to the middle and repeat.
-5. Confirm toggle and Escape still close it deliberately.
+- `npm run check`
+- `npm run lint`
+- `npm run test:unit`
+- `npm run test:e2e`
+- `npm run build`
 
-If real WebGL automation requires synthetic events, report that limitation honestly; the core evidence is persistent visibility and reactive content across actual selection changes.
+Also perform a concise manual check with `https://avner.us/baby_yoda-lod.rad` if the environment permits, specifically exercising angle/foveation changes without moving the camera.
 
-## Things Pi Must Not Change
+## Things you must not change
 
-- FixedToolbarPane fixed/auto-update positioning architecture.
-- ScrollAnimator animation, authoring, and source synchronization.
-- Camera/CameraTarget hierarchy and editor-camera behavior.
-- CameraControls bridge.
-- Spark renderers, LOD behavior, and SparkSplats simplification.
-- Unrelated application UI, dependencies, configuration, and tests.
+- Do not replace or collapse the two Spark renderers.
+- Do not let the Studio editor camera drive LOD fetching.
+- Do not add the real-camera renderer to the scene.
+- Do not alter ScrollTrigger scrub semantics or ScrollAnimator playback/source-sync behavior.
+- Do not expose `enableDriveLod`, renderer ownership, raw renderer/worker/pager objects, or unsafe allocation internals as editable Studio fields.
+- Do not claim strict frustum-only paging unless it is actually proven.
+- Do not patch dependency source, update dependencies, or commit unrelated user changes.
 
-## AGENTS.md Update
-
-Update `AGENTS.md` concisely to state:
-
-- Scroll Animator is a persistent nonmodal authoring pane;
-- outside pointer interactions do not close it;
-- only the toolbar toggle and Escape close it;
-- selection changes update the pane in place, including the neutral state for non-single-ScrollAnimator selection;
-- Escape restores focus to the actual toggle button.
-
-Do not add a chronological implementation log.
-
-## Expected Completion Report
+## Expected completion report
 
 Write `.codex-handoff/status.md` with:
 
-1. Summary and implementation commit.
-2. Files changed.
-3. Root cause and dismissal-policy change.
-4. Selection/content state behavior for camera animator, target animator, and non-animator selection.
-5. Explicit toggle/Escape/focus behavior.
-6. Nonzero-scroll persistent-pane evidence.
-7. Automated and real Baby Yoda verification results.
-8. Exact test command results.
-9. Acceptance audit and remaining risks.
+1. Summary of implementation
+2. Files changed
+3. Studio controls added, including defaults/ranges/units and whether each is live or creation-only
+4. Frustum/LOD investigation:
+   - installed Spark source locations examined
+   - exact LOD/foveation behavior found
+   - exact camera-routing evidence
+   - whether a bug was found and what was fixed
+   - closest settings for minimizing out-of-frustum refinement
+5. Acceptance criteria checklist (every item explicitly checked)
+6. Tests created
+7. Tests run and results
+8. Manual verification performed and observations
+9. Remaining limitations or follow-ups
+10. Commit hash(es)
 
-Always write `status.md` as the **last action** before committing and pushing. After writing it, do not run verification, edit documentation, or make any other modification. Commit all work and push the current branch.
+Always write `status.md` as the **last action before committing and pushing**. Re-check that every acceptance criterion is met before writing it. After the final push, do not run more verifications, inspect files, or make further modifications.
