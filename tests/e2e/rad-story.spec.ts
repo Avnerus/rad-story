@@ -5,7 +5,7 @@ const SAMPLE_URL =
 
 /** Read camera debug attributes from the hidden debug element */
 async function getCameraState(page: import('@playwright/test').Page) {
-  return page.evaluate(() => {
+  const result = await page.evaluate(() => {
     const el = document.querySelector('[data-testid="camera-state"]')
     if (!el) return null
     const get = (name: string) => parseFloat(el.getAttribute(name) ?? '0')
@@ -19,6 +19,7 @@ async function getCameraState(page: import('@playwright/test').Page) {
       targetZ: get('data-target-z'),
     }
   })
+  return result!
 }
 
 /** Helper: start the viewer and wait for canvas */
@@ -58,7 +59,7 @@ async function selectAnimatorAndOpenPane(
  */
 async function assertInViewport(
   page: import('@playwright/test').Page,
-  rect: import('@playwright/test').BoundingBox,
+  rect: { x: number; y: number; width: number; height: number },
   tolerance = 2,
 ) {
   const { width, height } = page.viewportSize()!
@@ -243,9 +244,9 @@ test.describe('RAD Story', () => {
 
     // Click the last keyframe button (100%) via evaluate (canvas overlay)
     await page.evaluate(() => {
-      const rows = document.querySelectorAll('.sa-kf-row')
+      const rows = document.querySelectorAll<HTMLElement>('.sa-kf-row')
       const lastRow = rows[rows.length - 1]
-      lastRow?.querySelector('.sa-kf-pct')?.click()
+      lastRow?.querySelector<HTMLElement>('.sa-kf-pct')?.click()
     })
     await page.waitForTimeout(800)
 
@@ -354,7 +355,7 @@ test.describe('RAD Story', () => {
     // 1. Static State — evaluate-based click (toolbar button inside canvas overlay)
     await page.evaluate(() => {
       const btn = document.querySelector('button[aria-label="Static State"]')
-      btn?.click()
+      ;(btn as HTMLElement)?.click()
     })
     await page.waitForTimeout(300)
 
@@ -809,7 +810,7 @@ test.describe('RAD Story', () => {
     // Verify the Inspector toolbar button exists in the toolbar
     const inspectorBtn = await page.evaluate(() => {
       const btn = document.querySelector('button[aria-label="Inspector"]')
-      return btn ? { label: btn.getAttribute('aria-label'), visible: btn.offsetWidth > 0 } : null
+      return btn ? { label: btn.getAttribute('aria-label'), visible: (btn as HTMLElement).offsetWidth > 0 } : null
     })
     expect(inspectorBtn, 'Inspector toolbar button not found').not.toBeNull()
     expect(inspectorBtn!.visible).toBe(true)
@@ -821,7 +822,7 @@ test.describe('RAD Story', () => {
     // Toggle Inspector pane — evaluate-based click (toolbar is inside canvas overlay)
     await page.evaluate(() => {
       const btn = document.querySelector('button[aria-label="Inspector"]')
-      btn?.click()
+      ;(btn as HTMLElement)?.click()
     })
     await page.waitForTimeout(500)
 
@@ -874,5 +875,33 @@ test.describe('RAD Story', () => {
       return document.querySelector('.draggable-container') === null
     })
     expect(defaultCamGone).toBe(true)
+  })
+
+  // ---------------------------------------------------------------------------
+  // Spark controls e2e tests
+  // ---------------------------------------------------------------------------
+
+  test('Spark object appears in Studio hierarchy', async ({ page }) => {
+    await startViewer(page)
+    await page.waitForTimeout(2000)
+
+    // The Spark object should be visible in the Studio scene hierarchy
+    // Use getByText like the existing ScrollAnimator tests
+    const sparkItem = page.getByText('Spark')
+    await expect(sparkItem.first()).toBeVisible({ timeout: 10_000 })
+  })
+
+  test('Spark object is selectable in Studio hierarchy', async ({ page }) => {
+    await startViewer(page)
+    await page.waitForTimeout(2000)
+
+    // Click the Spark item in the hierarchy
+    const sparkItem = page.getByText('Spark')
+    await expect(sparkItem.first()).toBeVisible({ timeout: 10_000 })
+    await sparkItem.first().click()
+    await page.waitForTimeout(500)
+
+    // After clicking, the item should still be visible (selection didn't crash)
+    await expect(sparkItem.first()).toBeVisible()
   })
 })

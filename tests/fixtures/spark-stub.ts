@@ -14,8 +14,42 @@ export class SparkRenderer extends Object3D {
 
   lodInstances = new Map<unknown, { lodId: number; numSplats: number; indices: Uint32Array; texture: unknown }>()
 
+  // All settings fields — stubbed as plain properties
+  enableLod = true
+  enableDriveLod = true
+  enableLodFetching = true
+  lodDirty = false
+  maxPagedSplats = 0
+  lodSplatScale = 1
+  lodRenderScale = 1
+  maxStdDev = 8
+  coneFov0 = 90
+  coneFov = 120
+  coneFoveate = 0.4
+  behindFoveate = 0.2
+  minPixelRadius = 0
+  maxPixelRadius = 512
+  minAlpha = 0.002
+  preBlurAmount = 0
+  blurAmount = 0
+  falloff = 1
+  clipXY = 1.4
+  focalAdjustment = 1
+  sortRadial = true
+  minSortIntervalMs = 0
+  lodSplatCount: number | undefined
+  lodInflate = false
+
   constructor(_options?: Record<string, unknown>) {
     super()
+    if (_options) {
+      // Copy known fields from options
+      for (const key of Object.keys(this) as (keyof SparkRenderer)[]) {
+        if (_options[key] !== undefined) {
+          ;(this as Record<string, unknown>)[key] = _options[key]
+        }
+      }
+    }
   }
 
   dispose(): void {

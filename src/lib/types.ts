@@ -21,6 +21,20 @@ export interface SparkRendererOptions {
   coneFov: number
   coneFoveate: number
   behindFoveate: number
+  minPixelRadius?: number
+  maxPixelRadius?: number
+  minAlpha?: number
+  preBlurAmount?: number
+  blurAmount?: number
+  falloff?: number
+  clipXY?: number
+  focalAdjustment?: number
+  sortRadial?: boolean
+  minSortIntervalMs?: number
+  enableLod?: boolean
+  enableLodFetching?: boolean
+  lodSplatCount?: number | null
+  lodInflate?: boolean
 }
 
 /** Device profile for Spark / renderer settings */

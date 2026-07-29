@@ -6,18 +6,19 @@ A client-side Threlte/Svelte 5/TypeScript web app for designing scroll-based sto
 
 **Key files:**
 - `src/App.svelte` — Root component. Landing screen ↔ viewer state machine. `<Canvas>` with `<Studio extensions={[ScrollAnimatorExtension]}>` wrapping `RadStoryScene`.
-- `src/lib/components/RadStoryScene.svelte` — Camera setup, ScrollTrigger, `ScrollAnimator` instances (camera + target), `CameraTarget`, SparkRenderer bridge, and SplatMesh. Uses `useTask` for per-frame camera look-at. Scene-wide `ScrollAnimator` playback via `scene.traverse`.
+- `src/lib/components/RadStoryScene.svelte` — Camera setup, ScrollTrigger, `ScrollAnimator` instances (camera + target), `CameraTarget`, `SparkControls`, SparkRenderer bridge, and SplatMesh. Uses `useTask` for per-frame camera look-at. Scene-wide `ScrollAnimator` playback via `scene.traverse`.
 - `src/lib/components/SparkSplats.svelte` — SplatMesh lifecycle only. Accepts `url` prop; the nested `<T is={mesh}>` is the Studio-editable object. No transform props (`position`, `rotation`, `scale`) are exposed — Studio authors the mesh directly.
-- `src/lib/components/SparkStudioBridge.svelte` — Manages dual SparkRenderer lifecycle via `createSparkStudioRenderer`.
+- `src/lib/components/SparkStudioBridge.svelte` — Manages dual SparkRenderer lifecycle via `createSparkStudioRenderer`. Subscribes to `SparkControls` settings changes and propagates them to both renderers in real time.
+- `src/lib/spark/SparkControls.ts` — Three.js `Object3D` subclass holding all editable Spark 2.1 quality/LOD/foveation settings. Appears as "Spark" in Studio outline. Only `settings` property is source-synced; transforms are blocked by the transaction guard. All values validated against field-specific bounds.
 - `src/lib/spark/ScrollAnimator.ts` — Three.js `Object3D` subclass with `keyframes` property and `applyScrollPercentage()`.
 - `src/lib/spark/scrollAnimation.ts` — Pure keyframe model, canonicalization (with dedup), upsert/delete, bracketing, and interpolation (position lerp + quaternion slerp).
 - `src/lib/studio/scroll-animator/ScrollAnimatorExtension.svelte` — Studio extension: fixed toolbar pane with percentage display/input, keyframe list, jump, delete, and insert/save actions. Uses public `@threlte/studio/extensions` imports. Toolbar icon: `mdiAnimationOutline`.
 - `src/lib/studio/scroll-animator/FixedToolbarPane.svelte` — Local replacement for Studio's `DropDownPane`. Uses public `ToolbarButton` + `ToolbarItem` from `@threlte/studio/extend`, `@floating-ui/dom` (direct dependency) for `computePosition` with `strategy: 'fixed'`, and a simple portal to `document.body`. See "Studio Extension Pane" section below.
 - `src/lib/studio/scroll-animator/scrollAnimatorRuntime.ts` — Shared runtime bridge: reactive percentage from ScrollTrigger, `jumpToPercentage` via trigger's measured range, attach/detach lifecycle.
-- `src/lib/studio/scroll-animator/transactionGuard.ts` — Suppresses source sync for ScrollAnimator transform attributes; only `keyframes` persists. Uses narrow structural types (no private imports).
+- `src/lib/studio/scroll-animator/transactionGuard.ts` — Suppresses source sync for ScrollAnimator transforms (only `keyframes` persists) and SparkControls transforms (only `settings` persists). Uses narrow structural types (no private imports).
 - `src/lib/studio/editor-camera/editorCameraControlsBridge.ts` — Future-facing, typed bridge for Studio editor CameraControls tuning. Currently unattached (no supported public path to the CameraControls instance). Documented in code.
-- `src/lib/spark/createSparkStudioRenderer.ts` — Factory for dual SparkRenderer setup.
-- `src/lib/spark/deviceProfile.ts` — Mobile/iOS detection + Spark performance profile.
+- `src/lib/spark/createSparkStudioRenderer.ts` — Factory for dual SparkRenderer setup. Includes `applySettings()` for live propagation and `reconfigureMaxPagedSplats()` for controlled renderer/pager recreation.
+- `src/lib/spark/deviceProfile.ts` — Mobile/iOS detection + Spark performance profile. Cone angles are full-width **degrees** (Spark 2.1 API: default `coneFov0: 90`, `coneFov: 120`).
 - `src/lib/spark/radUrl.ts` — RAD URL validation with typed results.
 - `src/lib/types.ts` — Shared TypeScript types.
 
@@ -78,9 +79,35 @@ Active only for exactly one selected `ScrollAnimator`; otherwise shows "Select o
 
 ## Source-Sync Guard Invariant
 
-The `guardScrollAnimatorTransactions` helper runs via `useTransactions().onTransaction()`. For any transaction whose object is a branded `ScrollAnimator`, it clears `transaction.sync` unless `attributeName` is exactly `keyframes` or ends with `.keyframes` (path-prefixed). Descendant attributes like `keyframes.0` or `scene.keyframes.position` are blocked. This prevents Studio's transform controls from writing `position`, `rotation`, or `scale` into Svelte source, while allowing `keyframes` mutations through.
+The `guardScrollAnimatorTransactions` helper runs via `useTransactions().onTransaction()`. For any transaction whose object is a branded `ScrollAnimator`, it clears `transaction.sync` unless `attributeName` is exactly `keyframes` or ends with `.keyframes` (path-prefixed). For `SparkControls`, it clears sync unless `attributeName` is `settings` or ends with `.settings`. Descendant attributes like `keyframes.0`, `settings.lodSplatScale`, or `scene.keyframes.position` are blocked. This prevents Studio's transform controls from writing `position`, `rotation`, or `scale` into Svelte source, while allowing the intended persisted attributes through.
 
 Keyframe mutations use `transactions.buildTransaction()` which derives source metadata from the object's `userData.threlteStudio` automatically. No private metadata imports needed.
+
+## SparkControls — Studio-Editable Spark Settings
+
+`SparkControls extends Object3D` is a branded settings controller that appears in the Studio outline as a selectable object named "Spark". It holds all editable Spark 2.1 rendering-quality, LOD, foveation, and paging-budget controls.
+
+**Mandatory fields (from device profile):**
+- `lodSplatScale`, `lodRenderScale`, `maxStdDev`, `maxPagedSplats` — LOD quality and budget
+- `coneFov0`, `coneFov` — Full-width cone angles in **degrees** (Spark 2.1 API, not normalized scalars)
+- `coneFoveate`, `behindFoveate` — Detail scale factors at cone boundaries
+
+**Additional quality/LOD controls:**
+- `minPixelRadius`, `maxPixelRadius`, `minAlpha`, `preBlurAmount`, `blurAmount`, `falloff`, `clipXY`, `focalAdjustment` — Shader quality parameters
+- `sortRadial`, `minSortIntervalMs` — Sort behavior
+- `enableLod`, `enableLodFetching`, `lodSplatCount` (null = automatic), `lodInflate` — LOD toggles
+
+**Validation:** All numeric values are clamped to field-specific bounds. `maxPagedSplats` is rounded up to the nearest multiple of `65,536` (Spark page size). `coneFov0 <= coneFov` is enforced (if violated, `coneFov` is raised to match). NaN/Infinity fall back to defaults.
+
+**Live propagation:**
+- Ordinary settings (all except `maxPagedSplats`) are applied live to both editor and real SparkRenderer via `applyLiveSettings()`. Foveation changes (`coneFov0`, `coneFov`, `coneFoveate`, `behindFoveate`) mark `lodDirty = true` on the real renderer, forcing a new LOD traversal even without camera movement.
+- `maxPagedSplats` requires controlled renderer/pager recreation via `reconfigureMaxPagedSplats()`. This disposes both SparkRenderer instances and creates new ones with the new capacity. The SplatMesh and its scene transform are preserved. The dual-renderer architecture and camera routing are maintained. A recreation lock prevents concurrent rapid edits.
+
+**Transaction guard:** Only `settings` persists through source sync. Transform attributes (`position`, `rotation`, `scale`) are blocked.
+
+**Cone angle defaults:** Desktop uses Spark 2.1 defaults (`coneFov0: 90`, `coneFov: 120`). Mobile uses slightly tighter cones (`coneFov0: 70`, `coneFov: 110`). These are full-width **degrees**, not the accidental sub-degree values from an old API.
+
+**Frustum/LOD findings:** Spark 2.1 uses angular foveation, not strict frustum culling. Objects outside the perspective frustum but within the foveation cone (up to 180°) are still refined. `clipXY` controls shader draw clipping of splat centers only, not LOD paging/refinement. The `behindFoveate` parameter controls refinement behind the viewer — setting it to a low value (e.g. `0.1`) reduces but does not eliminate off-screen refinement. No public API provides strict frustum-only LOD cutoff.
 
 ## Removed Features
 
@@ -114,7 +141,7 @@ Free navigation (checkbox, keyboard/mouse/wheel listeners, RAF loop, pure helper
 
 - `<Studio extensions={[ScrollAnimatorExtension]}>` wraps the viewer scene. The `threlteStudio()` Vite plugin is registered before `svelte()` in `vite.config.ts`.
 - Studio editor cameras are marked with `camera.userData.editorCamera = true`.
-- Two literal `<T>` nodes in `RadStoryScene.svelte` host the `ScrollAnimator` instances — not wrapped in a reusable component — so Studio's source sync metadata targets independent `keyframes` attributes.
+- Three literal `<T>` nodes in `RadStoryScene.svelte` host the `ScrollAnimator` instances and the `SparkControls` — not wrapped in reusable components — so Studio's source sync metadata targets independent `keyframes` and `settings` attributes respectively.
 - Extension uses **only public** `@threlte/studio/extensions` imports (`useObjectSelection`, `useTransactions`). No private module imports or Vite aliases.
 
 ## Scroll Layout
@@ -183,6 +210,8 @@ https://storage.googleapis.com/forge-dev-public/asundqui/rad/260217/cozy-spacesh
 **Pointer evidence:** In the Spark-stub e2e tests, native Playwright `.click()` works reliably for hierarchy items, toolbar buttons, and canvas clicks. Some toolbar buttons inside the canvas overlay (Static State, Inspector) use `evaluate()`-based DOM `.click()` because native clicks are intercepted by the canvas. With real splat rendering in headless Chromium, native clicks may time out due to GPU stalls; synthetic `dispatchEvent` via `page.evaluate()` can diagnose handler execution but does not verify hit testing/pointer actionability. Manual verification with `playwright-cli` should prefer native pointer commands.
 
 For real-splat visual verification, use `playwright-cli screenshot` with the lightweight RAD URL (see above). Screenshots capture the compositor output correctly even when `readPixels()` returns black in headless mode.
+
+**Spark controls e2e:** The Spark object appears in the Studio hierarchy and is selectable via `page.getByText('Spark')`. In the stub build, the Inspector may not render full settings content, but the Spark object's presence and selectability are verified.
 
 ## CORS Note
 

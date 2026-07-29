@@ -9,6 +9,7 @@
   import { isScrollAnimator } from '$lib/studio/scroll-animator/transactionGuard'
   import { scrollAnimatorRuntime } from '$lib/studio/scroll-animator/scrollAnimatorRuntime'
   import type { DeviceProfile } from '$lib/types'
+  import { SparkControls } from '$lib/spark/SparkControls'
   import SparkSplats from './SparkSplats.svelte'
   import SparkStudioBridge from './SparkStudioBridge.svelte'
 
@@ -61,6 +62,18 @@
   // Apply initial poses
   cameraAnimator.applyScrollPercentage(0)
   targetAnimator.applyScrollPercentage(0)
+
+  // SparkControls — Studio-editable Spark quality/LOD settings
+  const sparkControls = new SparkControls({
+    lodSplatScale: profile.sparkRenderer.lodSplatScale,
+    lodRenderScale: profile.sparkRenderer.lodRenderScale,
+    maxStdDev: profile.sparkRenderer.maxStdDev,
+    maxPagedSplats: profile.sparkRenderer.maxPagedSplats,
+    coneFov0: profile.sparkRenderer.coneFov0,
+    coneFov: profile.sparkRenderer.coneFov,
+    coneFoveate: profile.sparkRenderer.coneFoveate,
+    behindFoveate: profile.sparkRenderer.behindFoveate,
+  })
 
   // Scene-wide animator playback: traverse scene and apply to every branded ScrollAnimator
   function applyScrollToAllAnimators(percent: number): void {
@@ -143,6 +156,7 @@
       scrollTrigger.kill()
       scrollTrigger = null
     }
+    sparkControls.dispose()
   })
 </script>
 
@@ -169,7 +183,10 @@
   <T is={cameraTarget} name="CameraTarget" />
 </T>
 
-<SparkStudioBridge {profile} />
+<SparkStudioBridge {profile} {sparkControls} />
+
+<!-- SparkControls: Studio-editable Spark quality/LOD settings -->
+<T is={sparkControls} name="Spark" settings={sparkControls.settings} />
 
 <SparkSplats
   {url}

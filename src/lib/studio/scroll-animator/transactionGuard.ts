@@ -32,6 +32,18 @@ export function isScrollAnimator(obj: unknown): boolean {
 }
 
 /**
+ * Check if an object is a branded SparkControls (HMR-safe structural check).
+ */
+export function isSparkControls(obj: unknown): boolean {
+  return (
+    obj !== null &&
+    typeof obj === 'object' &&
+    'isSparkControls' in obj &&
+    (obj as Record<string, unknown>).isSparkControls === true
+  )
+}
+
+/**
  * Check whether a transaction's attribute name targets `keyframes`.
  * Studio builds nested attribute names as `[...pathItems, propertyPath].join('.')`,
  * so a path-prefixed keyframe attribute is `some.path.keyframes`.
@@ -42,8 +54,17 @@ function isKeyframesAttribute(attributeName: string): boolean {
 }
 
 /**
+ * Check whether a transaction's attribute name targets `settings`.
+ * Only allow the final path segment to be exactly `settings`.
+ */
+function isSettingsAttribute(attributeName: string): boolean {
+  return attributeName === 'settings' || attributeName.endsWith('.settings')
+}
+
+/**
  * Given a set of transactions, suppress source sync for any transaction
- * whose object is a ScrollAnimator and the attribute is not `keyframes`.
+ * whose object is a ScrollAnimator and the attribute is not `keyframes`,
+ * or whose object is a SparkControls and the attribute is not `settings`.
  *
  * Mutates the transaction array in place (called from onTransaction callbacks).
  */
@@ -51,12 +72,18 @@ export function guardScrollAnimatorTransactions(
   transactions: GuardTransaction[],
 ): void {
   for (const tx of transactions) {
-    if (!isScrollAnimator(tx.object)) continue
-    const sync = tx.sync
-    if (!sync) continue
-    // Only allow source sync for `keyframes` attribute
-    if (!isKeyframesAttribute(sync.attributeName)) {
-      tx.sync = undefined
+    if (isScrollAnimator(tx.object)) {
+      const sync = tx.sync
+      if (sync && !isKeyframesAttribute(sync.attributeName)) {
+        tx.sync = undefined
+      }
+      continue
+    }
+    if (isSparkControls(tx.object)) {
+      const sync = tx.sync
+      if (sync && !isSettingsAttribute(sync.attributeName)) {
+        tx.sync = undefined
+      }
     }
   }
 }

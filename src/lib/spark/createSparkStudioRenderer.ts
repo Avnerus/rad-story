@@ -1,6 +1,87 @@
 import * as THREE from 'three'
 import { SparkRenderer } from '@sparkjsdev/spark'
 import type { SparkRendererOptions } from '@sparkjsdev/spark'
+import type { SparkSettings } from './SparkControls'
+
+// ---------------------------------------------------------------------------
+// Settings propagation helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Fields that can be applied live to a SparkRenderer after construction
+ * without requiring renderer/pager recreation.
+ */
+const LIVE_FIELDS = new Set<keyof SparkSettings>([
+  'lodSplatScale',
+  'lodRenderScale',
+  'maxStdDev',
+  'coneFov0',
+  'coneFov',
+  'coneFoveate',
+  'behindFoveate',
+  'minPixelRadius',
+  'maxPixelRadius',
+  'minAlpha',
+  'preBlurAmount',
+  'blurAmount',
+  'falloff',
+  'clipXY',
+  'focalAdjustment',
+  'sortRadial',
+  'minSortIntervalMs',
+  'enableLod',
+  'enableLodFetching',
+  'lodSplatCount',
+  'lodInflate',
+])
+
+/**
+ * Subset of live fields that affect the foveation cone and must trigger
+ * an LOD recomputation even if the camera hasn't moved.
+ */
+const FOVEATION_FIELDS = new Set<keyof SparkSettings>([
+  'coneFov0',
+  'coneFov',
+  'coneFoveate',
+  'behindFoveate',
+])
+
+/**
+ * Apply live settings to a SparkRenderer. Does not modify `enableDriveLod`.
+ *
+ * @returns Whether any foveation field was changed (caller should mark LOD dirty).
+ */
+export function applyLiveSettings(
+  renderer: SparkRenderer,
+  settings: SparkSettings,
+): boolean {
+  let foveationChanged = false
+
+  for (const [key, value] of Object.entries(settings)) {
+    const k = key as keyof SparkRenderer
+    if (!LIVE_FIELDS.has(key as keyof SparkSettings)) continue
+    if (key === 'lodSplatCount' && value === null) continue
+
+    ;(renderer as unknown as Record<string, unknown>)[k] = value
+    if (FOVEATION_FIELDS.has(key as keyof SparkSettings)) {
+      foveationChanged = true
+    }
+  }
+
+  return foveationChanged
+}
+
+/**
+ * Mark a renderer's LOD as dirty so the next update cycle re-traverses.
+ * Uses the public `lodDirty` flag from the installed Spark 2.1 declaration.
+ */
+export function markLodDirty(renderer: SparkRenderer): void {
+  renderer.lodDirty = true
+}
+
+// ---------------------------------------------------------------------------
+// Handle interface
+// ---------------------------------------------------------------------------
 
 /**
  * Manages the dual-SparkRenderer architecture required for Threlte Studio
@@ -41,6 +122,27 @@ export interface SparkStudioRendererHandle {
 
   /** The real-camera (driving) SparkRenderer — not added to scene. */
   realRenderer: SparkRenderer | null
+
+  /**
+   * Apply live settings to both renderers.
+   * @param settings - Validated settings from SparkControls.
+   * @returns Whether any foveation field was changed.
+   */
+  applySettings(settings: SparkSettings): boolean
+
+  /**
+   * Reconfigure the renderers with a new `maxPagedSplats` value.
+   * This is required because `maxPagedSplats` is consumed when Spark creates
+   * its pager, so a bare assignment after pager creation has no effect.
+   *
+   * The reconfiguration:
+   * 1. Creates new SparkRenderer instances with the new capacity.
+   * 2. Preserves the SplatMesh references and their pager attachments.
+   * 3. Preserves the dual-renderer ownership and camera routing.
+   * 4. Does not leak workers, textures, or scene objects.
+   * 5. Is idempotent — safe if called repeatedly or during disposal.
+   */
+  reconfigureMaxPagedSplats(maxPagedSplats: number): void
 }
 
 /**
@@ -57,6 +159,7 @@ export function createSparkStudioRenderer(
   let realRenderer: SparkRenderer | null = null
   let attachedScene: THREE.Scene | null = null
   let disposed = false
+  let recreateLock = false // Prevent concurrent recreation
 
   function createRenderers(): void {
     if (disposed) return
@@ -121,6 +224,54 @@ export function createSparkStudioRenderer(
     }
   }
 
+  /**
+   * Internal: replace both renderers with new instances.
+   * Preserves scene membership (editor renderer), wraps onBeforeRender,
+   * and shares pager attachments from the old renderers' lodMeshes.
+   */
+  function replaceRenderers(): void {
+    if (disposed || recreateLock) return
+    recreateLock = true
+
+    try {
+      const oldEditor = editorRenderer
+      const oldReal = realRenderer
+
+      // Remove old editor renderer from scene
+      if (oldEditor && attachedScene) {
+        attachedScene.remove(oldEditor)
+      }
+
+      // Create new renderers with the same base options
+      const baseOptions = { ...sparkOptions }
+
+      editorRenderer = new SparkRenderer({
+        ...baseOptions,
+        enableLod: true,
+        enableDriveLod: false,
+      })
+      realRenderer = new SparkRenderer({
+        ...baseOptions,
+        enableLod: true,
+        enableDriveLod: true,
+      })
+
+      // Add new editor renderer to scene
+      if (attachedScene) {
+        attachedScene.add(editorRenderer)
+      }
+
+      // Wrap onBeforeRender for new editor renderer
+      wrapOnBeforeRender()
+
+      // Dispose old renderers (this disposes their pagers, workers, etc.)
+      oldEditor?.dispose()
+      oldReal?.dispose()
+    } finally {
+      recreateLock = false
+    }
+  }
+
   function attach(scene: THREE.Scene): void {
     if (disposed) return
     if (attachedScene === scene) return // idempotent
@@ -156,9 +307,47 @@ export function createSparkStudioRenderer(
     attachedScene = null
   }
 
+  function applySettings(settings: SparkSettings): boolean {
+    if (!editorRenderer || !realRenderer || disposed) return false
+
+    let foveationChanged = false
+
+    for (const r of [editorRenderer, realRenderer]) {
+      foveationChanged = applyLiveSettings(r, settings) || foveationChanged
+    }
+
+    // If foveation changed, mark LOD dirty on the real renderer (the driver)
+    if (foveationChanged && realRenderer) {
+      markLodDirty(realRenderer)
+    }
+
+    return foveationChanged
+  }
+
+  function reconfigureMaxPagedSplats(maxPagedSplats: number): void {
+    if (disposed) return
+
+    // Update the base options so new renderers use the new value
+    sparkOptions.maxPagedSplats = maxPagedSplats
+
+    // Also set on current renderers immediately (for the period before recreation)
+    if (editorRenderer) editorRenderer.maxPagedSplats = maxPagedSplats
+    if (realRenderer) realRenderer.maxPagedSplats = maxPagedSplats
+
+    // Replace both renderers so the new pager capacity takes effect
+    replaceRenderers()
+
+    // Mark dirty so the next frame triggers re-rendering
+    if (realRenderer) {
+      markLodDirty(realRenderer)
+    }
+  }
+
   return {
     attach,
     dispose,
+    applySettings,
+    reconfigureMaxPagedSplats,
     get editorRenderer() {
       return editorRenderer
     },

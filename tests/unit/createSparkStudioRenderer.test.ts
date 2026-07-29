@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import * as THREE from 'three'
-import { SparkRenderer } from '@sparkjsdev/spark'
+import { SparkRenderer, SplatMesh } from '@sparkjsdev/spark'
 import type { SparkRendererOptions } from '@sparkjsdev/spark'
 import { createSparkStudioRenderer } from '$lib/spark/createSparkStudioRenderer'
 
@@ -40,8 +40,8 @@ function makeBaseOptions(renderer: THREE.WebGLRenderer): SparkRendererOptions {
     lodRenderScale: 1,
     maxStdDev: 8,
     maxPagedSplats: 1_048_576,
-    coneFov0: 0.2,
-    coneFov: 1,
+    coneFov0: 90,
+    coneFov: 120,
     coneFoveate: 0.2,
     behindFoveate: 0.1,
   }
@@ -127,8 +127,8 @@ describe('createSparkStudioRenderer', () => {
         lodRenderScale: 2,
         maxStdDev: 4,
         maxPagedSplats: 262_144,
-        coneFov0: 0.3,
-        coneFov: 0.7,
+        coneFov0: 70,
+        coneFov: 110,
         coneFoveate: 0.4,
         behindFoveate: 0.3,
       }
@@ -141,8 +141,8 @@ describe('createSparkStudioRenderer', () => {
         expect(r.lodRenderScale).toBe(2)
         expect(r.maxStdDev).toBe(4)
         expect(r.maxPagedSplats).toBe(262_144)
-        expect(r.coneFov0).toBe(0.3)
-        expect(r.coneFov).toBe(0.7)
+        expect(r.coneFov0).toBe(70)
+        expect(r.coneFov).toBe(110)
         expect(r.coneFoveate).toBe(0.4)
         expect(r.behindFoveate).toBe(0.3)
       }
@@ -184,7 +184,7 @@ describe('createSparkStudioRenderer', () => {
       const editorR = handle.editorRenderer!
       const realR = handle.realRenderer!
 
-      const mockMesh = {} as unknown as THREE.Object3D
+      const mockMesh = {} as unknown as SplatMesh
       const lodData = { lodId: 1, numSplats: 100, indices: new Uint32Array(100), texture: {} as THREE.DataTexture }
       realR.lodInstances.set(mockMesh, lodData)
       editorR.lodInstances.clear()
@@ -270,7 +270,7 @@ describe('createSparkStudioRenderer', () => {
       const editorR = handle.editorRenderer!
       const realR = handle.realRenderer!
 
-      const mockMesh = {} as unknown as THREE.Object3D
+      const mockMesh = {} as unknown as SplatMesh
       const lodData = { lodId: 42, numSplats: 200, indices: new Uint32Array(200), texture: {} as THREE.DataTexture }
       realR.lodInstances.set(mockMesh, lodData)
       editorR.lodInstances.clear()

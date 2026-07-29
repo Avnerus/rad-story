@@ -12,7 +12,7 @@ import { canonicalizeKeyframes, sampleKeyframes } from './scrollAnimation'
 export class ScrollAnimator extends Object3D {
   /** HMR-safe brand for runtime detection. */
   declare isScrollAnimator: boolean
-  override declare type: string
+  override type: string = 'ScrollAnimator'
 
   private _keyframes: ScrollKeyframe[]
 

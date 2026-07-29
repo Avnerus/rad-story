@@ -33,8 +33,8 @@ export function getDeviceProfile(): DeviceProfile {
         lodRenderScale: 2,
         maxStdDev: 4,
         maxPagedSplats: 262_144, // 4 × 65,536
-        coneFov0: 0.3,
-        coneFov: 0.7,
+        coneFov0: 70,
+        coneFov: 110,
         coneFoveate: 0.4,
         behindFoveate: 0.3,
       },
@@ -49,8 +49,8 @@ export function getDeviceProfile(): DeviceProfile {
       lodRenderScale: 1,
       maxStdDev: 8,
       maxPagedSplats: 1_048_576, // 16 × 65,536
-      coneFov0: 0.2,
-      coneFov: 1,
+      coneFov0: 90,
+      coneFov: 120,
       coneFoveate: 0.2,
       behindFoveate: 0.1,
     },

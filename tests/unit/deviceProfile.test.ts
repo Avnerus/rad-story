@@ -28,6 +28,9 @@ describe('getDeviceProfile', () => {
     expect(profile.dpr).toBe(1)
     expect(profile.sparkRenderer.maxPagedSplats).toBe(262_144)
     expect(profile.sparkRenderer.lodSplatScale).toBe(0.5)
+    // Cone angles are in degrees (Spark 2.1 API)
+    expect(profile.sparkRenderer.coneFov0).toBe(70)
+    expect(profile.sparkRenderer.coneFov).toBe(110)
   })
 
   it('returns desktop profile when UA is desktop', async () => {
@@ -45,6 +48,9 @@ describe('getDeviceProfile', () => {
     expect(profile.dpr).toBeLessThanOrEqual(2)
     expect(profile.sparkRenderer.maxPagedSplats).toBe(1_048_576)
     expect(profile.sparkRenderer.lodSplatScale).toBe(1)
+    // Cone angles are in degrees (Spark 2.1 API), matching Spark defaults
+    expect(profile.sparkRenderer.coneFov0).toBe(90)
+    expect(profile.sparkRenderer.coneFov).toBe(120)
   })
 
   it('clamps DPR to 2 on desktop', async () => {

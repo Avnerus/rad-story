@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { isScrollAnimator, guardScrollAnimatorTransactions, type GuardTransaction } from '$lib/studio/scroll-animator/transactionGuard'
+import { isScrollAnimator, isSparkControls, guardScrollAnimatorTransactions, type GuardTransaction } from '$lib/studio/scroll-animator/transactionGuard'
 import { ScrollAnimator } from '$lib/spark/ScrollAnimator'
+import { SparkControls } from '$lib/spark/SparkControls'
 
 describe('isScrollAnimator', () => {
   it('returns true for ScrollAnimator instances', () => {
@@ -120,5 +121,97 @@ describe('guardScrollAnimatorTransactions', () => {
     }
     guardScrollAnimatorTransactions([tx])
     expect(tx.sync).toBeUndefined()
+  })
+})
+
+describe('isSparkControls', () => {
+  it('returns true for SparkControls instances', () => {
+    expect(isSparkControls(new SparkControls())).toBe(true)
+  })
+
+  it('returns false for plain objects', () => {
+    expect(isSparkControls({})).toBe(false)
+    expect(isSparkControls(null)).toBe(false)
+    expect(isSparkControls(undefined)).toBe(false)
+  })
+
+  it('returns false for ScrollAnimator', () => {
+    expect(isSparkControls(new ScrollAnimator())).toBe(false)
+  })
+
+  it('returns true for structurally matching objects (HMR-safe)', () => {
+    const fake = { isSparkControls: true }
+    expect(isSparkControls(fake)).toBe(true)
+  })
+})
+
+describe('SparkControls transaction guard', () => {
+  function makeTransaction(
+    object: unknown,
+    attributeName: string,
+  ): GuardTransaction {
+    return {
+      object,
+      sync: { attributeName },
+    }
+  }
+
+  it('suppresses sync for position on SparkControls', () => {
+    const controls = new SparkControls()
+    const txs: GuardTransaction[] = [makeTransaction(controls, 'position')]
+    guardScrollAnimatorTransactions(txs)
+    expect(txs[0].sync).toBeUndefined()
+  })
+
+  it('suppresses sync for rotation on SparkControls', () => {
+    const controls = new SparkControls()
+    const txs: GuardTransaction[] = [makeTransaction(controls, 'rotation')]
+    guardScrollAnimatorTransactions(txs)
+    expect(txs[0].sync).toBeUndefined()
+  })
+
+  it('suppresses sync for scale on SparkControls', () => {
+    const controls = new SparkControls()
+    const txs: GuardTransaction[] = [makeTransaction(controls, 'scale')]
+    guardScrollAnimatorTransactions(txs)
+    expect(txs[0].sync).toBeUndefined()
+  })
+
+  it('allows sync for root settings on SparkControls', () => {
+    const controls = new SparkControls()
+    const txs: GuardTransaction[] = [makeTransaction(controls, 'settings')]
+    guardScrollAnimatorTransactions(txs)
+    expect(txs[0].sync).toBeDefined()
+    expect(txs[0].sync!.attributeName).toBe('settings')
+  })
+
+  it('allows sync for path-prefixed settings', () => {
+    const controls = new SparkControls()
+    const txs: GuardTransaction[] = [makeTransaction(controls, 'scene.Spark.settings')]
+    guardScrollAnimatorTransactions(txs)
+    expect(txs[0].sync).toBeDefined()
+  })
+
+  it('blocks descendant attribute settings.lodSplatScale', () => {
+    const controls = new SparkControls()
+    const txs: GuardTransaction[] = [makeTransaction(controls, 'settings.lodSplatScale')]
+    guardScrollAnimatorTransactions(txs)
+    expect(txs[0].sync).toBeUndefined()
+  })
+
+  it('does not weaken ScrollAnimator guard', () => {
+    const animator = new ScrollAnimator()
+    const controls = new SparkControls()
+    const txs: GuardTransaction[] = [
+      makeTransaction(animator, 'position'),
+      makeTransaction(controls, 'position'),
+      makeTransaction(animator, 'keyframes'),
+      makeTransaction(controls, 'settings'),
+    ]
+    guardScrollAnimatorTransactions(txs)
+    expect(txs[0].sync).toBeUndefined() // animator position suppressed
+    expect(txs[1].sync).toBeUndefined() // controls position suppressed
+    expect(txs[2].sync).toBeDefined()   // animator keyframes preserved
+    expect(txs[3].sync).toBeDefined()   // controls settings preserved
   })
 })
