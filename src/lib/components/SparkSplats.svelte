@@ -3,13 +3,15 @@
   import { onMount, onDestroy } from 'svelte'
   import { Object3D } from 'three'
   import { SplatMesh } from '@sparkjsdev/spark'
-  import { SparkReloadCoordinator } from '$lib/spark/SparkReloadRuntime'
+  import { SparkReloadCoordinator, type ReloadStatus } from '$lib/spark/SparkReloadRuntime'
 
   interface Props {
     url: string
+    /** Optional callback to receive reload status updates (for pane UI). */
+    onStatusChange?: (status: ReloadStatus) => void
   }
 
-  let { url }: Props = $props()
+  let { url, onStatusChange }: Props = $props()
 
   // Stable wrapper Object3D that owns transform/name/visibility.
   // The SplatMesh child is replaced during capacity reload but the
@@ -31,6 +33,11 @@
     })
   }
 
+  /** Exposed reload status for the pane to subscribe to. */
+  export function getStatus(): ReloadStatus | null {
+    return coordinator?.status ?? null
+  }
+
   function createMesh(u: string): SplatMesh {
     return new SplatMesh({ url: u, paged: true, raycastable: false })
   }
@@ -40,6 +47,11 @@
     wrapper.add(mesh)
 
     coordinator = new SparkReloadCoordinator()
+
+    // Wire status to external subscriber (e.g. Spark Controls pane)
+    if (onStatusChange) {
+      coordinator.status.subscribe(onStatusChange)
+    }
 
     coordinator.onReloadComplete((newMeshObj: object) => {
       if (destroyed) return

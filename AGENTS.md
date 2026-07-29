@@ -18,7 +18,8 @@ A client-side Threlte/Svelte 5/TypeScript web app for designing scroll-based sto
 - `src/lib/studio/scroll-animator/transactionGuard.ts` — Suppresses source sync for ScrollAnimator transforms (only `keyframes` persists) and SparkControls transforms (only `settings` root and individual field names persist). Uses narrow structural types (no private imports).
 - `src/lib/studio/spark-controls/SparkControlsExtension.svelte` — Studio extension: fixed toolbar pane with individual numeric/boolean/nullable inputs for all 22 Spark settings. Commits edits via `transactions.buildTransaction()` with source sync. Uses `mdiTune` icon.
 - `src/lib/studio/spark-controls/SparkFixedToolbarPane.svelte` — Fixed toolbar pane for Spark controls (separate from ScrollAnimator's pane).
-- `src/lib/spark/SparkReloadRuntime.ts` — `SparkReloadCoordinator` class (per-instance, not singleton) for race-safe SplatMesh reload coordination. Uses monotonically increasing generation IDs: latest request wins, superseded requests disposed, component destruction aborts in-flight operations. No arbitrary timing delays. Completion tied to `SplatMesh.initialized`.
+- `src/lib/spark/SparkReloadRuntime.ts` — `SparkReloadCoordinator` class (per-instance, not singleton) for race-safe SplatMesh reload coordination. Uses monotonically increasing generation IDs: latest request wins, superseded requests disposed, component destruction aborts in-flight operations. No arbitrary timing delays. Completion tied to `SplatMesh.initialized`. Exposes `SparkReloadStatus` (subscribe/unsubscribe) for pane progress/error UI.
+- `src/lib/spark/SparkReloadStatusBridge.ts` — Pass-through bridge that mirrors coordinator status to `SparkControls.reloadStatus` so the extension pane can read it.
 - `src/lib/studio/editor-camera/editorCameraControlsBridge.ts` — Future-facing, typed bridge for Studio editor CameraControls tuning. Currently unattached (no supported public path to the CameraControls instance). Documented in code.
 - `src/lib/spark/createSparkStudioRenderer.ts` — Factory for dual SparkRenderer setup. `applyChangedSettings()` applies only changed fields with field-level dirty classification (shader/sort/LOD/foveation). `reconfigureMaxPagedSplats()` recreates both renderers with the complete current settings snapshot so ordinary edits survive capacity changes.
 - `src/lib/spark/deviceProfile.ts` — Mobile/iOS detection + Spark performance profile. Cone angles are full-width **degrees** (Spark 2.1 API: default `coneFov0: 90`, `coneFov: 120`).
@@ -113,7 +114,7 @@ Keyframe mutations use `transactions.buildTransaction()` which derives source me
 - Changed fields are classified: shader-only (mark dirty), sort-affecting (mark sortDirty), LOD budget (mark lodDirty), foveation (mark lodDirty), LOD toggle (mark lodDirty).
 - `lodSplatCount` null → `undefined` on renderer (restores automatic/platform default).
 - `maxPagedSplats` requires controlled renderer/pager recreation via `reconfigureMaxPagedSplats()`. This disposes both SparkRenderer instances and creates new ones with the new capacity. The complete current settings snapshot is applied to the new renderers so ordinary edits survive. A recreation lock prevents concurrent rapid edits.
-- After renderer recreation, the bridge calls `onMeshReload(radUrl)` which invokes `SparkSplats.reload()`. The `SparkReloadCoordinator` creates a new `SplatMesh` and awaits `SplatMesh.initialized` before notifying completion. The old mesh is disposed from the `SplatWrapper`, and the new mesh is added as its child. The `SplatWrapper` (and its authored transform) persists. Camera, ScrollAnimators, scroll position, and unrelated scene objects are preserved.
+- After renderer recreation, the bridge calls `onMeshReload(radUrl)` which invokes `SparkSplats.reload()`. The `SparkReloadCoordinator` creates a new `SplatMesh`, awaits `SplatMesh.initialized`, then notifies completion. The old mesh is disposed from the `SplatWrapper`, and the new mesh is added. The `SplatWrapper` (and its authored transform) persists. Reload status (`isReloading`, `error`) flows through `SparkReloadStatus` → `SparkReloadStatusBridge` → `SparkControls.reloadStatus` → pane UI. Camera, ScrollAnimators, scroll position, and unrelated scene objects are preserved.
 
 **Cone angle defaults:** Desktop uses Spark 2.1 defaults (`coneFov0: 90`, `coneFov: 120`). Mobile uses slightly tighter cones (`coneFov0: 70`, `coneFov: 110`). These are full-width **degrees**, not the accidental sub-degree values from an old API.
 
@@ -145,6 +146,9 @@ Keyframe mutations use `transactions.buildTransaction()` which derives source me
 5. Bridge calls `onMeshReload(radUrl)` → `SparkSplats.reload(url)`.
 6. `SparkReloadCoordinator.requestReload()` creates new mesh, awaits `initialized`.
 7. On completion, old mesh is disposed from wrapper, new mesh is added.
+8. `SparkReloadStatus.success()` fires → pane clears progress indicator.
+
+**Note on pager readiness:** `SplatMesh.initialized` resolves when the mesh is constructed, but pager attachment (`mesh.paged.pager === renderer.pager`) occurs on the next render/update cycle. The reload completion signal is tied to `initialized`, not pager attachment. In the stub build, `SplatMesh.initialized` resolves immediately.
 
 ## Removed Features
 
@@ -248,7 +252,18 @@ https://storage.googleapis.com/forge-dev-public/asundqui/rad/260217/cozy-spacesh
 
 For real-splat visual verification, use `playwright-cli screenshot` with the lightweight RAD URL (see above). Screenshots capture the compositor output correctly even when `readPixels()` returns black in headless mode.
 
-**Spark controls e2e:** The Spark object appears in the Studio hierarchy and is selectable. The Spark Controls pane opens via toolbar button, shows all 22 individually labeled fields (`data-testid="spark-field-{name}"`), and supports editing numeric, boolean, nullable, and cone-angle fields. Source-sync-unavailable warning is verified. Pane open/close via Escape key is tested. The `__spark_stub` marker on `window` proves the stub build is active.
+**Spark controls e2e:** The Spark object appears in the Studio hierarchy and is selectable. The Spark Controls pane opens via toolbar button, shows all 22 individually labeled fields (`data-testid="spark-field-{name}"`), and supports editing numeric, boolean, nullable, and cone-angle fields. Source-sync-unavailable warning is verified. Pane open/close via Escape key is tested. The `__spark_stub` marker on `window` proves the stub build is active. Capacity edits verify normalization to 65,536 multiples. Reload status (`spark-reloading`, `spark-error`) is driven by the coordinator's `SparkReloadStatus`.
+
+**Debugging e2e failures with playwright-cli:** When e2e tests fail with unexpected errors, the fastest diagnosis is to rebuild with the stub (`VITE_E2E_STUB_SPARK=true npx vite build`), start a preview (`npx vite preview --port 4173`), then use `playwright-cli` to manually navigate and check `playwright-cli console` for runtime errors. Common pitfalls include stub methods missing from `SparkRenderer` (e.g. `setDirty()`, `onBeforeRender()`) or `Object3D` property conflicts (e.g. `id` is a non-configurable getter on `Object3D`).
+
+**Interacting with Threlte Studio via playwright-cli:** The Studio scene hierarchy is rendered inside a `<tree-view>` custom element with a **shadow DOM**. `document.querySelectorAll()` from `page.evaluate()` does NOT penetrate shadow DOM boundaries — it will return 0 results for `.tv-item`, `.tv-item-text`, etc. However, Playwright's accessibility tree (used by `snapshot`, `getByText()`, `getByRole()`) **does** see into shadow DOM.
+
+**Best practices for Studio interaction in playwright-cli:**
+- Use `playwright-cli snapshot` to get element refs (e.g. `e205`), then `playwright-cli click e205`
+- Use `playwright-cli click "getByText('Spark')"` or `playwright-cli click "getByRole('button', { name: 'Spark Controls' })"`
+- Avoid `page.evaluate('() => document.querySelector(...)')` for Studio hierarchy items — they are inside shadow DOM
+- If you must use evaluate, access the shadow root first: `host.shadowRoot.querySelectorAll('.tv-item')`
+- Toolbar buttons (outside shadow DOM) work with both approaches
 
 ## CORS Note
 

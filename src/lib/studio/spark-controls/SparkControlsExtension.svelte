@@ -88,8 +88,9 @@
       const sc = ctrl as unknown as SparkControls
       uiState.controls = sc
       uiState.settings = sc.settings
-      uiState.reloading = false
-      uiState.reloadError = ''
+      // Mirror reload status from SparkControls
+      uiState.reloading = sc.reloadStatus.isReloading
+      uiState.reloadError = sc.reloadStatus.error
       // Initialize drafts from current settings
       const newDrafts: Record<string, string> = {}
       for (const meta of FIELD_META) {
@@ -100,6 +101,8 @@
     } else {
       uiState.controls = null
       uiState.settings = {} as SparkSettings
+      uiState.reloading = false
+      uiState.reloadError = ''
     }
   })
 
@@ -153,6 +156,11 @@
         transactions.commit([tx])
       }
       uiState.settings = controls.settings
+      // Refresh all drafts from new settings (invariant may have changed other fields)
+      for (const m of FIELD_META) {
+        const val = controls.settings[m.key]
+        drafts[m.key] = val === null ? '' : String(val)
+      }
     }
   }
 
@@ -180,6 +188,11 @@
         transactions.commit([tx])
       }
       uiState.settings = controls.settings
+      // Refresh all drafts (invariant may have changed other fields)
+      for (const m of FIELD_META) {
+        const val = controls.settings[m.key]
+        drafts[m.key] = val === null ? '' : String(val)
+      }
     }
   }
 

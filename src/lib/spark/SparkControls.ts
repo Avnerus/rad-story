@@ -223,6 +223,9 @@ export class SparkControls extends Object3D {
   private _settings: SparkSettings
   private _listeners: SettingsChangeHandler[] = []
 
+  /** Reload status set by the scene's SparkReloadStatusBridge. Read by the Spark Controls pane. */
+  reloadStatus = { isReloading: false, error: '' as string }
+
   constructor(initial?: Partial<SparkSettings>) {
     super()
     this.isSparkControls = true

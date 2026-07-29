@@ -198,4 +198,113 @@ describe('SparkReloadCoordinator', () => {
       c2.dispose()
     })
   })
+
+  describe('reload status', () => {
+    it('status.start sets isReloading and clears error', () => {
+      coordinator.status.fail('old error')
+      coordinator.status.start()
+      expect(coordinator.status.isReloading).toBe(true)
+      expect(coordinator.status.error).toBe('')
+    })
+
+    it('status.success clears isReloading and error', () => {
+      coordinator.status.start()
+      coordinator.status.success()
+      expect(coordinator.status.isReloading).toBe(false)
+      expect(coordinator.status.error).toBe('')
+    })
+
+    it('status.fail sets error and clears isReloading', () => {
+      coordinator.status.start()
+      coordinator.status.fail('disk full')
+      expect(coordinator.status.isReloading).toBe(false)
+      expect(coordinator.status.error).toBe('disk full')
+    })
+
+    it('status.notify fires on start/success/fail', () => {
+      const statuses: Array<{ isReloading: boolean; error: string }> = []
+      coordinator.status.subscribe((s) => statuses.push(s))
+
+      coordinator.status.start()
+      expect(statuses).toHaveLength(1)
+      expect(statuses[0]).toEqual({ isReloading: true, error: '' })
+
+      coordinator.status.fail('oops')
+      expect(statuses).toHaveLength(2)
+      expect(statuses[1]).toEqual({ isReloading: false, error: 'oops' })
+
+      coordinator.status.start()
+      coordinator.status.success()
+      expect(statuses).toHaveLength(4)
+    })
+
+    it('status.unsubscribe stops notifications', () => {
+      const calls: number[] = []
+      const unsub = coordinator.status.subscribe(() => calls.push(1))
+      coordinator.status.start()
+      unsub()
+      coordinator.status.success()
+      expect(calls).toHaveLength(1)
+    })
+
+    it('status.clear resets state and removes listeners', () => {
+      const calls: number[] = []
+      coordinator.status.subscribe(() => calls.push(1))
+      coordinator.status.start()
+      coordinator.status.clear()
+      coordinator.status.start()
+      expect(calls).toHaveLength(1) // only the first start
+      expect(coordinator.status.isReloading).toBe(true) // start after clear works
+    })
+
+    it('coordinator requestReload drives status through start→success', async () => {
+      const { factory } = makeMeshFactory()
+      const statuses: Array<{ isReloading: boolean; error: string }> = []
+      coordinator.status.subscribe((s) => statuses.push({ ...s }))
+
+      await coordinator.requestReload('test.rad', factory)
+
+      expect(statuses).toHaveLength(2)
+      expect(statuses[0]).toEqual({ isReloading: true, error: '' })
+      expect(statuses[1]).toEqual({ isReloading: false, error: '' })
+    })
+
+    it('coordinator requestReload drives status through start→fail', async () => {
+      const err = new Error('bad url')
+      const failingFactory = async () => { throw err }
+      const statuses: Array<{ isReloading: boolean; error: string }> = []
+      coordinator.status.subscribe((s) => statuses.push({ ...s }))
+
+      await coordinator.requestReload('bad.rad', failingFactory)
+
+      expect(statuses).toHaveLength(2)
+      expect(statuses[0]).toEqual({ isReloading: true, error: '' })
+      expect(statuses[1]).toEqual({ isReloading: false, error: 'bad url' })
+    })
+
+    it('coordinator dispose clears status', () => {
+      coordinator.status.start()
+      coordinator.dispose()
+      expect(coordinator.status.isReloading).toBe(false)
+      expect(coordinator.status.error).toBe('')
+    })
+
+    it('superseded request does not flash false completion', async () => {
+      const { factory } = makeMeshFactory()
+      const statuses: Array<{ isReloading: boolean; error: string }> = []
+      coordinator.status.subscribe((s) => statuses.push({ ...s }))
+
+      // Fire 3 rapid requests — only gen 3 should complete
+      const p1 = coordinator.requestReload('a.rad', factory)
+      const p2 = coordinator.requestReload('b.rad', factory)
+      const p3 = coordinator.requestReload('c.rad', factory)
+      await Promise.all([p1, p2, p3])
+
+      // Should see 3 starts (one per request) and 1 success (gen 3 only)
+      const starts = statuses.filter((s) => s.isReloading)
+      const successes = statuses.filter((s) => !s.isReloading && !s.error)
+      expect(starts).toHaveLength(3)
+      expect(successes).toHaveLength(1)
+    })
+  })
 })

@@ -10,6 +10,7 @@
   import { scrollAnimatorRuntime } from '$lib/studio/scroll-animator/scrollAnimatorRuntime'
   import type { DeviceProfile } from '$lib/types'
   import { SparkControls } from '$lib/spark/SparkControls'
+  import { SparkReloadStatusBridge } from '$lib/spark/SparkReloadStatusBridge'
   import SparkSplats from './SparkSplats.svelte'
   import SparkStudioBridge from './SparkStudioBridge.svelte'
 
@@ -77,6 +78,15 @@
 
   // Mesh reload callback — wired from SparkSplats to SparkStudioBridge
   let splatsRef: { reload: (url: string) => Promise<void> } | null = null
+
+  // Reload status bridge: connects SparkSplats coordinator → SparkControls.reloadStatus
+  const reloadStatusBridge = new SparkReloadStatusBridge()
+
+  function handleReloadStatus(status: import('$lib/spark/SparkReloadRuntime').ReloadStatus): void {
+    reloadStatusBridge.update(status)
+    // Mirror to SparkControls so the extension pane can read it
+    sparkControls.reloadStatus = status
+  }
 
   // Scene-wide animator playback: traverse scene and apply to every branded ScrollAnimator
   function applyScrollToAllAnimators(percent: number): void {
@@ -160,6 +170,7 @@
       scrollTrigger = null
     }
     sparkControls.dispose()
+    reloadStatusBridge.clear()
   })
 </script>
 
@@ -191,7 +202,7 @@
 <!-- SparkControls: Studio-editable Spark quality/LOD settings -->
 <T is={sparkControls} name="Spark" settings={sparkControls.settings} />
 
-<SparkSplats bind:this={splatsRef} {url} />
+<SparkSplats bind:this={splatsRef} {url} onStatusChange={handleReloadStatus} />
 
 <!-- Visually hidden debug element for e2e tests -->
 <div

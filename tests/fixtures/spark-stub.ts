@@ -9,8 +9,44 @@
 
 import { Object3D } from 'three'
 
+// Monotonic identity counter for pager/renderer instances (for e2e identity tests)
+let _pagerIdCounter = 0
+let _rendererIdCounter = 0
+
+/** Stub pager that tracks identity and capacity. */
+export class SplatPager {
+  id: number
+  maxSplats: number
+  disposed = false
+
+  constructor(options?: { maxSplats?: number }) {
+    this.id = ++_pagerIdCounter
+    this.maxSplats = options?.maxSplats ?? 16 * 65536
+  }
+
+  dispose(): void {
+    this.disposed = true
+  }
+}
+
+/** Stub PagedSplats that references a pager. */
+export class PagedSplats {
+  pager: SplatPager | undefined
+
+  constructor(pager?: SplatPager) {
+    this.pager = pager
+  }
+
+  dispose(): void {
+    // no-op
+  }
+}
+
 export class SparkRenderer extends Object3D {
   static sparkOverride: SparkRenderer | undefined
+
+  pager: SplatPager | undefined
+  pagerId: number
 
   lodInstances = new Map<unknown, { lodId: number; numSplats: number; indices: Uint32Array; texture: unknown }>()
 
@@ -43,6 +79,13 @@ export class SparkRenderer extends Object3D {
 
   constructor(_options?: Record<string, unknown>) {
     super()
+    _rendererIdCounter++ // keep counter ticking
+    // Create a stub pager with capacity from options
+    const maxPaged = typeof _options?.maxPagedSplats === 'number' ? _options.maxPagedSplats : 0
+    if (maxPaged > 0) {
+      this.pager = new SplatPager({ maxSplats: maxPaged })
+      this.pagerId = this.pager.id
+    }
     if (_options) {
       // Copy known fields from options
       for (const key of Object.keys(this) as (keyof SparkRenderer)[]) {
@@ -58,7 +101,8 @@ export class SparkRenderer extends Object3D {
   }
 
   dispose(): void {
-    // no-op
+    this.pager?.dispose()
+    this.pager = undefined
   }
 
   onBeforeRender(_camera: unknown, _scene: unknown): void {
@@ -68,15 +112,21 @@ export class SparkRenderer extends Object3D {
 
 export class SplatMesh extends Object3D {
   initialized: Promise<SplatMesh>
+  paged: PagedSplats | undefined
 
   constructor(_options?: Record<string, unknown>) {
     super()
     // Resolve immediately — stub mesh is always "initialized"
     this.initialized = Promise.resolve(this)
+    // Create a stub PagedSplats (pager will be set by the renderer during update)
+    if (_options?.paged) {
+      this.paged = new PagedSplats()
+    }
   }
 
   dispose(): void {
-    // no-op
+    this.paged?.dispose()
+    this.paged = undefined
   }
 
   addEventListener(_type: string, _handler: unknown): void {

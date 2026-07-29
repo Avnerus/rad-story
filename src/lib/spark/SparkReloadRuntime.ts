@@ -8,7 +8,76 @@
  * - Component destruction invalidates all in-flight requests
  * - No arbitrary timing delays
  * - Completion tied to SplatMesh.initialized promise
+ *
+ * Reload status (isReloading, error) is reported through a `SparkReloadStatus`
+ * instance so that the Spark Controls pane can display progress and errors.
  */
+
+/**
+ * Describes the current reload state.
+ */
+export interface ReloadStatus {
+  /** True while a reload request is in flight. */
+  isReloading: boolean
+  /** Error message from the latest failed reload, or empty string. */
+  error: string
+}
+
+/**
+ * Instance-owned status holder. Not a singleton — one per SparkSplats instance.
+ * The Spark Controls pane subscribes to this to drive its progress/error UI.
+ */
+export class SparkReloadStatus {
+  private _isReloading = false
+  private _error = ''
+  private _listeners: Array<(status: ReloadStatus) => void> = []
+
+  get isReloading(): boolean { return this._isReloading }
+  get error(): string { return this._error }
+
+  /** Signal that a reload has started. */
+  start(): void {
+    this._isReloading = true
+    this._error = ''
+    this._notify()
+  }
+
+  /** Signal that a reload completed successfully. */
+  success(): void {
+    this._isReloading = false
+    this._error = ''
+    this._notify()
+  }
+
+  /** Signal that a reload failed. */
+  fail(message: string): void {
+    this._isReloading = false
+    this._error = message
+    this._notify()
+  }
+
+  /** Subscribe to status changes. Returns an unsubscribe function. */
+  subscribe(fn: (status: ReloadStatus) => void): () => void {
+    this._listeners.push(fn)
+    return () => {
+      const i = this._listeners.indexOf(fn)
+      if (i >= 0) this._listeners.splice(i, 1)
+    }
+  }
+
+  /** Clear all state (called on coordinator dispose). */
+  clear(): void {
+    this._isReloading = false
+    this._error = ''
+    this._listeners.length = 0
+  }
+
+  private _notify(): void {
+    for (const fn of this._listeners) {
+      fn({ isReloading: this._isReloading, error: this._error })
+    }
+  }
+}
 
 /**
  * A reload request with a generation ID for coalescing.
@@ -27,6 +96,9 @@ export class SparkReloadCoordinator {
   private _currentRequest: ReloadRequest | null = null
   private _pendingPromise: Promise<void> | null = null
 
+  /** Instance-owned status holder for the pane. */
+  readonly status = new SparkReloadStatus()
+
   /**
    * Request a mesh reload. Returns a promise that resolves when the new
    * mesh is initialized (SplatMesh.initialized).
@@ -42,6 +114,9 @@ export class SparkReloadCoordinator {
 
     const generation = ++this._generation
     this._currentRequest = { generation, url }
+
+    // Signal reload started — clears any prior error
+    this.status.start()
 
     const promise = this._doReload(generation, url, createMesh)
     this._pendingPromise = promise
@@ -70,8 +145,11 @@ export class SparkReloadCoordinator {
 
       // Notify success — caller handles attaching to scene
       this._onReloadComplete?.(mesh, generation)
+      this.status.success()
     } catch (err) {
       if (!this._destroyed && this._currentRequest?.generation === generation) {
+        const message = err instanceof Error ? err.message : String(err)
+        this.status.fail(message)
         this._onReloadError?.(err, generation)
       }
     } finally {
@@ -103,6 +181,7 @@ export class SparkReloadCoordinator {
     this._pendingPromise = null
     this._onReloadComplete = null
     this._onReloadError = null
+    this.status.clear()
   }
 
   /** Whether a reload is currently in progress. */
