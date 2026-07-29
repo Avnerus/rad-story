@@ -20,7 +20,7 @@ export default defineConfig({
   webServer: {
     command: 'VITE_E2E_STUB_SPARK=true npm run build && npx vite preview --port 4173',
     port: 4173,
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: false,
     timeout: 60_000,
   },
 })

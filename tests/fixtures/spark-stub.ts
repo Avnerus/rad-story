@@ -19,6 +19,7 @@ export class SparkRenderer extends Object3D {
   enableDriveLod = true
   enableLodFetching = true
   lodDirty = false
+  sortDirty = false
   maxPagedSplats = 0
   lodSplatScale = 1
   lodRenderScale = 1
@@ -52,14 +53,26 @@ export class SparkRenderer extends Object3D {
     }
   }
 
+  setDirty(): void {
+    // no-op stub
+  }
+
   dispose(): void {
     // no-op
+  }
+
+  onBeforeRender(_camera: unknown, _scene: unknown): void {
+    // no-op stub
   }
 }
 
 export class SplatMesh extends Object3D {
+  initialized: Promise<SplatMesh>
+
   constructor(_options?: Record<string, unknown>) {
     super()
+    // Resolve immediately — stub mesh is always "initialized"
+    this.initialized = Promise.resolve(this)
   }
 
   dispose(): void {
@@ -79,3 +92,10 @@ export function isMobile(): boolean {
   if (typeof navigator === 'undefined') return false
   return /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
 }
+
+/** Marker: proves the running build uses the Spark stub. */
+;(() => {
+  if (typeof window !== 'undefined') {
+    ;(window as unknown as Record<string, unknown>).__spark_stub = true
+  }
+})()

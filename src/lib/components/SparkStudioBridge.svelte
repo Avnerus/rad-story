@@ -2,7 +2,6 @@
   import { useThrelte } from '@threlte/core'
   import { onMount, onDestroy } from 'svelte'
   import { createSparkStudioRenderer } from '$lib/spark/createSparkStudioRenderer'
-  import { triggerReload } from '$lib/spark/SparkReloadRuntime'
   import type { DeviceProfile } from '$lib/types'
   import type { SparkRendererOptions } from '@sparkjsdev/spark'
   import type { SparkControls, SparkSettings } from '$lib/spark/SparkControls'
@@ -11,9 +10,11 @@
     profile: DeviceProfile
     sparkControls?: SparkControls | null
     radUrl?: string
+    /** Callback to trigger SplatMesh reload from SparkSplats. */
+    onMeshReload?: (url: string) => Promise<void>
   }
 
-  let { profile, sparkControls = null, radUrl = '' }: Props = $props()
+  let { profile, sparkControls = null, radUrl = '', onMeshReload }: Props = $props()
 
   const threlte = useThrelte()
   let handle = $state<{
@@ -64,9 +65,9 @@
           studioHandle.reconfigureMaxPagedSplats(newSettings)
 
           // Trigger SplatMesh reload so new PagedSplats gets fresh pager
-          if (radUrl) {
-            triggerReload(radUrl).catch(() => {
-              // Reload failure is non-fatal — rendering continues with old mesh
+          if (radUrl && onMeshReload) {
+            onMeshReload(radUrl).catch(() => {
+              // Reload failure is non-fatal
             })
           }
         } else {

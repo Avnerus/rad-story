@@ -7,8 +7,8 @@ A client-side Threlte/Svelte 5/TypeScript web app for designing scroll-based sto
 **Key files:**
 - `src/App.svelte` — Root component. Landing screen ↔ viewer state machine. `<Canvas>` with `<Studio extensions={[ScrollAnimatorExtension]}>` wrapping `RadStoryScene`.
 - `src/lib/components/RadStoryScene.svelte` — Camera setup, ScrollTrigger, `ScrollAnimator` instances (camera + target), `CameraTarget`, `SparkControls`, SparkRenderer bridge, and SplatMesh. Uses `useTask` for per-frame camera look-at. Scene-wide `ScrollAnimator` playback via `scene.traverse`.
-- `src/lib/components/SparkSplats.svelte` — SplatMesh lifecycle only. Accepts `url` prop; the nested `<T is={mesh}>` is the Studio-editable object. No transform props (`position`, `rotation`, `scale`) are exposed — Studio authors the mesh directly.
-- `src/lib/components/SparkStudioBridge.svelte` — Manages dual SparkRenderer lifecycle via `createSparkStudioRenderer`. Subscribes to `SparkControls` settings changes and propagates them to both renderers in real time.
+- `src/lib/components/SparkSplats.svelte` — SplatMesh lifecycle in a stable `Object3D` wrapper (`SplatWrapper`). The wrapper owns transform/name/visibility and persists across mesh reloads. Exports `reload(url)` for `SparkStudioBridge` to call. Uses `SparkReloadCoordinator` for race-safe reload coordination.
+- `src/lib/components/SparkStudioBridge.svelte` — Manages dual SparkRenderer lifecycle via `createSparkStudioRenderer`. Subscribes to `SparkControls` settings changes and propagates them to both renderers. On `maxPagedSplats` changes, calls `reconfigureMaxPagedSplats()` and triggers SplatMesh reload via `onMeshReload` callback.
 - `src/lib/spark/SparkControls.ts` — Three.js `Object3D` subclass holding all editable Spark 2.1 quality/LOD/foveation settings. Appears as "Spark" in Studio outline. Has a writable `settings` getter/setter for Threlte `<T>` source sync, plus individual top-level property getters/setters for each field. All values validated against field-specific bounds; constructor input and single-field edits both pass through the same validation path.
 - `src/lib/spark/ScrollAnimator.ts` — Three.js `Object3D` subclass with `keyframes` property and `applyScrollPercentage()`.
 - `src/lib/spark/scrollAnimation.ts` — Pure keyframe model, canonicalization (with dedup), upsert/delete, bracketing, and interpolation (position lerp + quaternion slerp).
@@ -18,7 +18,7 @@ A client-side Threlte/Svelte 5/TypeScript web app for designing scroll-based sto
 - `src/lib/studio/scroll-animator/transactionGuard.ts` — Suppresses source sync for ScrollAnimator transforms (only `keyframes` persists) and SparkControls transforms (only `settings` root and individual field names persist). Uses narrow structural types (no private imports).
 - `src/lib/studio/spark-controls/SparkControlsExtension.svelte` — Studio extension: fixed toolbar pane with individual numeric/boolean/nullable inputs for all 22 Spark settings. Commits edits via `transactions.buildTransaction()` with source sync. Uses `mdiTune` icon.
 - `src/lib/studio/spark-controls/SparkFixedToolbarPane.svelte` — Fixed toolbar pane for Spark controls (separate from ScrollAnimator's pane).
-- `src/lib/spark/SparkReloadRuntime.ts` — Singleton runtime for coordinating SplatMesh reload when `maxPagedSplats` changes. The SparkSplats component registers a reload callback that disposes the old mesh and creates a new one.
+- `src/lib/spark/SparkReloadRuntime.ts` — `SparkReloadCoordinator` class (per-instance, not singleton) for race-safe SplatMesh reload coordination. Uses monotonically increasing generation IDs: latest request wins, superseded requests disposed, component destruction aborts in-flight operations. No arbitrary timing delays. Completion tied to `SplatMesh.initialized`.
 - `src/lib/studio/editor-camera/editorCameraControlsBridge.ts` — Future-facing, typed bridge for Studio editor CameraControls tuning. Currently unattached (no supported public path to the CameraControls instance). Documented in code.
 - `src/lib/spark/createSparkStudioRenderer.ts` — Factory for dual SparkRenderer setup. `applyChangedSettings()` applies only changed fields with field-level dirty classification (shader/sort/LOD/foveation). `reconfigureMaxPagedSplats()` recreates both renderers with the complete current settings snapshot so ordinary edits survive capacity changes.
 - `src/lib/spark/deviceProfile.ts` — Mobile/iOS detection + Spark performance profile. Cone angles are full-width **degrees** (Spark 2.1 API: default `coneFov0: 90`, `coneFov: 120`).
@@ -113,11 +113,38 @@ Keyframe mutations use `transactions.buildTransaction()` which derives source me
 - Changed fields are classified: shader-only (mark dirty), sort-affecting (mark sortDirty), LOD budget (mark lodDirty), foveation (mark lodDirty), LOD toggle (mark lodDirty).
 - `lodSplatCount` null → `undefined` on renderer (restores automatic/platform default).
 - `maxPagedSplats` requires controlled renderer/pager recreation via `reconfigureMaxPagedSplats()`. This disposes both SparkRenderer instances and creates new ones with the new capacity. The complete current settings snapshot is applied to the new renderers so ordinary edits survive. A recreation lock prevents concurrent rapid edits.
-- After renderer recreation, `SparkReloadRuntime.triggerReload()` disposes the old SplatMesh and creates a new one with the same URL. The new `PagedSplats` gets a fresh pager from the new renderer. Camera, ScrollAnimators, scroll position, and unrelated scene objects are preserved.
+- After renderer recreation, the bridge calls `onMeshReload(radUrl)` which invokes `SparkSplats.reload()`. The `SparkReloadCoordinator` creates a new `SplatMesh` and awaits `SplatMesh.initialized` before notifying completion. The old mesh is disposed from the `SplatWrapper`, and the new mesh is added as its child. The `SplatWrapper` (and its authored transform) persists. Camera, ScrollAnimators, scroll position, and unrelated scene objects are preserved.
 
 **Cone angle defaults:** Desktop uses Spark 2.1 defaults (`coneFov0: 90`, `coneFov: 120`). Mobile uses slightly tighter cones (`coneFov0: 70`, `coneFov: 110`). These are full-width **degrees**, not the accidental sub-degree values from an old API.
 
 **Frustum/LOD findings:** Spark 2.1 uses angular foveation, not strict frustum culling. Objects outside the perspective frustum but within the foveation cone (up to 180°) are still refined. `clipXY` controls shader draw clipping of splat centers only, not LOD paging/refinement. The `behindFoveate` parameter controls refinement behind the viewer — setting it to a low value (e.g. `0.1`) reduces but does not eliminate off-screen refinement. No public API provides strict frustum-only LOD cutoff.
+
+## SparkReloadCoordinator — Race-Safe Mesh Reload
+
+`SparkReloadCoordinator` (in `src/lib/spark/SparkReloadRuntime.ts`) is a per-instance class (not a singleton) that coordinates SplatMesh reloads when `maxPagedSplats` changes.
+
+**Race safety via generation IDs:**
+- Each `requestReload()` call increments a monotonically increasing generation counter.
+- The `_doReload()` method checks the generation before and after the async `createMesh()` call.
+- If a newer request has superseded the current one, the superseded mesh is disposed and the callback is skipped.
+- `dispose()` sets `_destroyed = true` and clears `_currentRequest`, which aborts any in-flight reload.
+- No arbitrary timing delays — completion is tied to `SplatMesh.initialized`.
+
+**Mesh state preservation via SplatWrapper:**
+- `SparkSplats.svelte` creates a stable `Object3D` named `SplatWrapper` that is the `<T>` target.
+- The `SplatMesh` is a child of the wrapper, not the direct `<T>` target.
+- During reload, the old `SplatMesh` is removed and disposed from the wrapper, and the new one is added.
+- The wrapper's transform, name, visibility, and scene hierarchy position are preserved.
+- Studio-authored transforms on the wrapper survive reloads.
+
+**Integration flow:**
+1. User edits `maxPagedSplats` in Spark Controls pane.
+2. `SparkControls.setOne()` validates and fires `onChange` with changed keys.
+3. `SparkStudioBridge` detects `changed.has('maxPagedSplats')`.
+4. Bridge calls `studioHandle.reconfigureMaxPagedSplats(newSettings)` (recreates both renderers).
+5. Bridge calls `onMeshReload(radUrl)` → `SparkSplats.reload(url)`.
+6. `SparkReloadCoordinator.requestReload()` creates new mesh, awaits `initialized`.
+7. On completion, old mesh is disposed from wrapper, new mesh is added.
 
 ## Removed Features
 
@@ -142,7 +169,7 @@ Free navigation (checkbox, keyboard/mouse/wheel listeners, RAF loop, pure helper
   - **Editor renderer**: `enableLod: true`, `enableDriveLod: false`. Added to the Three scene. Sorts splats for Studio editor camera views but never drives LOD fetching or pager updates.
   - **Real-camera renderer**: `enableLod: true`, `enableDriveLod: true`. Never added to the scene. Drives LOD selection from the app's real camera. Its `lodInstances` map is shared with the editor renderer before each editor render.
 - **Camera routing via `onBeforeRender` wrap**: Editor renderer's `onBeforeRender` is wrapped to detect `camera.userData.editorCamera === true`. Both paths pin their intended `SparkRenderer.sparkOverride` for the duration of the original callback and restore in `try/finally`.
-- **SplatMesh** is created with `paged: true` for RAD streaming. Owned by Threlte `<T>` for declarative transforms. Disposed in `onDestroy`.
+- **SplatMesh** is created with `paged: true` for RAD streaming. Owned by a stable `SplatWrapper` `Object3D` (the `<T>` target) so that authored transforms survive mesh reloads. The wrapper persists across reloads; only the internal `SplatMesh` child is swapped. Disposed in `onDestroy`.
 - **WebGLRenderer** uses `antialias: false`. DPR clamped to `Math.min(devicePixelRatio, 2)` on desktop, `1` on mobile.
 - **renderMode="always"** on `<Canvas>` ensures Spark streaming/sorting renders every frame.
 - Theatre.js is **not** used.
@@ -151,7 +178,7 @@ Free navigation (checkbox, keyboard/mouse/wheel listeners, RAF loop, pure helper
 
 - `<Studio extensions={[ScrollAnimatorExtension, SparkControlsExtension]}>` wraps the viewer scene. The `threlteStudio()` Vite plugin is registered before `svelte()` in `vite.config.ts`.
 - Studio editor cameras are marked with `camera.userData.editorCamera = true`.
-- Three literal `<T>` nodes in `RadStoryScene.svelte` host the `ScrollAnimator` instances and the `SparkControls` — not wrapped in reusable components — so Studio's source sync metadata targets independent `keyframes` and `settings` attributes respectively.
+- Three literal `<T>` nodes in `RadStoryScene.svelte` host the `ScrollAnimator` instances and the `SparkControls` — not wrapped in reusable components — so Studio's source sync metadata targets independent `keyframes` and `settings` attributes respectively. The `SparkSplats` component uses `bind:this` to expose its `reload()` function to the bridge.
 - Extension uses **only public** `@threlte/studio/extensions` imports (`useObjectSelection`, `useTransactions`). No private module imports or Vite aliases.
 
 ## Scroll Layout
@@ -221,7 +248,7 @@ https://storage.googleapis.com/forge-dev-public/asundqui/rad/260217/cozy-spacesh
 
 For real-splat visual verification, use `playwright-cli screenshot` with the lightweight RAD URL (see above). Screenshots capture the compositor output correctly even when `readPixels()` returns black in headless mode.
 
-**Spark controls e2e:** The Spark object appears in the Studio hierarchy and is selectable via `page.getByText('Spark')`. The Spark Controls toolbar button (`aria-label="Spark Controls"`) is present. In the stub build, the Inspector may not render full settings content, but the Spark object's presence and selectability are verified.
+**Spark controls e2e:** The Spark object appears in the Studio hierarchy and is selectable. The Spark Controls pane opens via toolbar button, shows all 22 individually labeled fields (`data-testid="spark-field-{name}"`), and supports editing numeric, boolean, nullable, and cone-angle fields. Source-sync-unavailable warning is verified. Pane open/close via Escape key is tested. The `__spark_stub` marker on `window` proves the stub build is active.
 
 ## CORS Note
 

@@ -75,6 +75,9 @@
     behindFoveate: profile.sparkRenderer.behindFoveate,
   })
 
+  // Mesh reload callback — wired from SparkSplats to SparkStudioBridge
+  let splatsRef: { reload: (url: string) => Promise<void> } | null = null
+
   // Scene-wide animator playback: traverse scene and apply to every branded ScrollAnimator
   function applyScrollToAllAnimators(percent: number): void {
     const scene = threlte.scene
@@ -183,14 +186,12 @@
   <T is={cameraTarget} name="CameraTarget" />
 </T>
 
-<SparkStudioBridge {profile} {sparkControls} radUrl={url} />
+<SparkStudioBridge {profile} {sparkControls} radUrl={url} onMeshReload={splatsRef?.reload} />
 
 <!-- SparkControls: Studio-editable Spark quality/LOD settings -->
 <T is={sparkControls} name="Spark" settings={sparkControls.settings} />
 
-<SparkSplats
-  {url}
-/>
+<SparkSplats bind:this={splatsRef} {url} />
 
 <!-- Visually hidden debug element for e2e tests -->
 <div

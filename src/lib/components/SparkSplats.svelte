@@ -1,8 +1,9 @@
 <script lang="ts">
   import { T } from '@threlte/core'
   import { onMount, onDestroy } from 'svelte'
+  import { Object3D } from 'three'
   import { SplatMesh } from '@sparkjsdev/spark'
-  import { setReloadCallback } from '$lib/spark/SparkReloadRuntime'
+  import { SparkReloadCoordinator } from '$lib/spark/SparkReloadRuntime'
 
   interface Props {
     url: string
@@ -10,41 +11,59 @@
 
   let { url }: Props = $props()
 
-  let mesh: SplatMesh | null = $state(null)
+  // Stable wrapper Object3D that owns transform/name/visibility.
+  // The SplatMesh child is replaced during capacity reload but the
+  // wrapper (and its authored transform) persists.
+  const wrapper = new Object3D()
+  wrapper.name = 'SplatWrapper'
 
-  function createMesh(): SplatMesh | null {
-    if (!url) return null
-    return new SplatMesh({
-      url,
-      paged: true,
-      raycastable: false,
+  let mesh: SplatMesh | null = $state(null)
+  let coordinator: SparkReloadCoordinator | null = null
+  let destroyed = false
+
+  /** Exposed reload function — called by SparkStudioBridge. */
+  export async function reload(url: string): Promise<void> {
+    if (destroyed || !coordinator) return
+    await coordinator.requestReload(url, async (u) => {
+      const m = new SplatMesh({ url: u, paged: true, raycastable: false })
+      await m.initialized
+      return { mesh: m, dispose: () => m.dispose() }
     })
   }
 
+  function createMesh(u: string): SplatMesh {
+    return new SplatMesh({ url: u, paged: true, raycastable: false })
+  }
+
   onMount(() => {
-    mesh = createMesh()
+    mesh = createMesh(url)
+    wrapper.add(mesh)
 
-    // Register reload callback
-    setReloadCallback(async () => {
-      // Dispose old mesh
-      mesh?.dispose()
-      mesh = null
+    coordinator = new SparkReloadCoordinator()
 
-      // Small delay to ensure disposal completes
-      await new Promise((r) => setTimeout(r, 50))
+    coordinator.onReloadComplete((newMeshObj: object) => {
+      if (destroyed) return
+      const newMesh = newMeshObj as SplatMesh
 
-      // Create new mesh with the same URL
-      mesh = createMesh()
+      // Remove old mesh from wrapper
+      if (mesh) {
+        wrapper.remove(mesh)
+        mesh.dispose()
+      }
+
+      // Add new mesh to wrapper (preserves wrapper transform)
+      mesh = newMesh
+      wrapper.add(mesh)
     })
   })
 
   onDestroy(() => {
-    setReloadCallback(null)
+    destroyed = true
+    coordinator?.dispose()
+    coordinator = null
     mesh?.dispose()
   })
 </script>
 
-<!-- SplatMesh is owned by Threlte <T> for declarative transforms. SparkRenderer is managed by SparkStudioBridge. -->
-{#if mesh}
-  <T is={mesh} />
-{/if}
+<!-- Stable wrapper preserves transform across SplatMesh reloads -->
+<T is={wrapper} name="SplatWrapper" />

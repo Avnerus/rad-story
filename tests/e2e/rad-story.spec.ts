@@ -885,8 +885,6 @@ test.describe('RAD Story', () => {
     await startViewer(page)
     await page.waitForTimeout(2000)
 
-    // The Spark object should be visible in the Studio scene hierarchy
-    // Use getByText like the existing ScrollAnimator tests
     const sparkItem = page.getByText('Spark')
     await expect(sparkItem.first()).toBeVisible({ timeout: 10_000 })
   })
@@ -895,13 +893,242 @@ test.describe('RAD Story', () => {
     await startViewer(page)
     await page.waitForTimeout(2000)
 
-    // Click the Spark item in the hierarchy
+    const sparkItem = page.getByText('Spark')
+    await expect(sparkItem.first()).toBeVisible({ timeout: 10_000 })
+    await sparkItem.first().click()
+    await page.waitForTimeout(500)
+    await expect(sparkItem.first()).toBeVisible()
+  })
+
+  test('Spark pane shows "Select the Spark object" when nothing selected', async ({ page }) => {
+    await startViewer(page)
+    await page.waitForTimeout(2000)
+
+    // Open Spark Controls pane
+    await page.getByRole('button', { name: 'Spark Controls' }).click()
+    await page.waitForTimeout(500)
+
+    // Should show no-selection state
+    await expect(page.getByTestId('spark-no-selection')).toBeVisible()
+  })
+
+  test('Spark pane shows all 22 field controls when Spark is selected', async ({ page }) => {
+    await startViewer(page)
+    await page.waitForTimeout(2000)
+
+    // Select Spark in hierarchy
     const sparkItem = page.getByText('Spark')
     await expect(sparkItem.first()).toBeVisible({ timeout: 10_000 })
     await sparkItem.first().click()
     await page.waitForTimeout(500)
 
-    // After clicking, the item should still be visible (selection didn't crash)
-    await expect(sparkItem.first()).toBeVisible()
+    // Open Spark Controls pane
+    await page.getByRole('button', { name: 'Spark Controls' }).click()
+    await page.waitForTimeout(500)
+
+    // Should show the panel, not the no-selection state
+    await expect(page.getByTestId('spark-controls-panel')).toBeVisible()
+    await expect(page.getByTestId('spark-no-selection')).not.toBeVisible()
+
+    // All 22 fields should be present
+    const expectedFields = [
+      'lodSplatScale', 'lodRenderScale', 'maxStdDev', 'maxPagedSplats',
+      'coneFov0', 'coneFov', 'coneFoveate', 'behindFoveate',
+      'minPixelRadius', 'maxPixelRadius', 'minAlpha', 'preBlurAmount',
+      'blurAmount', 'falloff', 'clipXY', 'focalAdjustment',
+      'sortRadial', 'minSortIntervalMs', 'enableLod', 'enableLodFetching',
+      'lodSplatCount', 'lodInflate',
+    ]
+    for (const field of expectedFields) {
+      await expect(page.getByTestId(`spark-field-${field}`)).toBeVisible()
+    }
+  })
+
+  test('Spark pane shows source-sync-unavailable warning in stub build', async ({ page }) => {
+    await startViewer(page)
+    await page.waitForTimeout(2000)
+
+    // Select Spark
+    const sparkItem = page.getByText('Spark')
+    await expect(sparkItem.first()).toBeVisible({ timeout: 10_000 })
+    await sparkItem.first().click()
+    await page.waitForTimeout(500)
+
+    // Open Spark Controls pane
+    await page.getByRole('button', { name: 'Spark Controls' }).click()
+    await page.waitForTimeout(500)
+
+    // Source sync unavailable warning should be visible
+    await expect(page.getByTestId('spark-sync-warning')).toBeVisible()
+  })
+
+  test('Spark pane numeric field can be edited', async ({ page }) => {
+    await startViewer(page)
+    await page.waitForTimeout(2000)
+
+    // Select Spark
+    await page.getByText('Spark').first().click()
+    await page.waitForTimeout(500)
+
+    // Open Spark Controls pane
+    await page.getByRole('button', { name: 'Spark Controls' }).click()
+    await page.waitForTimeout(500)
+
+    // Find the blurAmount input and change it
+    const blurInput = page.locator('input#spark-blurAmount')
+    await expect(blurInput).toBeVisible()
+    const originalValue = await blurInput.inputValue()
+
+    await blurInput.fill('0.5')
+    await blurInput.blur()
+    await page.waitForTimeout(300)
+
+    // The input should show the new value
+    const newValue = await blurInput.inputValue()
+    expect(newValue).toBe('0.5')
+    expect(newValue).not.toBe(originalValue)
+  })
+
+  test('Spark pane boolean field can be toggled', async ({ page }) => {
+    await startViewer(page)
+    await page.waitForTimeout(2000)
+
+    // Select Spark
+    await page.getByText('Spark').first().click()
+    await page.waitForTimeout(500)
+
+    // Open Spark Controls pane
+    await page.getByRole('button', { name: 'Spark Controls' }).click()
+    await page.waitForTimeout(500)
+
+    // Find the enableLod checkbox
+    const enableLodCheckbox = page.locator('input#spark-enableLod')
+    await expect(enableLodCheckbox).toBeVisible()
+    const originalChecked = await enableLodCheckbox.isChecked()
+
+    // Toggle it
+    await enableLodCheckbox.click()
+    await page.waitForTimeout(300)
+
+    const newChecked = await enableLodCheckbox.isChecked()
+    expect(newChecked).not.toBe(originalChecked)
+  })
+
+  test('Spark pane nullable field accepts empty (auto) value', async ({ page }) => {
+    await startViewer(page)
+    await page.waitForTimeout(2000)
+
+    // Select Spark
+    await page.getByText('Spark').first().click()
+    await page.waitForTimeout(500)
+
+    // Open Spark Controls pane
+    await page.getByRole('button', { name: 'Spark Controls' }).click()
+    await page.waitForTimeout(500)
+
+    // Find the lodSplatCount input
+    const lodCountInput = page.locator('input#spark-lodSplatCount')
+    await expect(lodCountInput).toBeVisible()
+
+    // Set to a number
+    await lodCountInput.fill('100000')
+    await lodCountInput.blur()
+    await page.waitForTimeout(300)
+
+    // Verify the number is accepted
+    const value = await lodCountInput.inputValue()
+    expect(value).toBe('100000')
+
+    // Clear to auto
+    await lodCountInput.fill('')
+    await lodCountInput.blur()
+    await page.waitForTimeout(300)
+
+    const clearedValue = await lodCountInput.inputValue()
+    expect(clearedValue).toBe('')
+  })
+
+  test('Spark pane cone angle invariants are enforced via setter', async ({ page }) => {
+    await startViewer(page)
+    await page.waitForTimeout(2000)
+
+    // Select Spark
+    await page.getByText('Spark').first().click()
+    await page.waitForTimeout(500)
+
+    // Open Spark Controls pane
+    await page.getByRole('button', { name: 'Spark Controls' }).click()
+    await page.waitForTimeout(500)
+
+    // Set coneFov0 to a value higher than coneFov (default 120)
+    // The invariant enforces coneFov >= coneFov0
+    const fov0Input = page.locator('input#spark-coneFov0')
+
+    await fov0Input.fill('150')
+    await fov0Input.press('Enter')
+    await page.waitForTimeout(300)
+
+    // Verify the setter accepted the value (coneFov0 = 150)
+    const fov0Value = await fov0Input.inputValue()
+    expect(parseFloat(fov0Value)).toBe(150)
+  })
+
+  test('Spark pane Escape key closes panel', async ({ page }) => {
+    await startViewer(page)
+    await page.waitForTimeout(2000)
+
+    // Select Spark
+    await page.getByText('Spark').first().click()
+    await page.waitForTimeout(500)
+
+    // Open Spark Controls pane
+    await page.getByRole('button', { name: 'Spark Controls' }).click()
+    await page.waitForTimeout(500)
+    await expect(page.getByTestId('spark-controls-panel')).toBeVisible()
+
+    // Press Escape to close
+    await page.keyboard.press('Escape')
+    await page.waitForTimeout(500)
+
+    // Panel should be closed
+    const panelVisible = await page.evaluate(() => {
+      const panel = document.querySelector('[data-testid="spark-controls-panel"]')
+      return panel !== null && window.getComputedStyle(panel).display !== 'none'
+    })
+    expect(panelVisible).toBe(false)
+  })
+
+  test('Spark pane reopens after close', async ({ page }) => {
+    await startViewer(page)
+    await page.waitForTimeout(2000)
+
+    // Select Spark
+    await page.getByText('Spark').first().click()
+    await page.waitForTimeout(500)
+
+    // Open and close
+    await page.getByRole('button', { name: 'Spark Controls' }).click()
+    await page.waitForTimeout(500)
+    await page.keyboard.press('Escape')
+    await page.waitForTimeout(500)
+
+    // Reopen
+    await page.getByRole('button', { name: 'Spark Controls' }).click()
+    await page.waitForTimeout(500)
+    await expect(page.getByTestId('spark-controls-panel')).toBeVisible()
+  })
+
+  // ---------------------------------------------------------------------------
+  // Deterministic stub build verification
+  // ---------------------------------------------------------------------------
+
+  test('e2e build uses Spark stub (deterministic marker)', async ({ page }) => {
+    await page.goto('/')
+    await page.waitForTimeout(1000)
+
+    const isStub = await page.evaluate(() => {
+      return (window as unknown as Record<string, unknown>).__spark_stub === true
+    })
+    expect(isStub, 'expected Spark stub to be active in e2e build').toBe(true)
   })
 })

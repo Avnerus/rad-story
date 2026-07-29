@@ -71,6 +71,8 @@
   let uiState = $state({
     controls: null as SparkControls | null,
     settings: {} as SparkSettings,
+    reloading: false,
+    reloadError: '' as string,
   })
 
   // Local draft values for editing
@@ -86,6 +88,8 @@
       const sc = ctrl as unknown as SparkControls
       uiState.controls = sc
       uiState.settings = sc.settings
+      uiState.reloading = false
+      uiState.reloadError = ''
       // Initialize drafts from current settings
       const newDrafts: Record<string, string> = {}
       for (const meta of FIELD_META) {
@@ -113,13 +117,12 @@
   // Commit a field edit via transaction
   function handleFieldChange(meta: FieldMeta): void {
     const controls = uiState.controls
-    if (!controls || !transactions.vitePluginEnabled) return
+    if (!controls) return
 
     const draft = drafts[meta.key]
     let raw: unknown
 
     if (meta.type === 'boolean') {
-      // Don't handle booleans here — they use checkbox
       return
     } else if (meta.type === 'nullable-number') {
       raw = draft === '' ? null : Number(draft)
@@ -137,23 +140,25 @@
     const newValue = ctrl[key]
 
     if (currentValue !== newValue) {
-      // Commit as a transaction with source sync
-      const tx = transactions.buildTransaction({
-        object: controls,
-        propertyPath: 'settings',
-        value: controls.settings,
-        historicValue: uiState.settings,
-        createHistoryRecord: true,
-        sync: true,
-      })
-      transactions.commit([tx])
+      // If source sync is available, commit as a transaction
+      if (transactions.vitePluginEnabled) {
+        const tx = transactions.buildTransaction({
+          object: controls,
+          propertyPath: 'settings',
+          value: controls.settings,
+          historicValue: uiState.settings,
+          createHistoryRecord: true,
+          sync: true,
+        })
+        transactions.commit([tx])
+      }
       uiState.settings = controls.settings
     }
   }
 
   function handleBooleanChange(meta: FieldMeta, checked: boolean): void {
     const controls = uiState.controls
-    if (!controls || !transactions.vitePluginEnabled) return
+    if (!controls) return
 
     const key = meta.key
     const ctrl = controls as unknown as Record<string, unknown>
@@ -163,21 +168,22 @@
     const newValue = ctrl[key]
 
     if (currentValue !== newValue) {
-      const tx = transactions.buildTransaction({
-        object: controls,
-        propertyPath: 'settings',
-        value: controls.settings,
-        historicValue: uiState.settings,
-        createHistoryRecord: true,
-        sync: true,
-      })
-      transactions.commit([tx])
+      if (transactions.vitePluginEnabled) {
+        const tx = transactions.buildTransaction({
+          object: controls,
+          propertyPath: 'settings',
+          value: controls.settings,
+          historicValue: uiState.settings,
+          createHistoryRecord: true,
+          sync: true,
+        })
+        transactions.commit([tx])
+      }
       uiState.settings = controls.settings
     }
   }
 
   function handleBlur(meta: FieldMeta): void {
-    if (!transactions.vitePluginEnabled) return
     handleFieldChange(meta)
   }
 
@@ -200,24 +206,32 @@
 
 <SparkFixedToolbarPane>
   {#if !uiState.controls}
-    <div class="sc-no-selection">Select the Spark object</div>
+    <div class="sc-no-selection" data-testid="spark-no-selection">Select the Spark object</div>
   {:else}
-    <div class="sc-panel">
+    <div class="sc-panel" data-testid="spark-controls-panel">
       <div class="sc-title">Spark Controls</div>
 
       {#if !transactions.vitePluginEnabled}
-        <div class="sc-warning">Studio source sync unavailable — edits apply live but won't persist</div>
+        <div class="sc-warning" data-testid="spark-sync-warning">Studio source sync unavailable — edits apply live but won't persist</div>
+      {/if}
+
+      {#if uiState.reloading}
+        <div class="sc-reloading" data-testid="spark-reloading">Reloading mesh…</div>
+      {/if}
+      {#if uiState.reloadError}
+        <div class="sc-error" data-testid="spark-error">{uiState.reloadError}</div>
       {/if}
 
       <div class="sc-fields">
         {#each FIELD_META as meta}
-          <div class="sc-field">
-            <label class="sc-label" title={meta.help || meta.label}>
+          <div class="sc-field" data-testid={`spark-field-${meta.key}`}>
+            <label class="sc-label" title={meta.help || meta.label} for={`spark-${meta.key}`}>
               {meta.label}
               {#if meta.unit} <span class="sc-unit">{meta.unit}</span>{/if}
             </label>
             {#if meta.type === 'boolean'}
               <input
+                id={`spark-${meta.key}`}
                 type="checkbox"
                 class="sc-checkbox"
                 checked={uiState.settings[meta.key] as boolean}
@@ -225,6 +239,7 @@
               />
             {:else if meta.type === 'nullable-number'}
               <input
+                id={`spark-${meta.key}`}
                 type="text"
                 class="sc-input"
                 value={drafts[meta.key] ?? ''}
@@ -235,6 +250,7 @@
               />
             {:else}
               <input
+                id={`spark-${meta.key}`}
                 type="number"
                 class="sc-input"
                 value={drafts[meta.key] ?? String(uiState.settings[meta.key])}
@@ -278,6 +294,17 @@
     font-size: 11px;
     font-style: italic;
     margin-bottom: 4px;
+  }
+
+  .sc-reloading {
+    color: #6366f1;
+    font-size: 11px;
+    font-style: italic;
+  }
+
+  .sc-error {
+    color: #ef4444;
+    font-size: 11px;
   }
 
   .sc-fields {
