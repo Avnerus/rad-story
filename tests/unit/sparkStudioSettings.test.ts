@@ -2,8 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import * as THREE from 'three'
 import { SparkRenderer } from '@sparkjsdev/spark'
 import type { SparkRendererOptions } from '@sparkjsdev/spark'
-import { createSparkStudioRenderer, applyLiveSettings, markLodDirty } from '$lib/spark/createSparkStudioRenderer'
-import type { SparkSettings } from '$lib/spark/SparkControls'
+import { createSparkStudioRenderer, applyChangedSettings, markLodDirty, markSortDirty, markDirty, ChangeKind } from '$lib/spark/createSparkStudioRenderer'
+import { SparkControls, type SparkSettings } from '$lib/spark/SparkControls'
 
 /** Build a minimal mock WebGLRenderer. */
 function makeMockRenderer(): THREE.WebGLRenderer {
@@ -20,6 +20,7 @@ function makeMockRenderer(): THREE.WebGLRenderer {
     info: { render: { frame: 0 } },
     capabilities: { maxTextureSize: 4096 },
     xr: { isPresenting: false },
+    setDirty: vi.fn(),
   } as unknown as THREE.WebGLRenderer
 }
 
@@ -53,33 +54,11 @@ const realProtoOnBeforeRender = SparkRenderer.prototype.onBeforeRender
 
 /** Build a default SparkSettings object. */
 function makeDefaultSettings(): SparkSettings {
-  return {
-    lodSplatScale: 1,
-    lodRenderScale: 1,
-    maxStdDev: 8,
-    maxPagedSplats: 16 * 65_536,
-    coneFov0: 90,
-    coneFov: 120,
-    coneFoveate: 0.4,
-    behindFoveate: 0.2,
-    minPixelRadius: 0,
-    maxPixelRadius: 512,
-    minAlpha: 0.5 * (1 / 255),
-    preBlurAmount: 0,
-    blurAmount: 0,
-    falloff: 1,
-    clipXY: 1.4,
-    focalAdjustment: 1,
-    sortRadial: true,
-    minSortIntervalMs: 0,
-    enableLod: true,
-    enableLodFetching: true,
-    lodSplatCount: null,
-    lodInflate: false,
-  }
+  const c = new SparkControls()
+  return c.settings
 }
 
-describe('applyLiveSettings', () => {
+describe('applyChangedSettings', () => {
   let renderer: THREE.WebGLRenderer
   let scene: THREE.Scene
 
@@ -95,90 +74,115 @@ describe('applyLiveSettings', () => {
     SparkRenderer.prototype.onBeforeRender = realProtoOnBeforeRender
   })
 
-  it('applies ordinary settings to a SparkRenderer', () => {
+  it('applies only changed fields', () => {
     const baseOptions = makeBaseOptions(renderer)
     const handle = createSparkStudioRenderer(baseOptions)
     handle.attach(scene)
     const r = handle.realRenderer!
 
-    const settings = makeDefaultSettings()
-    settings.lodSplatScale = 2
-    settings.maxStdDev = 12
-    settings.falloff = 0.5
+    const oldSettings = makeDefaultSettings()
+    const newSettings = { ...oldSettings }
+    newSettings.lodSplatScale = 2
 
-    applyLiveSettings(r, settings)
-
+    const kinds = applyChangedSettings(r, oldSettings, newSettings)
     expect(r.lodSplatScale).toBe(2)
-    expect(r.maxStdDev).toBe(12)
-    expect(r.falloff).toBe(0.5)
+    expect(kinds).toContain(ChangeKind.LOD)
+    // Only lodSplatScale changed
+    expect(kinds.size).toBe(1)
   })
 
-  it('returns true when foveation fields change', () => {
+  it('returns empty set when nothing changed', () => {
     const baseOptions = makeBaseOptions(renderer)
     const handle = createSparkStudioRenderer(baseOptions)
     handle.attach(scene)
     const r = handle.realRenderer!
 
-    const settings = makeDefaultSettings()
-    settings.coneFov0 = 60
+    const s = makeDefaultSettings()
+    const kinds = applyChangedSettings(r, s, s)
+    expect(kinds.size).toBe(0)
+  })
 
-    const foveationChanged = applyLiveSettings(r, settings)
-    expect(foveationChanged).toBe(true)
+  it('classifies foveation changes correctly', () => {
+    const baseOptions = makeBaseOptions(renderer)
+    const handle = createSparkStudioRenderer(baseOptions)
+    handle.attach(scene)
+    const r = handle.realRenderer!
+
+    const oldSettings = makeDefaultSettings()
+    const newSettings = { ...oldSettings }
+    newSettings.coneFov0 = 60
+
+    const kinds = applyChangedSettings(r, oldSettings, newSettings)
+    expect(kinds).toContain(ChangeKind.FOVEATION)
     expect(r.coneFov0).toBe(60)
   })
 
-  it('returns false when only non-foveation fields change', () => {
+  it('classifies shader-only changes correctly', () => {
     const baseOptions = makeBaseOptions(renderer)
     const handle = createSparkStudioRenderer(baseOptions)
     handle.attach(scene)
     const r = handle.realRenderer!
 
-    // Only pass non-foveation fields
-    const settings = { ...makeDefaultSettings() } as Record<string, unknown>
-    // Delete foveation fields so they are not in the iteration
-    delete settings.coneFov0
-    delete settings.coneFov
-    delete settings.coneFoveate
-    delete settings.behindFoveate
-    settings.falloff = 0.5
+    const oldSettings = makeDefaultSettings()
+    const newSettings = { ...oldSettings }
+    newSettings.falloff = 0.5
 
-    const foveationChanged = applyLiveSettings(r, settings as unknown as SparkSettings)
-    expect(foveationChanged).toBe(false)
-    expect(r.falloff).toBe(0.5)
+    const kinds = applyChangedSettings(r, oldSettings, newSettings)
+    expect(kinds).toContain(ChangeKind.SHADER)
+    expect(kinds.size).toBe(1)
   })
 
-  it('does not modify enableDriveLod', () => {
+  it('classifies sort changes correctly', () => {
     const baseOptions = makeBaseOptions(renderer)
     const handle = createSparkStudioRenderer(baseOptions)
     handle.attach(scene)
     const r = handle.realRenderer!
 
-    expect(r.enableDriveLod).toBe(true)
+    const oldSettings = makeDefaultSettings()
+    const newSettings = { ...oldSettings }
+    newSettings.sortRadial = false
 
-    const settings = makeDefaultSettings()
-    // Even if enableLod is in settings, enableDriveLod should not be touched
-    applyLiveSettings(r, settings)
-
-    expect(r.enableDriveLod).toBe(true)
+    const kinds = applyChangedSettings(r, oldSettings, newSettings)
+    expect(kinds).toContain(ChangeKind.SORT)
   })
 
-  it('skips lodSplatCount when null', () => {
+  it('maps lodSplatCount null to undefined on renderer', () => {
     const baseOptions = makeBaseOptions(renderer)
     const handle = createSparkStudioRenderer(baseOptions)
     handle.attach(scene)
     const r = handle.realRenderer!
 
-    const settings = makeDefaultSettings()
-    settings.lodSplatCount = null // automatic
+    // First set to a number
+    const oldSettings = makeDefaultSettings()
+    const newSettings = { ...oldSettings, lodSplatCount: 500_000 }
+    applyChangedSettings(r, oldSettings, newSettings)
+    expect(r.lodSplatCount).toBe(500_000)
 
-    applyLiveSettings(r, settings)
+    // Then set back to null (automatic)
+    const newerSettings = { ...newSettings, lodSplatCount: null }
+    applyChangedSettings(r, newSettings, newerSettings)
+    expect(r.lodSplatCount).toBeUndefined()
+  })
 
-    // Should not have set lodSplatCount to null
+  it('supports automatic → numeric → automatic round-trip', () => {
+    const baseOptions = makeBaseOptions(renderer)
+    const handle = createSparkStudioRenderer(baseOptions)
+    handle.attach(scene)
+    const r = handle.realRenderer!
+
+    const auto = makeDefaultSettings() // lodSplatCount: null
+    const numeric = { ...auto, lodSplatCount: 1_000_000 }
+    const autoAgain = { ...numeric, lodSplatCount: null }
+
+    applyChangedSettings(r, auto, numeric)
+    expect(r.lodSplatCount).toBe(1_000_000)
+
+    applyChangedSettings(r, numeric, autoAgain)
     expect(r.lodSplatCount).toBeUndefined()
   })
 })
 
-describe('markLodDirty', () => {
+describe('dirty marking functions', () => {
   let renderer: THREE.WebGLRenderer
 
   beforeEach(() => {
@@ -186,7 +190,7 @@ describe('markLodDirty', () => {
     renderer = makeMockRenderer()
   })
 
-  it('sets lodDirty to true', () => {
+  it('markLodDirty sets lodDirty to true', () => {
     const baseOptions = makeBaseOptions(renderer)
     const handle = createSparkStudioRenderer(baseOptions)
     handle.attach(makeMockScene())
@@ -195,6 +199,28 @@ describe('markLodDirty', () => {
     r.lodDirty = false
     markLodDirty(r)
     expect(r.lodDirty).toBe(true)
+  })
+
+  it('markSortDirty sets sortDirty to true', () => {
+    const baseOptions = makeBaseOptions(renderer)
+    const handle = createSparkStudioRenderer(baseOptions)
+    handle.attach(makeMockScene())
+    const r = handle.realRenderer!
+
+    r.sortDirty = false
+    markSortDirty(r)
+    expect(r.sortDirty).toBe(true)
+  })
+
+  it('markDirty calls setDirty', () => {
+    const baseOptions = makeBaseOptions(renderer)
+    const handle = createSparkStudioRenderer(baseOptions)
+    handle.attach(makeMockScene())
+    const r = handle.realRenderer!
+
+    const setDirtySpy = vi.spyOn(r, 'setDirty')
+    markDirty(r)
+    expect(setDirtySpy).toHaveBeenCalled()
   })
 })
 
@@ -219,10 +245,9 @@ describe('SparkStudioRendererHandle.applySettings', () => {
     const handle = createSparkStudioRenderer(baseOptions)
     handle.attach(scene)
 
-    const settings = makeDefaultSettings()
-    settings.lodSplatScale = 3
-
-    handle.applySettings(settings)
+    const oldSettings = makeDefaultSettings()
+    const newSettings = { ...oldSettings, lodSplatScale: 3 }
+    handle.applySettings(oldSettings, newSettings)
 
     expect(handle.editorRenderer!.lodSplatScale).toBe(3)
     expect(handle.realRenderer!.lodSplatScale).toBe(3)
@@ -234,12 +259,24 @@ describe('SparkStudioRendererHandle.applySettings', () => {
     handle.attach(scene)
     handle.realRenderer!.lodDirty = false
 
-    const settings = makeDefaultSettings()
-    settings.coneFov = 100
-
-    const result = handle.applySettings(settings)
+    const oldSettings = makeDefaultSettings()
+    const newSettings = { ...oldSettings, coneFov: 100 }
+    const result = handle.applySettings(oldSettings, newSettings)
     expect(result).toBe(true)
     expect(handle.realRenderer!.lodDirty).toBe(true)
+  })
+
+  it('does not mark LOD dirty for shader-only changes', () => {
+    const baseOptions = makeBaseOptions(renderer)
+    const handle = createSparkStudioRenderer(baseOptions)
+    handle.attach(scene)
+    handle.realRenderer!.lodDirty = false
+
+    const oldSettings = makeDefaultSettings()
+    const newSettings = { ...oldSettings, falloff: 0.5 }
+    const result = handle.applySettings(oldSettings, newSettings)
+    expect(result).toBe(false)
+    expect(handle.realRenderer!.lodDirty).toBe(false)
   })
 
   it('preserves enableDriveLod invariant', () => {
@@ -247,7 +284,9 @@ describe('SparkStudioRendererHandle.applySettings', () => {
     const handle = createSparkStudioRenderer(baseOptions)
     handle.attach(scene)
 
-    handle.applySettings(makeDefaultSettings())
+    const oldSettings = makeDefaultSettings()
+    const newSettings = { ...oldSettings, blurAmount: 0.5 }
+    handle.applySettings(oldSettings, newSettings)
 
     expect(handle.editorRenderer!.enableDriveLod).toBe(false)
     expect(handle.realRenderer!.enableDriveLod).toBe(true)
@@ -278,7 +317,9 @@ describe('SparkStudioRendererHandle.reconfigureMaxPagedSplats', () => {
     const oldReal = handle.realRenderer!
     const oldEditor = handle.editorRenderer!
 
-    handle.reconfigureMaxPagedSplats(2 * 65_536)
+    const newSettings = makeDefaultSettings()
+    newSettings.maxPagedSplats = 2 * 65_536
+    handle.reconfigureMaxPagedSplats(newSettings)
 
     // New instances created
     expect(handle.realRenderer).not.toBe(oldReal)
@@ -287,12 +328,40 @@ describe('SparkStudioRendererHandle.reconfigureMaxPagedSplats', () => {
     expect(handle.editorRenderer!.maxPagedSplats).toBe(2 * 65_536)
   })
 
+  it('preserves ordinary settings across recreation', () => {
+    const baseOptions = makeBaseOptions(renderer)
+    const handle = createSparkStudioRenderer(baseOptions)
+    handle.attach(scene)
+
+    // Apply some ordinary settings changes
+    const oldSettings = makeDefaultSettings()
+    const newSettings = { ...oldSettings, lodSplatScale: 3, falloff: 0.5, coneFov0: 60 }
+    handle.applySettings(oldSettings, newSettings)
+
+    // Verify they were applied
+    expect(handle.realRenderer!.lodSplatScale).toBe(3)
+    expect(handle.realRenderer!.falloff).toBe(0.5)
+    expect(handle.realRenderer!.coneFov0).toBe(60)
+
+    // Now change maxPagedSplats with the same settings
+    const recreateSettings = { ...newSettings, maxPagedSplats: 2 * 65_536 }
+    handle.reconfigureMaxPagedSplats(recreateSettings)
+
+    // All settings should survive
+    expect(handle.realRenderer!.lodSplatScale).toBe(3)
+    expect(handle.realRenderer!.falloff).toBe(0.5)
+    expect(handle.realRenderer!.coneFov0).toBe(60)
+    expect(handle.realRenderer!.maxPagedSplats).toBe(2 * 65_536)
+  })
+
   it('marks LOD dirty after reconfiguration', () => {
     const baseOptions = makeBaseOptions(renderer)
     const handle = createSparkStudioRenderer(baseOptions)
     handle.attach(scene)
 
-    handle.reconfigureMaxPagedSplats(2 * 65_536)
+    const newSettings = makeDefaultSettings()
+    newSettings.maxPagedSplats = 2 * 65_536
+    handle.reconfigureMaxPagedSplats(newSettings)
     expect(handle.realRenderer!.lodDirty).toBe(true)
   })
 
@@ -301,7 +370,9 @@ describe('SparkStudioRendererHandle.reconfigureMaxPagedSplats', () => {
     const handle = createSparkStudioRenderer(baseOptions)
     handle.attach(scene)
 
-    handle.reconfigureMaxPagedSplats(2 * 65_536)
+    const newSettings = makeDefaultSettings()
+    newSettings.maxPagedSplats = 2 * 65_536
+    handle.reconfigureMaxPagedSplats(newSettings)
 
     expect(handle.editorRenderer!.enableDriveLod).toBe(false)
     expect(handle.realRenderer!.enableDriveLod).toBe(true)
@@ -313,8 +384,27 @@ describe('SparkStudioRendererHandle.reconfigureMaxPagedSplats', () => {
     handle.attach(scene)
 
     handle.dispose()
-    handle.reconfigureMaxPagedSplats(2 * 65_536)
+    const newSettings = makeDefaultSettings()
+    newSettings.maxPagedSplats = 2 * 65_536
+    handle.reconfigureMaxPagedSplats(newSettings)
 
     expect(handle.realRenderer).toBeNull()
+  })
+
+  it('handles rapid repeated capacity edits', () => {
+    const baseOptions = makeBaseOptions(renderer)
+    const handle = createSparkStudioRenderer(baseOptions)
+    handle.attach(scene)
+
+    // Rapid edits
+    for (let i = 1; i <= 4; i++) {
+      const newSettings = makeDefaultSettings()
+      newSettings.maxPagedSplats = i * 65_536
+      handle.reconfigureMaxPagedSplats(newSettings)
+    }
+
+    // Should end with the last value
+    expect(handle.realRenderer!.maxPagedSplats).toBe(4 * 65_536)
+    expect(handle.editorRenderer!.maxPagedSplats).toBe(4 * 65_536)
   })
 })

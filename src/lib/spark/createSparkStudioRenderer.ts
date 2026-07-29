@@ -2,10 +2,54 @@ import * as THREE from 'three'
 import { SparkRenderer } from '@sparkjsdev/spark'
 import type { SparkRendererOptions } from '@sparkjsdev/spark'
 import type { SparkSettings } from './SparkControls'
+import { SETTINGS_KEYS } from './SparkControls'
 
 // ---------------------------------------------------------------------------
-// Settings propagation helpers
+// Field classification for targeted dirty/invalidation
 // ---------------------------------------------------------------------------
+
+/**
+ * Classify each setting into the kind of invalidation it requires.
+ */
+export enum ChangeKind {
+  /** Shader/uniform-only — apply and mark render dirty */
+  SHADER = 'shader',
+  /** Sort-affecting — mark sort dirty */
+  SORT = 'sort',
+  /** LOD budget/traversal — mark LOD dirty */
+  LOD = 'lod',
+  /** Foveation — mark LOD dirty (re-traverse with new cone) */
+  FOVEATION = 'foveation',
+  /** Paging capacity — requires renderer recreation */
+  RECREATE = 'recreate',
+  /** LOD enable/disable — mark LOD dirty */
+  LOD_TOGGLE = 'lod_toggle',
+}
+
+const FIELD_KINDS: Record<keyof SparkSettings, ChangeKind> = {
+  lodSplatScale:       ChangeKind.LOD,
+  lodRenderScale:      ChangeKind.LOD,
+  maxStdDev:           ChangeKind.SHADER,
+  maxPagedSplats:      ChangeKind.RECREATE,
+  coneFov0:            ChangeKind.FOVEATION,
+  coneFov:             ChangeKind.FOVEATION,
+  coneFoveate:         ChangeKind.FOVEATION,
+  behindFoveate:       ChangeKind.FOVEATION,
+  minPixelRadius:      ChangeKind.SHADER,
+  maxPixelRadius:      ChangeKind.SHADER,
+  minAlpha:            ChangeKind.SHADER,
+  preBlurAmount:       ChangeKind.SHADER,
+  blurAmount:          ChangeKind.SHADER,
+  falloff:             ChangeKind.SHADER,
+  clipXY:              ChangeKind.SHADER,
+  focalAdjustment:     ChangeKind.SHADER,
+  sortRadial:          ChangeKind.SORT,
+  minSortIntervalMs:   ChangeKind.SORT,
+  enableLod:           ChangeKind.LOD_TOGGLE,
+  enableLodFetching:   ChangeKind.LOD_TOGGLE,
+  lodSplatCount:       ChangeKind.LOD,
+  lodInflate:          ChangeKind.SHADER,
+}
 
 /**
  * Fields that can be applied live to a SparkRenderer after construction
@@ -35,40 +79,42 @@ const LIVE_FIELDS = new Set<keyof SparkSettings>([
   'lodInflate',
 ])
 
-/**
- * Subset of live fields that affect the foveation cone and must trigger
- * an LOD recomputation even if the camera hasn't moved.
- */
-const FOVEATION_FIELDS = new Set<keyof SparkSettings>([
-  'coneFov0',
-  'coneFov',
-  'coneFoveate',
-  'behindFoveate',
-])
+// ---------------------------------------------------------------------------
+// Settings propagation helpers
+// ---------------------------------------------------------------------------
 
 /**
- * Apply live settings to a SparkRenderer. Does not modify `enableDriveLod`.
- *
- * @returns Whether any foveation field was changed (caller should mark LOD dirty).
+ * Apply only the changed fields from `newSettings` to a SparkRenderer,
+ * comparing against `oldSettings`. Returns the set of ChangeKinds that
+ * were triggered.
  */
-export function applyLiveSettings(
+export function applyChangedSettings(
   renderer: SparkRenderer,
-  settings: SparkSettings,
-): boolean {
-  let foveationChanged = false
+  oldSettings: SparkSettings,
+  newSettings: SparkSettings,
+): Set<ChangeKind> {
+  const kinds = new Set<ChangeKind>()
 
-  for (const [key, value] of Object.entries(settings)) {
+  for (const key of SETTINGS_KEYS) {
+    if (!LIVE_FIELDS.has(key)) continue
+    const oldVal = oldSettings[key]
+    const newVal = newSettings[key]
+    if (oldVal === newVal) continue
+
     const k = key as keyof SparkRenderer
-    if (!LIVE_FIELDS.has(key as keyof SparkSettings)) continue
-    if (key === 'lodSplatCount' && value === null) continue
+    const kind = FIELD_KINDS[key]
 
-    ;(renderer as unknown as Record<string, unknown>)[k] = value
-    if (FOVEATION_FIELDS.has(key as keyof SparkSettings)) {
-      foveationChanged = true
+    // Handle lodSplatCount: null → undefined (automatic), number → number
+    if (key === 'lodSplatCount') {
+      ;(renderer as unknown as Record<string, unknown>)[k] = newVal === null ? undefined : newVal
+    } else {
+      ;(renderer as unknown as Record<string, unknown>)[k] = newVal
     }
+
+    kinds.add(kind)
   }
 
-  return foveationChanged
+  return kinds
 }
 
 /**
@@ -77,6 +123,20 @@ export function applyLiveSettings(
  */
 export function markLodDirty(renderer: SparkRenderer): void {
   renderer.lodDirty = true
+}
+
+/**
+ * Mark a renderer's sort as dirty.
+ */
+export function markSortDirty(renderer: SparkRenderer): void {
+  renderer.sortDirty = true
+}
+
+/**
+ * Mark a renderer's general dirty flag (triggers re-render).
+ */
+export function markDirty(renderer: SparkRenderer): void {
+  renderer.setDirty()
 }
 
 // ---------------------------------------------------------------------------
@@ -125,24 +185,21 @@ export interface SparkStudioRendererHandle {
 
   /**
    * Apply live settings to both renderers.
-   * @param settings - Validated settings from SparkControls.
-   * @returns Whether any foveation field was changed.
+   * Only changed fields are applied; appropriate dirty flags are set.
+   * @param oldSettings - Previous validated settings snapshot.
+   * @param newSettings - New validated settings snapshot.
+   * @returns Whether any foveation or LOD field was changed.
    */
-  applySettings(settings: SparkSettings): boolean
+  applySettings(oldSettings: SparkSettings, newSettings: SparkSettings): boolean
 
   /**
    * Reconfigure the renderers with a new `maxPagedSplats` value.
-   * This is required because `maxPagedSplats` is consumed when Spark creates
-   * its pager, so a bare assignment after pager creation has no effect.
+   * Also applies all current settings from the provided snapshot so that
+   * ordinary edits are not lost during recreation.
    *
-   * The reconfiguration:
-   * 1. Creates new SparkRenderer instances with the new capacity.
-   * 2. Preserves the SplatMesh references and their pager attachments.
-   * 3. Preserves the dual-renderer ownership and camera routing.
-   * 4. Does not leak workers, textures, or scene objects.
-   * 5. Is idempotent — safe if called repeatedly or during disposal.
+   * @param currentSettings - Complete validated settings snapshot (includes new maxPagedSplats).
    */
-  reconfigureMaxPagedSplats(maxPagedSplats: number): void
+  reconfigureMaxPagedSplats(currentSettings: SparkSettings): void
 }
 
 /**
@@ -161,27 +218,25 @@ export function createSparkStudioRenderer(
   let disposed = false
   let recreateLock = false // Prevent concurrent recreation
 
-  function createRenderers(): void {
+  function createRenderers(options?: SparkRendererOptions): void {
     if (disposed) return
     if (editorRenderer || realRenderer) return // idempotent
 
-    const baseOptions = { ...sparkOptions }
+    const opts = options ?? sparkOptions
 
     // Editor renderer: LOD enabled but not driving
-    const editorOptions: SparkRendererOptions = {
-      ...baseOptions,
+    editorRenderer = new SparkRenderer({
+      ...opts,
       enableLod: true,
       enableDriveLod: false,
-    }
-    editorRenderer = new SparkRenderer(editorOptions)
+    })
 
     // Real-camera renderer: full LOD driving
-    const realOptions: SparkRendererOptions = {
-      ...baseOptions,
+    realRenderer = new SparkRenderer({
+      ...opts,
       enableLod: true,
       enableDriveLod: true,
-    }
-    realRenderer = new SparkRenderer(realOptions)
+    })
   }
 
   function shareLodInstances(): void {
@@ -226,10 +281,9 @@ export function createSparkStudioRenderer(
 
   /**
    * Internal: replace both renderers with new instances.
-   * Preserves scene membership (editor renderer), wraps onBeforeRender,
-   * and shares pager attachments from the old renderers' lodMeshes.
+   * Applies the complete current settings snapshot to the new renderers.
    */
-  function replaceRenderers(): void {
+  function replaceRenderers(settings: SparkSettings): void {
     if (disposed || recreateLock) return
     recreateLock = true
 
@@ -242,19 +296,28 @@ export function createSparkStudioRenderer(
         attachedScene.remove(oldEditor)
       }
 
-      // Create new renderers with the same base options
-      const baseOptions = { ...sparkOptions }
+      // Build new options from current settings
+      const newOptions: SparkRendererOptions = {
+        ...sparkOptions,
+        maxPagedSplats: settings.maxPagedSplats,
+      }
 
+      // Create new renderers
       editorRenderer = new SparkRenderer({
-        ...baseOptions,
+        ...newOptions,
         enableLod: true,
         enableDriveLod: false,
       })
       realRenderer = new SparkRenderer({
-        ...baseOptions,
+        ...newOptions,
         enableLod: true,
         enableDriveLod: true,
       })
+
+      // Apply all live settings to new renderers (they already have maxPagedSplats from constructor)
+      for (const r of [editorRenderer, realRenderer]) {
+        applyLiveSettingsToRenderer(r, settings)
+      }
 
       // Add new editor renderer to scene
       if (attachedScene) {
@@ -269,6 +332,24 @@ export function createSparkStudioRenderer(
       oldReal?.dispose()
     } finally {
       recreateLock = false
+    }
+  }
+
+  /**
+   * Apply all live settings from a complete snapshot to a renderer.
+   * Used after recreation to ensure new renderers have all settings.
+   */
+  function applyLiveSettingsToRenderer(r: SparkRenderer, settings: SparkSettings): void {
+    for (const key of SETTINGS_KEYS) {
+      if (!LIVE_FIELDS.has(key)) continue
+      const val = settings[key]
+      const k = key as keyof SparkRenderer
+
+      if (key === 'lodSplatCount') {
+        ;(r as unknown as Record<string, unknown>)[k] = val === null ? undefined : val
+      } else {
+        ;(r as unknown as Record<string, unknown>)[k] = val
+      }
     }
   }
 
@@ -307,39 +388,55 @@ export function createSparkStudioRenderer(
     attachedScene = null
   }
 
-  function applySettings(settings: SparkSettings): boolean {
+  function applySettings(oldSettings: SparkSettings, newSettings: SparkSettings): boolean {
     if (!editorRenderer || !realRenderer || disposed) return false
 
-    let foveationChanged = false
+    let lodOrFoveationChanged = false
 
     for (const r of [editorRenderer, realRenderer]) {
-      foveationChanged = applyLiveSettings(r, settings) || foveationChanged
+      const kinds = applyChangedSettings(r, oldSettings, newSettings)
+
+      // Apply appropriate dirty flags based on change classification
+      for (const kind of kinds) {
+        switch (kind) {
+          case ChangeKind.FOVEATION:
+          case ChangeKind.LOD:
+            markLodDirty(r)
+            lodOrFoveationChanged = true
+            break
+          case ChangeKind.LOD_TOGGLE:
+            markLodDirty(r)
+            lodOrFoveationChanged = true
+            break
+          case ChangeKind.SORT:
+            markSortDirty(r)
+            break
+          case ChangeKind.SHADER:
+            // setDirty triggers re-render
+            break
+        }
+      }
     }
 
-    // If foveation changed, mark LOD dirty on the real renderer (the driver)
-    if (foveationChanged && realRenderer) {
-      markLodDirty(realRenderer)
-    }
+    // Mark general dirty so Threlte invalidate fires
+    if (realRenderer) markDirty(realRenderer)
 
-    return foveationChanged
+    return lodOrFoveationChanged
   }
 
-  function reconfigureMaxPagedSplats(maxPagedSplats: number): void {
+  function reconfigureMaxPagedSplats(settings: SparkSettings): void {
     if (disposed) return
 
-    // Update the base options so new renderers use the new value
-    sparkOptions.maxPagedSplats = maxPagedSplats
+    // Update the base options so any future recreation uses the new value
+    sparkOptions.maxPagedSplats = settings.maxPagedSplats
 
-    // Also set on current renderers immediately (for the period before recreation)
-    if (editorRenderer) editorRenderer.maxPagedSplats = maxPagedSplats
-    if (realRenderer) realRenderer.maxPagedSplats = maxPagedSplats
-
-    // Replace both renderers so the new pager capacity takes effect
-    replaceRenderers()
+    // Replace both renderers with new instances, applying complete settings
+    replaceRenderers(settings)
 
     // Mark dirty so the next frame triggers re-rendering
     if (realRenderer) {
       markLodDirty(realRenderer)
+      markDirty(realRenderer)
     }
   }
 

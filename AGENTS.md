@@ -9,7 +9,7 @@ A client-side Threlte/Svelte 5/TypeScript web app for designing scroll-based sto
 - `src/lib/components/RadStoryScene.svelte` — Camera setup, ScrollTrigger, `ScrollAnimator` instances (camera + target), `CameraTarget`, `SparkControls`, SparkRenderer bridge, and SplatMesh. Uses `useTask` for per-frame camera look-at. Scene-wide `ScrollAnimator` playback via `scene.traverse`.
 - `src/lib/components/SparkSplats.svelte` — SplatMesh lifecycle only. Accepts `url` prop; the nested `<T is={mesh}>` is the Studio-editable object. No transform props (`position`, `rotation`, `scale`) are exposed — Studio authors the mesh directly.
 - `src/lib/components/SparkStudioBridge.svelte` — Manages dual SparkRenderer lifecycle via `createSparkStudioRenderer`. Subscribes to `SparkControls` settings changes and propagates them to both renderers in real time.
-- `src/lib/spark/SparkControls.ts` — Three.js `Object3D` subclass holding all editable Spark 2.1 quality/LOD/foveation settings. Appears as "Spark" in Studio outline. Only `settings` property is source-synced; transforms are blocked by the transaction guard. All values validated against field-specific bounds.
+- `src/lib/spark/SparkControls.ts` — Three.js `Object3D` subclass holding all editable Spark 2.1 quality/LOD/foveation settings. Appears as "Spark" in Studio outline. Has a writable `settings` getter/setter for Threlte `<T>` source sync, plus individual top-level property getters/setters for each field. All values validated against field-specific bounds; constructor input and single-field edits both pass through the same validation path.
 - `src/lib/spark/ScrollAnimator.ts` — Three.js `Object3D` subclass with `keyframes` property and `applyScrollPercentage()`.
 - `src/lib/spark/scrollAnimation.ts` — Pure keyframe model, canonicalization (with dedup), upsert/delete, bracketing, and interpolation (position lerp + quaternion slerp).
 - `src/lib/studio/scroll-animator/ScrollAnimatorExtension.svelte` — Studio extension: fixed toolbar pane with percentage display/input, keyframe list, jump, delete, and insert/save actions. Uses public `@threlte/studio/extensions` imports. Toolbar icon: `mdiAnimationOutline`.
@@ -17,7 +17,7 @@ A client-side Threlte/Svelte 5/TypeScript web app for designing scroll-based sto
 - `src/lib/studio/scroll-animator/scrollAnimatorRuntime.ts` — Shared runtime bridge: reactive percentage from ScrollTrigger, `jumpToPercentage` via trigger's measured range, attach/detach lifecycle.
 - `src/lib/studio/scroll-animator/transactionGuard.ts` — Suppresses source sync for ScrollAnimator transforms (only `keyframes` persists) and SparkControls transforms (only `settings` persists). Uses narrow structural types (no private imports).
 - `src/lib/studio/editor-camera/editorCameraControlsBridge.ts` — Future-facing, typed bridge for Studio editor CameraControls tuning. Currently unattached (no supported public path to the CameraControls instance). Documented in code.
-- `src/lib/spark/createSparkStudioRenderer.ts` — Factory for dual SparkRenderer setup. Includes `applySettings()` for live propagation and `reconfigureMaxPagedSplats()` for controlled renderer/pager recreation.
+- `src/lib/spark/createSparkStudioRenderer.ts` — Factory for dual SparkRenderer setup. `applyChangedSettings()` applies only changed fields with field-level dirty classification (shader/sort/LOD/foveation). `reconfigureMaxPagedSplats()` recreates both renderers with the complete current settings snapshot so ordinary edits survive capacity changes.
 - `src/lib/spark/deviceProfile.ts` — Mobile/iOS detection + Spark performance profile. Cone angles are full-width **degrees** (Spark 2.1 API: default `coneFov0: 90`, `coneFov: 120`).
 - `src/lib/spark/radUrl.ts` — RAD URL validation with typed results.
 - `src/lib/types.ts` — Shared TypeScript types.
@@ -87,6 +87,8 @@ Keyframe mutations use `transactions.buildTransaction()` which derives source me
 
 `SparkControls extends Object3D` is a branded settings controller that appears in the Studio outline as a selectable object named "Spark". It holds all editable Spark 2.1 rendering-quality, LOD, foveation, and paging-budget controls.
 
+**Source sync:** The `<T is={sparkControls} settings={sparkControls.settings} />` pattern exposes a writable `settings` property that Threlte Studio source syncs as a whole object. The transaction guard whitelists `settings` (root) and individual field names, while blocking transforms and nested paths like `settings.lodSplatScale`.
+
 **Mandatory fields (from device profile):**
 - `lodSplatScale`, `lodRenderScale`, `maxStdDev`, `maxPagedSplats` — LOD quality and budget
 - `coneFov0`, `coneFov` — Full-width cone angles in **degrees** (Spark 2.1 API, not normalized scalars)
@@ -97,13 +99,15 @@ Keyframe mutations use `transactions.buildTransaction()` which derives source me
 - `sortRadial`, `minSortIntervalMs` — Sort behavior
 - `enableLod`, `enableLodFetching`, `lodSplatCount` (null = automatic), `lodInflate` — LOD toggles
 
-**Validation:** All numeric values are clamped to field-specific bounds. `maxPagedSplats` is rounded up to the nearest multiple of `65,536` (Spark page size). `coneFov0 <= coneFov` is enforced (if violated, `coneFov` is raised to match). NaN/Infinity fall back to defaults.
+**Validation:** All numeric values are clamped to field-specific bounds. `maxPagedSplats` is rounded up to the nearest multiple of `65,536` (Spark page size). `coneFov0 <= coneFov` is enforced when editing either field (the other is raised if needed). `minPixelRadius <= maxPixelRadius` similarly enforced. NaN/Infinity fall back to defaults. Constructor input and single-field edits both pass through the same validation path.
 
-**Live propagation:**
-- Ordinary settings (all except `maxPagedSplats`) are applied live to both editor and real SparkRenderer via `applyLiveSettings()`. Foveation changes (`coneFov0`, `coneFov`, `coneFoveate`, `behindFoveate`) mark `lodDirty = true` on the real renderer, forcing a new LOD traversal even without camera movement.
-- `maxPagedSplats` requires controlled renderer/pager recreation via `reconfigureMaxPagedSplats()`. This disposes both SparkRenderer instances and creates new ones with the new capacity. The SplatMesh and its scene transform are preserved. The dual-renderer architecture and camera routing are maintained. A recreation lock prevents concurrent rapid edits.
+**Installed Spark 2.1 defaults matched:** `blurAmount: 0.3` (not 0), `clipXY: 1.4`, `falloff: 1`, `lodSplatScale: 1`, etc. All non-profile defaults match the installed Spark constructor defaults.
 
-**Transaction guard:** Only `settings` persists through source sync. Transform attributes (`position`, `rotation`, `scale`) are blocked.
+**Live propagation with field-level change detection:**
+- `applyChangedSettings()` compares old vs new settings and applies only changed fields.
+- Changed fields are classified: shader-only (mark dirty), sort-affecting (mark sortDirty), LOD budget (mark lodDirty), foveation (mark lodDirty), LOD toggle (mark lodDirty).
+- `lodSplatCount` null → `undefined` on renderer (restores automatic/platform default).
+- `maxPagedSplats` requires controlled renderer/pager recreation via `reconfigureMaxPagedSplats()`. This disposes both SparkRenderer instances and creates new ones with the new capacity. The complete current settings snapshot is applied to the new renderers so ordinary edits survive. A recreation lock prevents concurrent rapid edits.
 
 **Cone angle defaults:** Desktop uses Spark 2.1 defaults (`coneFov0: 90`, `coneFov: 120`). Mobile uses slightly tighter cones (`coneFov0: 70`, `coneFov: 110`). These are full-width **degrees**, not the accidental sub-degree values from an old API.
 

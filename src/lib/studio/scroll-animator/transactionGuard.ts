@@ -1,10 +1,11 @@
 /**
  * Transaction guard helper: suppress source sync for ScrollAnimator transform
- * attributes while allowing `keyframes` through.
+ * attributes while allowing `keyframes` through. Also suppresses SparkControls
+ * transform attributes while allowing only the explicit whitelist of setting
+ * names through.
  *
  * For Studio 0.4.3, `onTransaction` callbacks fire before sync requests are
- * enqueued. We clear `transaction.sync` for any non-keyframe attribute on a
- * branded ScrollAnimator.
+ * enqueued. We clear `transaction.sync` for any non-whitelisted attribute.
  */
 
 /**
@@ -54,17 +55,48 @@ function isKeyframesAttribute(attributeName: string): boolean {
 }
 
 /**
- * Check whether a transaction's attribute name targets `settings`.
- * Only allow the final path segment to be exactly `settings`.
+ * Whitelist of SparkControls setting names that may be source-synced.
+ * Only exact matches are allowed — no descendants.
  */
-function isSettingsAttribute(attributeName: string): boolean {
-  return attributeName === 'settings' || attributeName.endsWith('.settings')
+const SPARK_CONTROL_KEYS = new Set([
+  'lodSplatScale',
+  'lodRenderScale',
+  'maxStdDev',
+  'maxPagedSplats',
+  'coneFov0',
+  'coneFov',
+  'coneFoveate',
+  'behindFoveate',
+  'minPixelRadius',
+  'maxPixelRadius',
+  'minAlpha',
+  'preBlurAmount',
+  'blurAmount',
+  'falloff',
+  'clipXY',
+  'focalAdjustment',
+  'sortRadial',
+  'minSortIntervalMs',
+  'enableLod',
+  'enableLodFetching',
+  'lodSplatCount',
+  'lodInflate',
+])
+
+/**
+ * Check whether a transaction's attribute name is a whitelisted SparkControls setting.
+ * Allows the root `settings` attribute (source-synced whole object) and individual
+ * field names. Blocks descendants like `settings.lodSplatScale`.
+ */
+function isSparkControlAttribute(attributeName: string): boolean {
+  return attributeName === 'settings' || SPARK_CONTROL_KEYS.has(attributeName)
 }
 
 /**
  * Given a set of transactions, suppress source sync for any transaction
  * whose object is a ScrollAnimator and the attribute is not `keyframes`,
- * or whose object is a SparkControls and the attribute is not `settings`.
+ * or whose object is a SparkControls and the attribute is not in the
+ * explicit settings whitelist.
  *
  * Mutates the transaction array in place (called from onTransaction callbacks).
  */
@@ -81,7 +113,7 @@ export function guardScrollAnimatorTransactions(
     }
     if (isSparkControls(tx.object)) {
       const sync = tx.sync
-      if (sync && !isSettingsAttribute(sync.attributeName)) {
+      if (sync && !isSparkControlAttribute(sync.attributeName)) {
         tx.sync = undefined
       }
     }

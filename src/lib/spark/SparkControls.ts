@@ -3,8 +3,9 @@
  * Spark 2.1 rendering-quality, LOD, foveation, and paging-budget settings.
  *
  * Appears in the Studio outline as a selectable object named "Spark".
- * Only the `settings` property is source-synced; transform changes are blocked
- * by the transaction guard.
+ * Each setting is exposed as a top-level property so the Studio Inspector
+ * shows individually editable numeric/boolean controls. Transform attributes
+ * (position, rotation, scale) are blocked by the transaction guard.
  *
  * All numeric values are validated against field-specific bounds derived from
  * the installed Spark 2.1 semantics. NaN, Infinity, and out-of-range values
@@ -53,6 +54,32 @@ export interface SparkSettings {
   lodInflate: boolean
 }
 
+/** Keys of the settings interface (in declaration order). */
+export const SETTINGS_KEYS: (keyof SparkSettings)[] = [
+  'lodSplatScale',
+  'lodRenderScale',
+  'maxStdDev',
+  'maxPagedSplats',
+  'coneFov0',
+  'coneFov',
+  'coneFoveate',
+  'behindFoveate',
+  'minPixelRadius',
+  'maxPixelRadius',
+  'minAlpha',
+  'preBlurAmount',
+  'blurAmount',
+  'falloff',
+  'clipXY',
+  'focalAdjustment',
+  'sortRadial',
+  'minSortIntervalMs',
+  'enableLod',
+  'enableLodFetching',
+  'lodSplatCount',
+  'lodInflate',
+]
+
 // ---------------------------------------------------------------------------
 // Field definitions with validation
 // ---------------------------------------------------------------------------
@@ -79,7 +106,7 @@ const FIELD_DEFS: Record<keyof SparkSettings, FieldDef> = {
   maxPixelRadius:      { min: 1,    max: 4096, default: 512 },
   minAlpha:            { min: 0,    max: 1,    default: 0.5 * (1 / 255) },
   preBlurAmount:       { min: 0,    max: 5,    default: 0 },
-  blurAmount:          { min: 0,    max: 5,    default: 0 },
+  blurAmount:          { min: 0,    max: 5,    default: 0.3 },
   falloff:             { min: 0,    max: 1,    default: 1 },
   clipXY:              { min: 0.5,  max: 5,    default: 1.4 },
   focalAdjustment:     { min: 0.1,  max: 5,    default: 1 },
@@ -121,10 +148,57 @@ function validateNumber(value: unknown, def: FieldDef): number | null {
 }
 
 /**
- * Validate a boolean field.
+ * Validate a boolean field. Only `true` and `false` are accepted.
+ * Truthy strings like `"false"` are treated as `true` (JS Boolean behavior),
+ * but we explicitly handle the string `"false"` as `false`.
  */
 function validateBoolean(value: unknown): boolean {
+  if (value === 'false' || value === '0') return false
   return Boolean(value)
+}
+
+// ---------------------------------------------------------------------------
+// Core validation (shared by constructor and setters)
+// ---------------------------------------------------------------------------
+
+/**
+ * Validate a single field value. Returns the validated value.
+ */
+function validateField<K extends keyof SparkSettings>(
+  key: K,
+  raw: unknown,
+): SparkSettings[K] {
+  const def = FIELD_DEFS[key]
+  if (typeof def.default === 'boolean') {
+    return validateBoolean(raw) as SparkSettings[K]
+  }
+  return validateNumber(raw, def) as SparkSettings[K]
+}
+
+/**
+ * Apply coupled invariants after validation.
+ * Mutates the validated map in place.
+ */
+function applyInvariants(validated: Partial<SparkSettings>, current: SparkSettings): void {
+  // coneFov0 <= coneFov (merge with current for cross-field check)
+  const mergedConeFov0 = validated.coneFov0 ?? current.coneFov0
+  const mergedConeFov = validated.coneFov ?? current.coneFov
+  if (mergedConeFov0 > mergedConeFov) {
+    // Always raise coneFov to match coneFov0
+    // Only write to validated if the current value differs (i.e., it needs changing)
+    if (mergedConeFov !== mergedConeFov0) {
+      validated.coneFov = mergedConeFov0
+    }
+  }
+
+  // minPixelRadius <= maxPixelRadius
+  const mergedMinPr = validated.minPixelRadius ?? current.minPixelRadius
+  const mergedMaxPr = validated.maxPixelRadius ?? current.maxPixelRadius
+  if (mergedMinPr > mergedMaxPr) {
+    if (mergedMaxPr !== mergedMinPr) {
+      validated.maxPixelRadius = mergedMinPr
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -136,9 +210,9 @@ export type SettingsChangeHandler = (changed: Set<keyof SparkSettings>) => void
 /**
  * Branded Object3D that holds editable Spark settings.
  *
- * The `settings` property is a plain object that Studio serializes for source
- * sync. Transform attributes (position, rotation, scale) are blocked by the
- * transaction guard so they never persist.
+ * Each setting is exposed as a top-level property (getter/setter) so the
+ * Studio Inspector shows individually editable controls. The transaction
+ * guard whitelists exactly these attribute names and blocks transforms.
  */
 export class SparkControls extends Object3D {
   /** HMR-safe brand for runtime detection. */
@@ -154,16 +228,22 @@ export class SparkControls extends Object3D {
     this.type = 'SparkControls'
     this.name = 'Spark'
 
-    // Start with defaults, then overlay any provided values
+    // Start with defaults
     const defaults = this.createDefaultSettings()
+
+    // Validate and merge initial values
     if (initial) {
-      for (const [key, val] of Object.entries(initial)) {
-        if (val !== undefined) {
-          ;(defaults as unknown as Record<string, unknown>)[key] = val
-        }
+      const validated: Partial<SparkSettings> = {}
+      for (const key of SETTINGS_KEYS) {
+        const raw = initial[key]
+        if (raw === undefined) continue
+        validated[key] = validateField(key, raw)
       }
+      applyInvariants(validated, defaults)
+      this._settings = { ...defaults, ...validated }
+    } else {
+      this._settings = defaults
     }
-    this._settings = defaults
   }
 
   /**
@@ -185,50 +265,134 @@ export class SparkControls extends Object3D {
   }
 
   /**
-   * Set settings from a plain object. All values are validated and clamped.
-   * Emits change notifications for any fields that actually changed.
+   * Set settings from a plain object (used by Threlte <T> source sync).
+   * All values are validated. Emits change notifications.
    */
   set settings(value: Partial<SparkSettings>) {
     const previous = { ...this._settings }
-    const validated: Record<string, unknown> = {}
+    const validated: Partial<SparkSettings> = {}
 
-    for (const [key, def] of Object.entries(FIELD_DEFS)) {
-      const k = key as keyof SparkSettings
-      const raw = value[k]
+    for (const key of SETTINGS_KEYS) {
+      const raw = value[key]
       if (raw === undefined) continue
-
-      if (typeof def.default === 'boolean') {
-        validated[k] = validateBoolean(raw)
-      } else {
-        validated[k] = validateNumber(raw, def)
-      }
+      validated[key] = validateField(key, raw)
     }
 
-    // Enforce cone angle invariant: coneFov0 <= coneFov
-    if (validated.coneFov0 !== undefined && validated.coneFov !== undefined) {
-      if ((validated.coneFov0 as number) > (validated.coneFov as number)) {
-        validated.coneFov = validated.coneFov0
-      }
-    }
+    // Apply invariants
+    applyInvariants(validated, this._settings)
 
-    // Merge validated into current
-    const merged = { ...this._settings, ...validated } as SparkSettings
+    const merged = { ...this._settings, ...validated }
     this._settings = merged
 
     // Determine which fields actually changed
     const changed = new Set<keyof SparkSettings>()
-    for (const [key] of Object.entries(FIELD_DEFS)) {
-      const k = key as keyof SparkSettings
-      if (previous[k] !== merged[k]) {
-        changed.add(k)
-      }
+    for (const k of SETTINGS_KEYS) {
+      if (previous[k] !== merged[k]) changed.add(k)
     }
 
-    // Notify listeners
     if (changed.size > 0) {
-      for (const fn of this._listeners) {
-        fn(changed)
-      }
+      for (const fn of this._listeners) fn(changed)
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // Top-level property accessors for each setting
+  // Each one goes through validation and emits change notifications.
+  // -----------------------------------------------------------------------
+
+  get lodSplatScale(): number { return this._settings.lodSplatScale }
+  set lodSplatScale(v: unknown) { this.setOne('lodSplatScale', v) }
+
+  get lodRenderScale(): number { return this._settings.lodRenderScale }
+  set lodRenderScale(v: unknown) { this.setOne('lodRenderScale', v) }
+
+  get maxStdDev(): number { return this._settings.maxStdDev }
+  set maxStdDev(v: unknown) { this.setOne('maxStdDev', v) }
+
+  get maxPagedSplats(): number { return this._settings.maxPagedSplats }
+  set maxPagedSplats(v: unknown) { this.setOne('maxPagedSplats', v) }
+
+  get coneFov0(): number { return this._settings.coneFov0 }
+  set coneFov0(v: unknown) { this.setOne('coneFov0', v) }
+
+  get coneFov(): number { return this._settings.coneFov }
+  set coneFov(v: unknown) { this.setOne('coneFov', v) }
+
+  get coneFoveate(): number { return this._settings.coneFoveate }
+  set coneFoveate(v: unknown) { this.setOne('coneFoveate', v) }
+
+  get behindFoveate(): number { return this._settings.behindFoveate }
+  set behindFoveate(v: unknown) { this.setOne('behindFoveate', v) }
+
+  get minPixelRadius(): number { return this._settings.minPixelRadius }
+  set minPixelRadius(v: unknown) { this.setOne('minPixelRadius', v) }
+
+  get maxPixelRadius(): number { return this._settings.maxPixelRadius }
+  set maxPixelRadius(v: unknown) { this.setOne('maxPixelRadius', v) }
+
+  get minAlpha(): number { return this._settings.minAlpha }
+  set minAlpha(v: unknown) { this.setOne('minAlpha', v) }
+
+  get preBlurAmount(): number { return this._settings.preBlurAmount }
+  set preBlurAmount(v: unknown) { this.setOne('preBlurAmount', v) }
+
+  get blurAmount(): number { return this._settings.blurAmount }
+  set blurAmount(v: unknown) { this.setOne('blurAmount', v) }
+
+  get falloff(): number { return this._settings.falloff }
+  set falloff(v: unknown) { this.setOne('falloff', v) }
+
+  get clipXY(): number { return this._settings.clipXY }
+  set clipXY(v: unknown) { this.setOne('clipXY', v) }
+
+  get focalAdjustment(): number { return this._settings.focalAdjustment }
+  set focalAdjustment(v: unknown) { this.setOne('focalAdjustment', v) }
+
+  get sortRadial(): boolean { return this._settings.sortRadial }
+  set sortRadial(v: unknown) { this.setOne('sortRadial', v) }
+
+  get minSortIntervalMs(): number { return this._settings.minSortIntervalMs }
+  set minSortIntervalMs(v: unknown) { this.setOne('minSortIntervalMs', v) }
+
+  get enableLod(): boolean { return this._settings.enableLod }
+  set enableLod(v: unknown) { this.setOne('enableLod', v) }
+
+  get enableLodFetching(): boolean { return this._settings.enableLodFetching }
+  set enableLodFetching(v: unknown) { this.setOne('enableLodFetching', v) }
+
+  get lodSplatCount(): number | null { return this._settings.lodSplatCount }
+  set lodSplatCount(v: unknown) { this.setOne('lodSplatCount', v) }
+
+  get lodInflate(): boolean { return this._settings.lodInflate }
+  set lodInflate(v: unknown) { this.setOne('lodInflate', v) }
+
+  /**
+   * Set a single field through validation. Emits change notification.
+   */
+  private setOne<K extends keyof SparkSettings>(key: K, raw: unknown): void {
+    const validated = validateField(key, raw)
+    if (validated === this._settings[key]) return
+
+    const previous = { ...this._settings }
+    const newSettings = { ...this._settings, [key]: validated }
+
+    // Apply invariants that may affect other fields
+    const extraChanges: Partial<SparkSettings> = {}
+    applyInvariants(extraChanges, { ...previous, [key]: validated })
+    for (const [ik, iv] of Object.entries(extraChanges)) {
+      newSettings[ik as keyof SparkSettings] = iv as never
+    }
+
+    this._settings = newSettings
+
+    // Determine which fields actually changed
+    const changed = new Set<keyof SparkSettings>()
+    for (const k of SETTINGS_KEYS) {
+      if (previous[k] !== newSettings[k]) changed.add(k)
+    }
+
+    if (changed.size > 0) {
+      for (const fn of this._listeners) fn(changed)
     }
   }
 

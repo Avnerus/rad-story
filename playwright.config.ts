@@ -18,7 +18,7 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: 'npm run build && npx vite preview --port 4173',
+    command: 'VITE_E2E_STUB_SPARK=true npm run build && npx vite preview --port 4173',
     port: 4173,
     reuseExistingServer: !process.env.CI,
     timeout: 60_000,
