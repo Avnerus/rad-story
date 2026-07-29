@@ -257,15 +257,44 @@ describe('SparkReloadCoordinator', () => {
       expect(coordinator.status.isReloading).toBe(true) // start after clear works
     })
 
-    it('coordinator requestReload drives status through start→success', async () => {
+    it('coordinator requestReload drives status through start, then caller signals success', async () => {
       const { factory } = makeMeshFactory()
       const statuses: Array<{ isReloading: boolean; error: string }> = []
       coordinator.status.subscribe((s) => statuses.push({ ...s }))
+
+      coordinator.onReloadComplete(() => {
+        // Caller signals success after attaching mesh and waiting for pager
+        coordinator.status.success()
+      })
 
       await coordinator.requestReload('test.rad', factory)
 
       expect(statuses).toHaveLength(2)
       expect(statuses[0]).toEqual({ isReloading: true, error: '' })
+      expect(statuses[1]).toEqual({ isReloading: false, error: '' })
+    })
+
+    it('coordinator requestReload stays in start state until caller signals', async () => {
+      const { factory } = makeMeshFactory()
+      const statuses: Array<{ isReloading: boolean; error: string }> = []
+      coordinator.status.subscribe((s) => statuses.push({ ...s }))
+
+      let called = false
+      coordinator.onReloadComplete(() => {
+        called = true
+        // Don't signal success yet
+      })
+
+      await coordinator.requestReload('test.rad', factory)
+
+      // Only start was emitted — not success
+      expect(statuses).toHaveLength(1)
+      expect(statuses[0]).toEqual({ isReloading: true, error: '' })
+      expect(called).toBe(true)
+
+      // Now caller signals success
+      coordinator.status.success()
+      expect(statuses).toHaveLength(2)
       expect(statuses[1]).toEqual({ isReloading: false, error: '' })
     })
 
@@ -294,11 +323,21 @@ describe('SparkReloadCoordinator', () => {
       const statuses: Array<{ isReloading: boolean; error: string }> = []
       coordinator.status.subscribe((s) => statuses.push({ ...s }))
 
+      let completeCalls = 0
+      coordinator.onReloadComplete(() => {
+        completeCalls++
+        // Only the last generation should call success
+        coordinator.status.success()
+      })
+
       // Fire 3 rapid requests — only gen 3 should complete
       const p1 = coordinator.requestReload('a.rad', factory)
       const p2 = coordinator.requestReload('b.rad', factory)
       const p3 = coordinator.requestReload('c.rad', factory)
       await Promise.all([p1, p2, p3])
+
+      // Only gen 3's onReloadComplete fires
+      expect(completeCalls).toBe(1)
 
       // Should see 3 starts (one per request) and 1 success (gen 3 only)
       const starts = statuses.filter((s) => s.isReloading)

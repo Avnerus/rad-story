@@ -7,6 +7,7 @@
   import { guardScrollAnimatorTransactions } from '$lib/studio/scroll-animator/transactionGuard'
   import type { SparkSettings, SparkControls } from '$lib/spark/SparkControls'
   import { SPARK_PAGE_SIZE } from '$lib/spark/SparkControls'
+  import { buildSparkSettingsTransaction } from './sparkSettingsTransaction'
   import SparkFixedToolbarPane from './SparkFixedToolbarPane.svelte'
 
   interface FieldMeta {
@@ -78,6 +79,26 @@
   // Local draft values for editing
   let drafts = $state<Record<string, string>>({})
 
+  // Reload status subscription — clean up on selection change / destroy
+  let unsubscribeReloadStatus: (() => void) | null = null
+
+  /** Subscribe to reload status from the selected SparkControls. */
+  function subscribeToReloadStatus(controls: SparkControls): void {
+    unsubscribeReloadStatus?.()
+    unsubscribeReloadStatus = controls.reloadStatus.subscribe((status) => {
+      uiState.reloading = status.isReloading
+      uiState.reloadError = status.error
+    })
+  }
+
+  /** Unsubscribe from reload status. */
+  function unsubscribeFromReloadStatus(): void {
+    unsubscribeReloadStatus?.()
+    unsubscribeReloadStatus = null
+    uiState.reloading = false
+    uiState.reloadError = ''
+  }
+
   // Keep settings in sync with selection
   let revision = $state(0)
   $effect(() => {
@@ -88,9 +109,8 @@
       const sc = ctrl as unknown as SparkControls
       uiState.controls = sc
       uiState.settings = sc.settings
-      // Mirror reload status from SparkControls
-      uiState.reloading = sc.reloadStatus.isReloading
-      uiState.reloadError = sc.reloadStatus.error
+      // Subscribe to reload status reactively
+      subscribeToReloadStatus(sc)
       // Initialize drafts from current settings
       const newDrafts: Record<string, string> = {}
       for (const meta of FIELD_META) {
@@ -101,8 +121,8 @@
     } else {
       uiState.controls = null
       uiState.settings = {} as SparkSettings
-      uiState.reloading = false
-      uiState.reloadError = ''
+      // Unsubscribe from reload status when no Spark is selected
+      unsubscribeFromReloadStatus()
     }
   })
 
@@ -115,6 +135,7 @@
 
   onDestroy(() => {
     unsubscribeGuard?.()
+    unsubscribeFromReloadStatus()
   })
 
   // Commit a field edit via transaction
@@ -145,14 +166,9 @@
     if (currentValue !== newValue) {
       // If source sync is available, commit as a transaction
       if (transactions.vitePluginEnabled) {
-        const tx = transactions.buildTransaction({
-          object: controls,
-          propertyPath: 'settings',
-          value: controls.settings,
-          historicValue: uiState.settings,
-          createHistoryRecord: true,
-          sync: true,
-        })
+        const tx = transactions.buildTransaction(
+          buildSparkSettingsTransaction(controls, controls.settings, uiState.settings),
+        )
         transactions.commit([tx])
       }
       uiState.settings = controls.settings
@@ -177,14 +193,9 @@
 
     if (currentValue !== newValue) {
       if (transactions.vitePluginEnabled) {
-        const tx = transactions.buildTransaction({
-          object: controls,
-          propertyPath: 'settings',
-          value: controls.settings,
-          historicValue: uiState.settings,
-          createHistoryRecord: true,
-          sync: true,
-        })
+        const tx = transactions.buildTransaction(
+          buildSparkSettingsTransaction(controls, controls.settings, uiState.settings),
+        )
         transactions.commit([tx])
       }
       uiState.settings = controls.settings

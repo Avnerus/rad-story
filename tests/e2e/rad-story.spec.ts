@@ -1030,23 +1030,45 @@ test.describe('RAD Story', () => {
     expect(parseFloat(fovValue)).toBeGreaterThanOrEqual(150)
   })
 
-  test('Spark pane capacity edit shows reload progress', async ({ page }) => {
+  test('Spark pane capacity edit shows reload progress (stub)', async ({ page }) => {
     await selectSparkAndOpenPane(page)
 
     const capacityInput = page.locator('input#spark-maxPagedSplats')
     await expect(capacityInput).toBeVisible()
+
+    // Capture mesh count before reload
+    const beforeReload = await page.evaluate(() => {
+      const d = (window as unknown as Record<string, unknown>).__spark_stub_diagnostics as {
+        meshes: unknown[];
+        pagers: { disposed: boolean }[];
+      }
+      return { meshCount: d.meshes.length, disposedPagers: d.pagers.filter((p: { disposed: boolean }) => p.disposed).length }
+    })
 
     // Edit capacity to trigger reload
     const originalCapacity = await capacityInput.inputValue()
     const newCapacity = String(parseInt(originalCapacity) / 2)
     await capacityInput.fill(newCapacity)
     await capacityInput.press('Enter')
-    await page.waitForTimeout(500)
+
+    // Wait for reload to complete
+    await page.waitForTimeout(3000)
 
     // Capacity should be normalized to 65536 multiple
     const normalizedCapacity = await capacityInput.inputValue()
     const capacityValue = parseInt(normalizedCapacity)
     expect(capacityValue % 65536).toBe(0)
+
+    // Reload should have created new mesh and disposed old pager
+    const afterReload = await page.evaluate(() => {
+      const d = (window as unknown as Record<string, unknown>).__spark_stub_diagnostics as {
+        meshes: unknown[];
+        pagers: { disposed: boolean }[];
+      }
+      return { meshCount: d.meshes.length, disposedPagers: d.pagers.filter((p: { disposed: boolean }) => p.disposed).length }
+    })
+    expect(afterReload.meshCount).toBeGreaterThan(beforeReload.meshCount, 'new mesh created')
+    expect(afterReload.disposedPagers).toBeGreaterThan(beforeReload.disposedPagers, 'old pager disposed')
 
     // Reload status: should not show an error (stub reload succeeds)
     const hasError = await page.evaluate(() => {
@@ -1113,5 +1135,223 @@ test.describe('RAD Story', () => {
       return (window as unknown as Record<string, unknown>).__spark_stub === true
     })
     expect(isStub, 'expected Spark stub to be active in e2e build').toBe(true)
+  })
+
+  // ---------------------------------------------------------------------------
+  // Stub capacity reload: identity, disposal, pager handoff, rapid edits
+  // ---------------------------------------------------------------------------
+
+  test('stub capacity reload: progress visible then clears, pager handoff confirmed', async ({ page }) => {
+    await selectSparkAndOpenPane(page)
+
+    const capacityInput = page.locator('input#spark-maxPagedSplats')
+    const originalCapacity = await capacityInput.inputValue()
+
+    // Capture pre-reload diagnostics
+    const before = await page.evaluate(() => {
+      const d = (window as unknown as Record<string, unknown>).__spark_stub_diagnostics as {
+        renderers: { id: number; pager?: { id: number; disposed: boolean } }; 
+        pagers: { id: number; disposed: boolean; maxSplats: number }[];
+        meshes: { paged?: { pager?: { id: number } } }[];
+        drivingPagerId: number;
+      }
+      return {
+        rendererIds: d.renderers.map((r: { id: number }) => r.id),
+        pagerIds: d.pagers.map((p: { id: number }) => p.id),
+        meshIds: d.meshes.map((m: { id: number }) => m.id),
+        drivingPagerId: d.drivingPagerId,
+      }
+    })
+
+    // Edit capacity to trigger reload
+    const newCapacity = String(parseInt(originalCapacity) / 2)
+    await capacityInput.fill(newCapacity)
+    await capacityInput.press('Enter')
+
+    // Wait for reload to complete (pager handoff via RAF)
+    await page.waitForTimeout(3000)
+
+    // Reload progress should have cleared
+    const reloadingAfter = await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="spark-reloading"]')
+      return el !== null && window.getComputedStyle(el).display !== 'none'
+    })
+    expect(reloadingAfter, 'reload progress should clear').toBe(false)
+
+    // No error should appear
+    const hasError = await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="spark-error"]')
+      return el !== null && el.textContent !== ''
+    })
+    expect(hasError).toBe(false)
+
+    // Capture post-reload diagnostics
+    const after = await page.evaluate(() => {
+      const d = (window as unknown as Record<string, unknown>).__spark_stub_diagnostics as {
+        renderers: { id: number; pager?: { id: number; disposed: boolean } }[];
+        pagers: { id: number; disposed: boolean; maxSplats: number }[];
+        meshes: { id: number; paged?: { pager?: { id: number } } }[];
+        drivingPagerId: number;
+      }
+      return {
+        rendererIds: d.renderers.map((r: { id: number }) => r.id),
+        pagerIds: d.pagers.map((p: { id: number }) => p.id),
+        meshIds: d.meshes.map((m: { id: number }) => m.id),
+        drivingPagerId: d.drivingPagerId,
+        pagerMaxSplats: d.pagers.map((p: { maxSplats: number }) => p.maxSplats),
+      }
+    })
+
+    // New renderer IDs should exist (recreate creates new instances)
+    expect(after.rendererIds.length).toBeGreaterThan(before.rendererIds.length)
+
+    // New pager IDs should exist
+    expect(after.pagerIds.length).toBeGreaterThan(before.pagerIds.length)
+
+    // New mesh IDs should exist (reload creates new mesh)
+    expect(after.meshIds.length).toBeGreaterThan(before.meshIds.length)
+
+    // Driving pager should have the new capacity
+    const normalizedCapacity = parseInt(newCapacity)
+    const expectedCapacity = Math.ceil(normalizedCapacity / 65536) * 65536
+    expect(after.pagerMaxSplats).toContain(expectedCapacity)
+
+    // Wrapper should still be visible
+    const wrapperItem = page.getByText('SplatWrapper')
+    await expect(wrapperItem.first()).toBeVisible()
+  })
+
+  test('stub capacity reload: old pager disposed, new pager attached to mesh', async ({ page }) => {
+    await selectSparkAndOpenPane(page)
+
+    const capacityInput = page.locator('input#spark-maxPagedSplats')
+    await capacityInput.fill('131072') // 2 * 65536
+    await capacityInput.press('Enter')
+    await page.waitForTimeout(2000)
+
+    // Check that old pagers are disposed and new pager is active
+    const diagnostics = await page.evaluate(() => {
+      const d = (window as unknown as Record<string, unknown>).__spark_stub_diagnostics as {
+        pagers: { id: number; disposed: boolean; maxSplats: number }[];
+        meshes: { id: number; paged?: { pager?: { id: number } } }[];
+        drivingPagerId: number;
+      }
+      const activePagers = d.pagers.filter((p: { disposed: boolean }) => !p.disposed)
+      const disposedPagers = d.pagers.filter((p: { disposed: boolean }) => p.disposed)
+      const meshesWithPager = d.meshes.filter((m: { paged?: { pager?: unknown } }) => m.paged?.pager !== undefined)
+      return {
+        activePagerCount: activePagers.length,
+        disposedPagerCount: disposedPagers.length,
+        activePagerIds: activePagers.map((p: { id: number }) => p.id),
+        meshesWithPagerCount: meshesWithPager.length,
+        drivingPagerId: d.drivingPagerId,
+      }
+    })
+
+    // At least one pager should be disposed (from renderer recreation)
+    expect(diagnostics.disposedPagerCount).toBeGreaterThan(0)
+
+    // Active pager count should be reasonable (2 per renderer pair)
+    expect(diagnostics.activePagerCount).toBeGreaterThanOrEqual(2)
+
+    // At least one mesh should have a pager attached
+    expect(diagnostics.meshesWithPagerCount).toBeGreaterThanOrEqual(1)
+  })
+
+  test('stub capacity reload: rapid edits settle on final capacity', async ({ page }) => {
+    await selectSparkAndOpenPane(page)
+
+    const capacityInput = page.locator('input#spark-maxPagedSplats')
+
+    // Rapid edits
+    await capacityInput.fill('131072')  // 2 * 65536
+    await capacityInput.press('Enter')
+    await page.waitForTimeout(100)
+
+    await capacityInput.fill('196608')  // 3 * 65536
+    await capacityInput.press('Enter')
+    await page.waitForTimeout(100)
+
+    await capacityInput.fill('262144')  // 4 * 65536
+    await capacityInput.press('Enter')
+    await page.waitForTimeout(3000)
+
+    // Final capacity should be 262144
+    const finalValue = await capacityInput.inputValue()
+    expect(parseInt(finalValue)).toBe(262144)
+
+    // No error should appear
+    const hasError = await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="spark-error"]')
+      return el !== null && el.textContent !== ''
+    })
+    expect(hasError).toBe(false)
+
+    // Reload progress should have cleared
+    const reloadingVisible = await page.getByTestId('spark-reloading').isVisible()
+    expect(reloadingVisible).toBe(false)
+  })
+
+  test('stub capacity reload: wrapper transform and other settings persist', async ({ page }) => {
+    await selectSparkAndOpenPane(page)
+
+    const capacityInput = page.locator('input#spark-maxPagedSplats')
+    const blurInput = page.locator('input#spark-blurAmount')
+
+    // Set blurAmount to a non-default value
+    await blurInput.fill('0.8')
+    await blurInput.press('Enter')
+    await page.waitForTimeout(300)
+
+    // Trigger capacity reload
+    await capacityInput.fill('131072')
+    await capacityInput.press('Enter')
+    await page.waitForTimeout(3000)
+
+    // blurAmount should persist across reload
+    const blurValue = await blurInput.inputValue()
+    expect(parseFloat(blurValue)).toBe(0.8)
+
+    // SplatWrapper should still be visible
+    const wrapperItem = page.getByText('SplatWrapper')
+    await expect(wrapperItem.first()).toBeVisible()
+  })
+
+  test('stub reload status: subscription lifecycle on selection change', async ({ page }) => {
+    await selectSparkAndOpenPane(page)
+
+    const capacityInput = page.locator('input#spark-maxPagedSplats')
+
+    // Trigger reload
+    await capacityInput.fill('131072')
+    await capacityInput.press('Enter')
+
+    // Wait for reload to complete (stub is fast)
+    await page.waitForTimeout(3000)
+
+    // Verify reload completed (no error)
+    const hasError = await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="spark-error"]')
+      return el !== null && el.textContent !== ''
+    })
+    expect(hasError).toBe(false)
+
+    // Close the pane with Escape
+    await page.keyboard.press('Escape')
+    await page.waitForTimeout(500)
+
+    // Select a different object (Camera ScrollAnimator) to trigger selection change
+    await page.getByText('Camera ScrollAnimator').click()
+    await page.waitForTimeout(500)
+
+    // Reopen Spark Controls pane — should show no-selection state
+    // because Camera ScrollAnimator is selected, not Spark
+    await page.getByRole('button', { name: 'Spark Controls' }).click()
+    await page.waitForTimeout(500)
+    await expect(page.getByTestId('spark-no-selection')).toBeVisible()
+
+    // Reloading indicator should not be visible (subscription cleaned up on selection change)
+    const reloadingVisible = await page.getByTestId('spark-reloading').isVisible()
+    expect(reloadingVisible).toBe(false)
   })
 })

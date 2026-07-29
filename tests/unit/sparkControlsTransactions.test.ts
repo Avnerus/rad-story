@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest'
 import { SparkControls, type SparkSettings } from '$lib/spark/SparkControls'
+import { buildSparkSettingsTransaction } from '$lib/studio/spark-controls/sparkSettingsTransaction'
 
 /**
  * Minimal mock of the public useTransactions() contract from @threlte/studio/extensions.
- * Tests verify that the SparkControls extension builds correct transactions.
+ * Tests verify that the production transaction helper builds correct transactions.
  */
 interface MockTransaction {
   object: object
@@ -44,35 +45,67 @@ function createMockTransactions(): MockTransactionsAPI {
   }
 }
 
-describe('SparkControls transaction semantics', () => {
-  it('settings transaction has correct shape', () => {
+describe('buildSparkSettingsTransaction (production helper)', () => {
+  it('returns correct transaction shape', () => {
     const controls = new SparkControls()
-    const transactions = createMockTransactions()
-    const oldSettings = controls.settings
+    const original = controls.settings
 
-    // Simulate what the extension does on a field edit
+    // Make a change
     ;(controls as unknown as Record<string, unknown>).blurAmount = 0.7
     const newSettings = controls.settings
 
-    const tx = transactions.buildTransaction({
-      object: controls,
-      propertyPath: 'settings',
-      value: newSettings,
-      historicValue: oldSettings,
-      createHistoryRecord: true,
-      sync: true,
-    })
-    transactions.commit([tx])
+    const tx = buildSparkSettingsTransaction(controls, newSettings, original)
 
     expect(tx.object).toBe(controls)
     expect(tx.propertyPath).toBe('settings')
     expect(tx.value).toBe(newSettings)
-    expect(tx.historicValue).toBe(oldSettings)
+    expect(tx.historicValue).toBe(original)
     expect(tx.createHistoryRecord).toBe(true)
+    expect(tx.sync).toBe(true)
+    expect(tx.value.blurAmount).toBe(0.7)
+  })
+
+  it('transaction passes through guard with sync preserved', () => {
+    const controls = new SparkControls()
+    const transactions = createMockTransactions()
+    const oldSettings = controls.settings
+
+    // Make a change
+    ;(controls as unknown as Record<string, unknown>).blurAmount = 0.7
+    const newSettings = controls.settings
+
+    const tx = transactions.buildTransaction(
+      buildSparkSettingsTransaction(controls, newSettings, oldSettings),
+    )
+    transactions.commit([tx])
+
+    expect(tx.object).toBe(controls)
+    expect(tx.propertyPath).toBe('settings')
     expect(tx.sync).toBe(true) // settings root passes through guard
     expect(tx.value.blurAmount).toBe(0.7)
   })
 
+  it('transaction helper is used by extension for field edits', () => {
+    const controls = new SparkControls()
+    const transactions = createMockTransactions()
+
+    const original = controls.settings
+    ;(controls as unknown as Record<string, unknown>).lodSplatScale = 3
+    const newSettings = controls.settings
+
+    // This is exactly what the extension does
+    const tx = transactions.buildTransaction(
+      buildSparkSettingsTransaction(controls, newSettings, original),
+    )
+    transactions.commit([tx])
+
+    expect(tx.propertyPath).toBe('settings')
+    expect(tx.value.lodSplatScale).toBe(3)
+    expect(tx.historicValue.lodSplatScale).toBe(1)
+  })
+})
+
+describe('SparkControls transaction semantics', () => {
   it('undo applies historic full settings snapshot via writable setter', () => {
     const controls = new SparkControls()
     const original = { ...controls.settings }

@@ -56,6 +56,18 @@ export class SparkReloadStatus {
     this._notify()
   }
 
+  /**
+   * Mirror status from another source (e.g. coordinator → SparkControls).
+   * Only notifies if the state actually changed.
+   */
+  update(status: ReloadStatus): void {
+    if (this._isReloading !== status.isReloading || this._error !== status.error) {
+      this._isReloading = status.isReloading
+      this._error = status.error
+      this._notify()
+    }
+  }
+
   /** Subscribe to status changes. Returns an unsubscribe function. */
   subscribe(fn: (status: ReloadStatus) => void): () => void {
     this._listeners.push(fn)
@@ -143,9 +155,9 @@ export class SparkReloadCoordinator {
         return
       }
 
-      // Notify success — caller handles attaching to scene
+      // Notify caller that mesh is ready — caller handles attaching to scene
+      // and waits for pager handoff before signalling success/fail
       this._onReloadComplete?.(mesh, generation)
-      this.status.success()
     } catch (err) {
       if (!this._destroyed && this._currentRequest?.generation === generation) {
         const message = err instanceof Error ? err.message : String(err)

@@ -21,8 +21,34 @@
     dispose: () => void
     applySettings: (oldSettings: SparkSettings, newSettings: SparkSettings) => boolean
     reconfigureMaxPagedSplats: (settings: SparkSettings) => void
+    pager?: unknown
+    realRenderer?: object | null
   } | null>(null)
   let lastSettings: SparkSettings | null = $state(null)
+
+  /**
+   * Return the driving (real-camera) renderer's pager object for pager
+   * handoff verification. Returns undefined if not yet attached or disposed.
+   */
+  export function getPagerIdentity(): unknown {
+    return (handle as Record<string, unknown>)?.pager ?? undefined
+  }
+
+  /**
+   * Trigger an update cycle on the driving renderer. Used in stub builds
+   * to drive pager handoff. No-op in production (real Spark handles this
+   * automatically during render). The stub's SparkRenderer.update() takes
+   * no arguments; the real SparkRenderer.update() requires { scene, camera }
+   * and is called automatically by the render loop.
+   */
+  export function triggerRendererUpdate(): void {
+    const r = (handle as Record<string, unknown>)?.realRenderer as { update?: (...args: unknown[]) => void } | null
+    // Only call no-arg update (stub). Real Spark's update requires args
+    // and is called automatically during render.
+    if (r?.update && (r as Record<string, unknown>).__spark_stub) {
+      r.update()
+    }
+  }
 
   onMount(() => {
     const { scene, renderer, invalidate } = threlte
@@ -49,6 +75,12 @@
       dispose: studioHandle.dispose,
       applySettings: studioHandle.applySettings,
       reconfigureMaxPagedSplats: studioHandle.reconfigureMaxPagedSplats,
+      get pager() {
+        return studioHandle.realRenderer?.pager
+      },
+      get realRenderer() {
+        return studioHandle.realRenderer
+      },
     }
 
     if (sparkControls) {

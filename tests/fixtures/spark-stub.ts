@@ -5,6 +5,11 @@
  * a large remote RAD file and GPU-specific WebGL behavior).
  *
  * Activate with: VITE_E2E_STUB_SPARK=true
+ *
+ * Pager handoff model: The driving renderer (enableDriveLod: true) discovers
+ * active SplatMesh instances during its update cycle and assigns its pager
+ * to each mesh's `paged.pager`. This mirrors real Spark behavior where pager
+ * attachment occurs on the first render/update after the mesh is added to the scene.
  */
 
 import { Object3D } from 'three'
@@ -12,6 +17,11 @@ import { Object3D } from 'three'
 // Monotonic identity counter for pager/renderer instances (for e2e identity tests)
 let _pagerIdCounter = 0
 let _rendererIdCounter = 0
+
+// Instance tracking for e2e diagnostics
+const _allPagers: SplatPager[] = []
+const _allRenderers: SparkRenderer[] = []
+const _allMeshes: SplatMesh[] = []
 
 /** Stub pager that tracks identity and capacity. */
 export class SplatPager {
@@ -22,6 +32,7 @@ export class SplatPager {
   constructor(options?: { maxSplats?: number }) {
     this.id = ++_pagerIdCounter
     this.maxSplats = options?.maxSplats ?? 16 * 65536
+    _allPagers.push(this)
   }
 
   dispose(): void {
@@ -79,7 +90,10 @@ export class SparkRenderer extends Object3D {
 
   constructor(_options?: Record<string, unknown>) {
     super()
-    _rendererIdCounter++ // keep counter ticking
+    ++_rendererIdCounter // keep counter ticking for diagnostics
+    _allRenderers.push(this)
+    // Marker so production code can detect stub builds
+    ;(this as Record<string, unknown>).__spark_stub = true
     // Create a stub pager with capacity from options
     const maxPaged = typeof _options?.maxPagedSplats === 'number' ? _options.maxPagedSplats : 0
     if (maxPaged > 0) {
@@ -89,7 +103,7 @@ export class SparkRenderer extends Object3D {
     if (_options) {
       // Copy known fields from options
       for (const key of Object.keys(this) as (keyof SparkRenderer)[]) {
-        if (_options[key] !== undefined) {
+        if (_options[key] !== undefined && key !== 'id') {
           ;(this as Record<string, unknown>)[key] = _options[key]
         }
       }
@@ -106,18 +120,42 @@ export class SparkRenderer extends Object3D {
   }
 
   onBeforeRender(_camera: unknown, _scene: unknown): void {
-    // no-op stub
+    // no-op stub — pager handoff is done via update()
+  }
+
+  /**
+   * Stub update cycle: driving renderer assigns its pager to all
+   * SplatMesh instances that don't yet have a pager attached.
+   * This models the real Spark behavior where pager attachment happens
+   * during the first render/update after mesh is added to the scene.
+   *
+   * In the stub, this is called by the waitForPagerHandoff RAF loop
+   * to simulate the render-cycle pager assignment.
+   * Uses global _allMeshes tracking since the driving renderer is
+   * not added to the scene (unlike the editor renderer).
+   */
+  update(): void {
+    if (!this.enableDriveLod || !this.pager || this.pager.disposed) return
+
+    for (const mesh of _allMeshes) {
+      if (mesh.type === 'SplatMesh' && mesh.paged && !mesh.paged.pager) {
+        mesh.paged.pager = this.pager
+      }
+    }
   }
 }
 
 export class SplatMesh extends Object3D {
+  declare type: string
   initialized: Promise<SplatMesh>
   paged: PagedSplats | undefined
 
   constructor(_options?: Record<string, unknown>) {
     super()
-    // Resolve immediately — stub mesh is always "initialized"
-    this.initialized = Promise.resolve(this)
+    this.type = 'SplatMesh'
+    _allMeshes.push(this)
+    // Resolve after a microtask — gives UI time to render "reloading" state
+    this.initialized = Promise.resolve().then(() => this)
     // Create a stub PagedSplats (pager will be set by the renderer during update)
     if (_options?.paged) {
       this.paged = new PagedSplats()
@@ -143,9 +181,43 @@ export function isMobile(): boolean {
   return /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
 }
 
+/**
+ * Stub diagnostics exposed on window for e2e verification.
+ * Provides access to renderer/pager/mesh identities, generation, and disposal state.
+ */
+interface StubDiagnostics {
+  /** All SplatPager instances ever created (includes disposed ones). */
+  pagers: SplatPager[]
+  /** All SparkRenderer instances ever created (includes disposed ones). */
+  renderers: SparkRenderer[]
+  /** All SplatMesh instances ever created (includes disposed ones). */
+  meshes: SplatMesh[]
+  /** Current driving renderer's pager ID (or 0 if none). */
+  drivingPagerId: number
+}
+
 /** Marker: proves the running build uses the Spark stub. */
 ;(() => {
   if (typeof window !== 'undefined') {
     ;(window as unknown as Record<string, unknown>).__spark_stub = true
+
+    Object.defineProperty(window, '__spark_stub_diagnostics', {
+      configurable: true,
+      get(): StubDiagnostics {
+        return {
+          pagers: _allPagers.slice(),
+          renderers: _allRenderers.slice(),
+          meshes: _allMeshes.slice(),
+          get drivingPagerId() {
+            for (const r of _allRenderers) {
+              if (r.enableDriveLod && r.pager && !r.pager.disposed) {
+                return r.pager.id
+              }
+            }
+            return 0
+          },
+        }
+      },
+    })
   }
 })()

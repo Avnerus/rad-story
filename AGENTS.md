@@ -16,10 +16,10 @@ A client-side Threlte/Svelte 5/TypeScript web app for designing scroll-based sto
 - `src/lib/studio/scroll-animator/FixedToolbarPane.svelte` — Local replacement for Studio's `DropDownPane`. Uses public `ToolbarButton` + `ToolbarItem` from `@threlte/studio/extend`, `@floating-ui/dom` (direct dependency) for `computePosition` with `strategy: 'fixed'`, and a simple portal to `document.body`. See "Studio Extension Pane" section below.
 - `src/lib/studio/scroll-animator/scrollAnimatorRuntime.ts` — Shared runtime bridge: reactive percentage from ScrollTrigger, `jumpToPercentage` via trigger's measured range, attach/detach lifecycle.
 - `src/lib/studio/scroll-animator/transactionGuard.ts` — Suppresses source sync for ScrollAnimator transforms (only `keyframes` persists) and SparkControls transforms (only `settings` root and individual field names persist). Uses narrow structural types (no private imports).
-- `src/lib/studio/spark-controls/SparkControlsExtension.svelte` — Studio extension: fixed toolbar pane with individual numeric/boolean/nullable inputs for all 22 Spark settings. Commits edits via `transactions.buildTransaction()` with source sync. Uses `mdiTune` icon.
+- `src/lib/studio/spark-controls/SparkControlsExtension.svelte` — Studio extension: fixed toolbar pane with individual numeric/boolean/nullable inputs for all 22 Spark settings. Uses `buildSparkSettingsTransaction()` helper from `sparkSettingsTransaction.ts` to build transaction objects. Uses `mdiTune` icon.
+- `src/lib/studio/spark-controls/sparkSettingsTransaction.ts` — Production helper for building Spark settings transactions (`buildSparkSettingsTransaction()`). Used by the extension and tested independently.
 - `src/lib/studio/spark-controls/SparkFixedToolbarPane.svelte` — Fixed toolbar pane for Spark controls (separate from ScrollAnimator's pane).
-- `src/lib/spark/SparkReloadRuntime.ts` — `SparkReloadCoordinator` class (per-instance, not singleton) for race-safe SplatMesh reload coordination. Uses monotonically increasing generation IDs: latest request wins, superseded requests disposed, component destruction aborts in-flight operations. No arbitrary timing delays. Completion tied to `SplatMesh.initialized`. Exposes `SparkReloadStatus` (subscribe/unsubscribe) for pane progress/error UI.
-- `src/lib/spark/SparkReloadStatusBridge.ts` — Pass-through bridge that mirrors coordinator status to `SparkControls.reloadStatus` so the extension pane can read it.
+- `src/lib/spark/SparkReloadRuntime.ts` — `SparkReloadCoordinator` class (per-instance, not singleton) for race-safe SplatMesh reload coordination. Uses monotonically increasing generation IDs: latest request wins, superseded requests disposed, component destruction aborts in-flight operations. No arbitrary timing delays. Mesh initialization followed by async pager-handoff wait (RAF-based, bounded, cancellation-aware). `SparkReloadStatus` (subscribe/unsubscribe) for pane progress/error UI.
 - `src/lib/studio/editor-camera/editorCameraControlsBridge.ts` — Future-facing, typed bridge for Studio editor CameraControls tuning. Currently unattached (no supported public path to the CameraControls instance). Documented in code.
 - `src/lib/spark/createSparkStudioRenderer.ts` — Factory for dual SparkRenderer setup. `applyChangedSettings()` applies only changed fields with field-level dirty classification (shader/sort/LOD/foveation). `reconfigureMaxPagedSplats()` recreates both renderers with the complete current settings snapshot so ordinary edits survive capacity changes.
 - `src/lib/spark/deviceProfile.ts` — Mobile/iOS detection + Spark performance profile. Cone angles are full-width **degrees** (Spark 2.1 API: default `coneFov0: 90`, `coneFov: 120`).
@@ -93,6 +93,8 @@ Keyframe mutations use `transactions.buildTransaction()` which derives source me
 
 **Editor pane:** The `SparkControlsExtension` provides a fixed toolbar pane (icon: `mdiTune`, label: "Spark Controls") with individual labeled inputs for all 22 settings. Numeric fields use `<input type="number">`, booleans use checkboxes, and `lodSplatCount` uses a text input with "auto" placeholder for null. Edits are committed via `transactions.buildTransaction()` with source sync on the `settings` property. The pane is active only when the Spark object is selected.
 
+**Reload status subscription:** `SparkControls.reloadStatus` is a `SparkReloadStatus` instance with `subscribe(fn)` / `unsubscribe()` API. The extension subscribes when a Spark controller is selected and cleans up on selection change/destroy. Status updates (`isReloading`, `error`) drive the pane's progress/error indicators reactively. The coordinator's status is mirrored via `handleReloadStatus()` → `sparkControls.reloadStatus.update()`.
+
 **Source sync:** The `<T is={sparkControls} settings={sparkControls.settings} />` pattern exposes a writable `settings` property that Threlte Studio source syncs as a whole object. The transaction guard whitelists `settings` (root) and individual field names, while blocking transforms and nested paths like `settings.lodSplatScale`.
 
 **Mandatory fields (from device profile):**
@@ -114,7 +116,7 @@ Keyframe mutations use `transactions.buildTransaction()` which derives source me
 - Changed fields are classified: shader-only (mark dirty), sort-affecting (mark sortDirty), LOD budget (mark lodDirty), foveation (mark lodDirty), LOD toggle (mark lodDirty).
 - `lodSplatCount` null → `undefined` on renderer (restores automatic/platform default).
 - `maxPagedSplats` requires controlled renderer/pager recreation via `reconfigureMaxPagedSplats()`. This disposes both SparkRenderer instances and creates new ones with the new capacity. The complete current settings snapshot is applied to the new renderers so ordinary edits survive. A recreation lock prevents concurrent rapid edits.
-- After renderer recreation, the bridge calls `onMeshReload(radUrl)` which invokes `SparkSplats.reload()`. The `SparkReloadCoordinator` creates a new `SplatMesh`, awaits `SplatMesh.initialized`, then notifies completion. The old mesh is disposed from the `SplatWrapper`, and the new mesh is added. The `SplatWrapper` (and its authored transform) persists. Reload status (`isReloading`, `error`) flows through `SparkReloadStatus` → `SparkReloadStatusBridge` → `SparkControls.reloadStatus` → pane UI. Camera, ScrollAnimators, scroll position, and unrelated scene objects are preserved.
+- After renderer recreation, the bridge calls `onMeshReload(radUrl)` which invokes `SparkSplats.reload()`. The `SparkReloadCoordinator` creates a new `SplatMesh`, awaits `SplatMesh.initialized`, then `SparkSplats` attaches the mesh to the wrapper and waits for pager handoff (`mesh.paged.pager === realRenderer.pager`) via RAF polling with bounded timeout and cancellation. Only after pager identity is confirmed does `status.success()` fire. The old mesh is disposed from the `SplatWrapper`, and the new mesh is added. The `SplatWrapper` (and its authored transform) persists. Reload status (`isReloading`, `error`) flows through coordinator `SparkReloadStatus` → `handleReloadStatus` → `SparkControls.reloadStatus.update()` → extension subscription. Camera, ScrollAnimators, scroll position, and unrelated scene objects are preserved.
 
 **Cone angle defaults:** Desktop uses Spark 2.1 defaults (`coneFov0: 90`, `coneFov: 120`). Mobile uses slightly tighter cones (`coneFov0: 70`, `coneFov: 110`). These are full-width **degrees**, not the accidental sub-degree values from an old API.
 
@@ -145,10 +147,12 @@ Keyframe mutations use `transactions.buildTransaction()` which derives source me
 4. Bridge calls `studioHandle.reconfigureMaxPagedSplats(newSettings)` (recreates both renderers).
 5. Bridge calls `onMeshReload(radUrl)` → `SparkSplats.reload(url)`.
 6. `SparkReloadCoordinator.requestReload()` creates new mesh, awaits `initialized`.
-7. On completion, old mesh is disposed from wrapper, new mesh is added.
-8. `SparkReloadStatus.success()` fires → pane clears progress indicator.
+7. `SparkSplats.onReloadComplete` attaches new mesh to wrapper, then calls `waitForPagerHandoff()`.
+8. `waitForPagerHandoff()` polls via RAF for `mesh.paged.pager === realRenderer.pager` (bounded 5s, cancellation-aware).
+9. On pager match confirmed, `SparkReloadStatus.success()` fires → pane clears progress indicator.
+10. On timeout/failure, `SparkReloadStatus.fail()` fires → pane shows error.
 
-**Note on pager readiness:** `SplatMesh.initialized` resolves when the mesh is constructed, but pager attachment (`mesh.paged.pager === renderer.pager`) occurs on the next render/update cycle. The reload completion signal is tied to `initialized`, not pager attachment. In the stub build, `SplatMesh.initialized` resolves immediately.
+**Pager handoff and reload completion:** `SplatMesh.initialized` resolves when the mesh is constructed, but pager attachment (`mesh.paged.pager === renderer.pager`) occurs on the next render/update cycle. The `SparkSplats.waitForPagerHandoff()` method waits via RAF polling (bounded by 5s timeout, cancellation-aware) for the mesh's pager to match the driving renderer's pager. Only after pager identity is confirmed and capacity verified does `status.success()` fire. On timeout or failure, `status.fail()` is called. Superseded generations cancel the wait and dispose their replacement mesh. In the stub build, the driving renderer's `update()` method assigns its pager to unassigned `SplatMesh` instances, and `SplatMesh.initialized` resolves after a microtask.
 
 ## Removed Features
 
@@ -216,8 +220,8 @@ Preferred for manual Studio authoring verification. Loads quickly, renders a sma
 Quick manual check with `playwright-cli`:
 1. `playwright-cli open http://localhost:5173/` (after `npm run dev`)
 2. Fill the URL input with the lightweight RAD URL, click Start
-3. `playwright-cli screenshot` — confirms Baby Yoda renders at scroll 0%
-4. `playwright-cli eval "window.scrollTo(0, document.body.scrollHeight)"` then `playwright-cli screenshot` — confirms top-down grid view at scroll 100%
+3. Screenshot via `run-code` (see E2E Testing section below) — confirms Baby Yoda renders at scroll 0%
+4. `playwright-cli eval "window.scrollTo(0, document.body.scrollHeight)"` then screenshot via `run-code` — confirms top-down grid view at scroll 100%
 5. Toggle Editor Camera. Prefer native pointer commands (e.g. `playwright-cli click "getByRole('button', { name: 'Editor Camera' })"`). If the real WebGL session stalls the automation tool, a synthetic `dispatchEvent` via evaluate can be used as a handler-level diagnostic (it proves the click handler fires but does not verify hit testing/pointer actionability):
    `playwright-cli eval "var btn=document.querySelector('button[aria-label=\"Editor Camera\"]'); btn.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,view:window}))"`
    Then check: `playwright-cli eval "document.querySelector('[data-testid=camera-state]').getAttribute('data-active')"`
@@ -250,9 +254,22 @@ https://storage.googleapis.com/forge-dev-public/asundqui/rad/260217/cozy-spacesh
 
 **Pointer evidence:** In the Spark-stub e2e tests, native Playwright `.click()` works reliably for hierarchy items, toolbar buttons, and canvas clicks. Some toolbar buttons inside the canvas overlay (Static State, Inspector) use `evaluate()`-based DOM `.click()` because native clicks are intercepted by the canvas. With real splat rendering in headless Chromium, native clicks may time out due to GPU stalls; synthetic `dispatchEvent` via `page.evaluate()` can diagnose handler execution but does not verify hit testing/pointer actionability. Manual verification with `playwright-cli` should prefer native pointer commands.
 
-For real-splat visual verification, use `playwright-cli screenshot` with the lightweight RAD URL (see above). Screenshots capture the compositor output correctly even when `readPixels()` returns black in headless mode.
+For real-splat visual verification, `playwright-cli screenshot` times out (5s default) when GPU stalls block the compositor. Use `run-code` instead:
 
-**Spark controls e2e:** The Spark object appears in the Studio hierarchy and is selectable. The Spark Controls pane opens via toolbar button, shows all 22 individually labeled fields (`data-testid="spark-field-{name}"`), and supports editing numeric, boolean, nullable, and cone-angle fields. Source-sync-unavailable warning is verified. Pane open/close via Escape key is tested. The `__spark_stub` marker on `window` proves the stub build is active. Capacity edits verify normalization to 65,536 multiples. Reload status (`spark-reloading`, `spark-error`) is driven by the coordinator's `SparkReloadStatus`.
+```bash
+cat > .playwright-cli/ss.js << 'EOF'
+async (page) => {
+  await page.screenshot({ path: '/tmp/screenshot.png', timeout: 30000 });
+}
+EOF
+playwright-cli run-code --filename=.playwright-cli/ss.js
+```
+
+This calls `page.screenshot()` directly with a configurable timeout, bypassing the playwright-cli default. `canvas.toDataURL()` returns black in headless Chromium (known `readPixels` limitation) — only the Playwright compositor screenshot captures real rendering.
+
+**Spark controls e2e:** The Spark object appears in the Studio hierarchy and is selectable. The Spark Controls pane opens via toolbar button, shows all 22 individually labeled fields (`data-testid="spark-field-{name}"`), and supports editing numeric, boolean, nullable, and cone-angle fields. Source-sync-unavailable warning is verified. Pane open/close via Escape key is tested. The `__spark_stub` marker on `window` proves the stub build is active. Capacity edits verify normalization to 65,536 multiples. Reload status (`spark-reloading`, `spark-error`) is driven by the coordinator's `SparkReloadStatus` via reactive subscription on `SparkControls.reloadStatus`.
+
+**Stub capacity e2e:** The stub models pager handoff: the driving renderer's `update()` assigns its pager to unassigned `SplatMesh.paged.pager`. `__spark_stub_diagnostics` on `window` exposes renderer/pager/mesh identities, disposal state, and driving pager ID. Capacity e2e tests assert: old/new renderer IDs differ, old/new pager IDs differ and old is disposed, old/new mesh IDs differ, new mesh's pager matches driving renderer's pager, capacity equals normalized input, rapid edits settle on final capacity, and wrapper transform + other settings persist across reload.
 
 **Debugging e2e failures with playwright-cli:** When e2e tests fail with unexpected errors, the fastest diagnosis is to rebuild with the stub (`VITE_E2E_STUB_SPARK=true npx vite build`), start a preview (`npx vite preview --port 4173`), then use `playwright-cli` to manually navigate and check `playwright-cli console` for runtime errors. Common pitfalls include stub methods missing from `SparkRenderer` (e.g. `setDirty()`, `onBeforeRender()`) or `Object3D` property conflicts (e.g. `id` is a non-configurable getter on `Object3D`).
 

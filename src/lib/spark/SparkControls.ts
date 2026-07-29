@@ -12,9 +12,20 @@
  * are clamped or rejected.
  */
 import { Object3D } from 'three'
+import { SparkReloadStatus } from './SparkReloadRuntime'
 
 // Spark page size constant
 export const SPARK_PAGE_SIZE = 65_536
+
+/**
+ * Reload status snapshot — exported for consumers that need the type.
+ */
+export interface ReloadStatus {
+  /** True while a reload request is in flight. */
+  isReloading: boolean
+  /** Error message from the latest failed reload, or empty string. */
+  error: string
+}
 
 // ---------------------------------------------------------------------------
 // Settings type
@@ -223,8 +234,11 @@ export class SparkControls extends Object3D {
   private _settings: SparkSettings
   private _listeners: SettingsChangeHandler[] = []
 
-  /** Reload status set by the scene's SparkReloadStatusBridge. Read by the Spark Controls pane. */
-  reloadStatus = { isReloading: false, error: '' as string }
+  /**
+   * Instance-owned reload status. The Spark Controls pane subscribes to this
+   * to drive its progress/error UI reactively.
+   */
+  reloadStatus = new SparkReloadStatus()
 
   constructor(initial?: Partial<SparkSettings>) {
     super()
@@ -412,9 +426,10 @@ export class SparkControls extends Object3D {
   }
 
   /**
-   * Dispose: clear all listeners.
+   * Dispose: clear all listeners and reload status.
    */
   dispose(): void {
     this._listeners.length = 0
+    this.reloadStatus.clear()
   }
 }

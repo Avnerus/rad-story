@@ -10,7 +10,6 @@
   import { scrollAnimatorRuntime } from '$lib/studio/scroll-animator/scrollAnimatorRuntime'
   import type { DeviceProfile } from '$lib/types'
   import { SparkControls } from '$lib/spark/SparkControls'
-  import { SparkReloadStatusBridge } from '$lib/spark/SparkReloadStatusBridge'
   import SparkSplats from './SparkSplats.svelte'
   import SparkStudioBridge from './SparkStudioBridge.svelte'
 
@@ -78,14 +77,22 @@
 
   // Mesh reload callback — wired from SparkSplats to SparkStudioBridge
   let splatsRef: { reload: (url: string) => Promise<void> } | null = null
+  // Bridge ref for pager identity and renderer update
+  let bridgeRef: { getPagerIdentity: () => unknown; triggerRendererUpdate: () => void } | null = null
 
-  // Reload status bridge: connects SparkSplats coordinator → SparkControls.reloadStatus
-  const reloadStatusBridge = new SparkReloadStatusBridge()
-
+  // Reload status: SparkSplats coordinator writes to sparkControls.reloadStatus directly
   function handleReloadStatus(status: import('$lib/spark/SparkReloadRuntime').ReloadStatus): void {
-    reloadStatusBridge.update(status)
-    // Mirror to SparkControls so the extension pane can read it
-    sparkControls.reloadStatus = status
+    sparkControls.reloadStatus.update(status)
+  }
+
+  // Pager identity: returns the driving renderer's pager for handoff verification
+  function getPagerIdentity(): unknown {
+    return bridgeRef?.getPagerIdentity() ?? undefined
+  }
+
+  // Trigger renderer update (drives pager handoff in stub builds)
+  function triggerRendererUpdate(): void {
+    bridgeRef?.triggerRendererUpdate()
   }
 
   // Scene-wide animator playback: traverse scene and apply to every branded ScrollAnimator
@@ -170,7 +177,6 @@
       scrollTrigger = null
     }
     sparkControls.dispose()
-    reloadStatusBridge.clear()
   })
 </script>
 
@@ -197,12 +203,12 @@
   <T is={cameraTarget} name="CameraTarget" />
 </T>
 
-<SparkStudioBridge {profile} {sparkControls} radUrl={url} onMeshReload={splatsRef?.reload} />
+<SparkStudioBridge bind:this={bridgeRef} {profile} {sparkControls} radUrl={url} onMeshReload={splatsRef?.reload} />
 
 <!-- SparkControls: Studio-editable Spark quality/LOD settings -->
 <T is={sparkControls} name="Spark" settings={sparkControls.settings} />
 
-<SparkSplats bind:this={splatsRef} {url} onStatusChange={handleReloadStatus} />
+<SparkSplats bind:this={splatsRef} {url} onStatusChange={handleReloadStatus} pagerIdentity={getPagerIdentity} triggerUpdate={triggerRendererUpdate} />
 
 <!-- Visually hidden debug element for e2e tests -->
 <div
