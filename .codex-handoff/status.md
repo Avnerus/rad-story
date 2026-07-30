@@ -1,120 +1,100 @@
-# Status: Final follow-up mission — closed
+# Status: Final verification correction — masked assertions removed
 
-## 1. Exact-one camera resolution
+## 1. Corrected brand lookup and independent scene count
 
-`CameraFrustumHelper.svelte` now resolves **all** descendant `PerspectiveCamera` objects via `findAllDescendantCameras()` and creates a helper **only** when exactly one is found. Zero or multiple matches produce no custom helper. Direct `PerspectiveCamera` selection is still excluded (Studio's built-in Helpers extension handles that).
-
-**Evidence:**
-- Source: `if (cameras.length !== 1) return` in `$effect` block
-- Unit tests: `tests/unit/cameraFrustumHelper.test.ts` — 8 tests covering zero/one/multiple camera resolution, exact-one contract assertions
-- E2e tests: `selecting opted-in animator creates helper`, `selecting unrelated object removes helper`, `selecting PerspectiveCamera directly creates no custom helper`
-
-## 2. Stub-only diagnostic gating, safe teardown, exact fields
-
-`window.__camera_frustum_helper_diagnostic` is now installed **only** when `__spark_stub === true` (e2e stub builds). On `onDestroy`, the diagnostic is removed only if it still references this component's `exposeHelperDiagnostic` closure — old instances cannot delete newer diagnostics.
-
-Diagnostic fields:
-```ts
-{
-  ownedHelperCount: number,      // branded helpers in scene
-  helperExists: boolean,          // this instance's helper active
-  targetCameraType: string | null,
-  targetCameraUuid: string | null,
-  helperParentUuid: string | null,
-  helpersCreated: number,         // lifetime counter
-  helpersDisposed: number,        // lifetime counter
-}
-```
+`CameraFrustumHelper.svelte` now counts branded helpers by reading `child.userData[HELPER_BRAND]` from `scene.children` directly. The previous code checked `child[HELPER_BRAND]` on the Object3D itself (not `userData`), which never matched. The component-state fallback (`if (ownedCount === 0 && helper && helper.parent) ownedCount = 1`) has been removed entirely. The diagnostic now independently inspects scene state.
 
 **Evidence:**
-- Source: `if (typeof window !== 'undefined' && __spark_stub === true)` gate
-- Source: `if (current === exposeHelperDiagnostic) delete ...` safe teardown
-- E2e: `diagnostic is available in stub build`, `diagnostic fields have correct types`, `diagnostic cleaned up after scene remount`
+- Source: `for (const child of scene.children) { if (child.userData[HELPER_BRAND] === true) ownedCount++ }`
+- No fallback branch remains
+- E2e: `ownedHelperCount === 1` on select, `0` on deselect, `3/3` after 3 cycles
 
-## 3. Helper ownership/disposal lifecycle and concrete assertions
+## 2. Exact parent/target identity evidence
 
-Owned helpers are branded with `userData.__camera_frustum_helper_owned = true`. The diagnostic reports `ownedHelperCount` by scanning scene children for the brand, with a fallback check on `helper.parent`. `helpersCreated`/`helpersDisposed` counters track lifetime disposal.
+The diagnostic now exposes `sceneUuid` (the Three.js scene root UUID). SceneRuntime exposes `__stub_scene_uuid` and `__stub_app_camera_uuid` in stub builds. Tests assert:
+- `helperParentUuid === sceneUuid` (exact scene root identity)
+- `targetCameraUuid === appCameraUuid` (exact app camera identity)
 
 **Evidence:**
-- E2e: `repeated selection/deselection does not accumulate helpers` — asserts `ownedHelperCount: 1` on select, `0` on deselect, and `helpersCreated === 3`, `helpersDisposed === 3` after 3 cycles
-- E2e: `scene remount cleans up helper` — asserts `ownedHelperCount: 0`, fresh counters after remount
-- E2e: `helper targets exact camera identity` — UUID stable across re-selections
-- E2e: `helper parent is scene root` — `helperParentUuid` non-null
+- E2e: `helper parent is exact scene root` — `diag.helperParentUuid === sceneUuid`
+- E2e: `helper targets exact app-camera identity` — `diag.targetCameraUuid === appCameraUuid`
 
-## 4. Scene-object isolation evidence
+## 3. Production resolver extraction and direct unit coverage
 
-`tests/unit/sceneObjects.test.ts` (15 tests):
-- Two `createSceneObjects()` calls produce distinct wrappers, cameras, targets, animators, and SparkControls
-- Mutating `blurAmount` on one SparkControls does not affect the other
-- Mutating keyframes on one animator does not affect the other
-- Mutating wrapper position does not affect another wrapper
-- `SparkControls.dispose()` clears listeners and is idempotent
+`findAllDescendantCameras()` extracted into `src/lib/studio/scroll-animator/descendantCameraResolver.ts`. Both `CameraFrustumHelper.svelte` and `tests/unit/cameraFrustumHelper.test.ts` import from the production module. No copied logic remains in tests.
 
-## 5. Baby Yoda wrapper Studio source-target and transform-persistence evidence
+**Evidence:**
+- Source: `import { findAllDescendantCameras } from './descendantCameraResolver'` in CameraFrustumHelper
+- Source: `import { findAllDescendantCameras } from '$lib/studio/scroll-animator/descendantCameraResolver'` in test
+- Unit: 8 tests covering zero/one/multiple/deeply nested cases against the production function
 
-**Source target:** E2e test inspects `wrapper.userData.threlteStudio` and deep-searches for any string containing `baby_yoda`. Confirms the literal `<T is={splatWrapper}>` in `baby_yoda.svelte` produces Studio metadata targeting that file.
+## 4. Strict Baby Yoda source-target assertion
 
-**Transform persistence across reload:** E2e test sets unmistakable wrapper transform `(7, 13, 21) / (0.3, 0.5, 0.7) / (1.5, 1.5, 1.5)`, triggers capacity reload, and asserts all 9 values preserved exactly.
+The `userData.threlteStudio` test now throws if the wrapper is missing, if `threlteStudio` metadata is absent, or if no string containing `baby_yoda` is found in the metadata tree. No fallback to generic key checks.
 
-**Wrapper after remount:** E2e test verifies wrapper exists and is accessible after scene navigation away and back.
+**Evidence:**
+- E2e: `SplatWrapper has Studio source metadata targeting baby_yoda.svelte` — unconditional `expect(normalized).toContain('baby_yoda.svelte')`
 
-## 6. SparkControls exactly-once disposal evidence
+## 5. Declarative wrapper transform values and reload/remount assertions
 
-- Unit: `SparkControls.dispose()` clears listeners, second dispose is safe, no spurious notifications after dispose
-- E2e: `SparkControls instance recreated after scene remount` — Spark object present in hierarchy before and after remount cycle
+`baby_yoda.svelte` declares explicit identity transform on the SplatWrapper: `<T is={splatWrapper} name="SplatWrapper" position={[0,0,0]} rotation={[0,0,0]} scale={[1,1,1]} />`.
 
-## 7. Editor-camera/app-camera regression evidence
+Two tests verify persistence:
+- **Capacity reload:** Sets unmistakable non-default transform `(7,13,21)/(0.3,0.5,0.7)/(1.5,1.5,1.5)`, triggers reload, asserts all 9 values preserved exactly
+- **Scene remount:** Asserts full position/rotation/scale before and after SPA navigation — declarative values persist from scene source
 
-E2e test `app-camera debug coordinates remain correct while editor camera is active`:
-- Captures app camera position at scroll 0%
-- Enables editor camera → app camera debug X/Y/Z unchanged, `data-active` is `"false"`
-- Disables editor camera → `data-active` is `"true"`, app camera position unchanged
-- Proves app-camera look-at/debug is never overwritten by editor camera orientation
+**Evidence:**
+- E2e: `wrapper transform persists across capacity reload` — `expect(wrapperAfter).toEqual(wrapperTransform)`
+- E2e: `wrapper declarative transform persists across scene remount` — `expect(wrapperAfter).toEqual(wrapperBefore)`
 
-## 8. Warning correction and exact final check output
+## 6. Exactly-once SparkControls lifecycle evidence
 
-**Fix:** `profile` in App.svelte uses `$state.raw(getDeviceProfile())` (immutable after startup). Scene files use `untrack(() => profile)` to explicitly capture the initial value for `createSceneObjects()`. The `--compiler-warnings "state_referenced_locally:ignore"` flag was removed from `package.json` check script.
+Stub module (`spark-stub.ts`) now tracks SparkControls disposal via `__spark_stub_register_controls` (called in SceneRuntime `onMount`) and `__spark_stub_record_controls_disposal` (called in SceneRuntime `onDestroy` before `dispose()`). The `sparkControlsDisposals` map is exposed in `__spark_stub_diagnostics`.
 
-**Exact output:**
-```
-svelte-check found 0 errors and 0 warnings
-```
+Test uses SPA navigation (Go Home button + `pushState`/`popstate`) to preserve stub module state across the lifecycle check.
 
-## 9. Changed files and focused rationale
+**Evidence:**
+- E2e: `old SparkControls disposed exactly once, new instance distinct` — old ID has count 1 after unmount, new ID has count 0 after remount
+
+## 7. Precisely scoped editor-camera evidence
+
+Test asserts app-camera debug coordinates (X/Y/Z) and `data-active` attribute remain correct when editor camera is toggled on/off. The test name and status wording now precisely describe what is proven: app-camera position and active ownership, not editor-camera orientation.
+
+**Evidence:**
+- E2e: `app-camera debug coordinates and active ownership remain correct while editor camera is active` — X/Y/Z stable, `data-active` toggles `true → false → true`
+- Source: `SceneRuntime` always calls `appCamera.lookAt(_targetWorld)` — never touches editor camera
+
+## 8. Changed files and rationale
 
 | File | Change |
 |------|--------|
-| `src/lib/studio/scroll-animator/CameraFrustumHelper.svelte` | Exact-one camera resolution via `findAllDescendantCameras()`. Branded owned helpers (`userData.__camera_frustum_helper_owned`). Stub-gated diagnostic with safe teardown. Lifecycle counters. |
-| `src/App.svelte` | `$state.raw()` for immutable device profile — eliminates reactive propagation to children. |
-| `src/lib/components/RadStoryScene.svelte` | `untrack(() => profile)` for explicit initial-value capture. |
-| `src/lib/scenes/baby_yoda.svelte` | `untrack(() => profile)` for explicit initial-value capture. |
-| `package.json` | Removed `--compiler-warnings "state_referenced_locally:ignore"` from check script. |
-| `AGENTS.md` | Corrected `createSceneObjects(profile)` signature (removed stale `opts`). Updated CameraFrustumHelper docs: exact-one contract, branded helpers, stub-only diagnostic with exact fields, safe teardown. |
-| `tests/unit/cameraFrustumHelper.test.ts` | **New** — 9 unit tests for exact-zero/one/multiple camera resolution and disposal. |
-| `tests/unit/sceneObjects.test.ts` | **New** — 15 unit tests for factory isolation, mutation independence, and SparkControls disposal. |
-| `tests/e2e/scene-routing.spec.ts` | Enhanced with: exact helper count/identity/lifecycle assertions, diagnostic lifecycle tests, Baby Yoda wrapper Studio metadata test, wrapper transform persistence across reload, wrapper after remount, SparkControls disposal, editor-camera/app-camera regression. |
+| `src/lib/studio/scroll-animator/descendantCameraResolver.ts` | **New** — extracted `findAllDescendantCameras()` as pure production module |
+| `src/lib/studio/scroll-animator/CameraFrustumHelper.svelte` | Import resolver from module; fix brand check to `child.userData[HELPER_BRAND]`; remove fallback; add `sceneUuid` to diagnostic |
+| `src/lib/components/SceneRuntime.svelte` | Expose `__stub_scene_uuid` and `__stub_app_camera_uuid` in stub builds; wire SparkControls registration/disposal hooks |
+| `src/lib/scenes/baby_yoda.svelte` | Add declarative identity transform `position={[0,0,0]} rotation={[0,0,0]} scale={[1,1,1]}` to SplatWrapper `<T>` |
+| `tests/fixtures/spark-stub.ts` | Add `_sparkControlsDisposals` map, `__spark_stub_register_controls`, `__spark_stub_record_controls_disposal`, `sparkControlsDisposals` in diagnostics |
+| `tests/unit/cameraFrustumHelper.test.ts` | Import from production module instead of copying logic |
+| `tests/e2e/scene-routing.spec.ts` | Add `sceneUuid`/`appCameraUuid` identity assertions; remove conditional source-target fallback; add declarative transform remount test; add SparkControls lifecycle test with SPA navigation; narrow editor-camera test scope |
+| `AGENTS.md` | Document resolver module, corrected brand lookup, `sceneUuid` field, SparkControls disposal tracking |
 
-## 10. Acceptance checklist mapped to actual tests/source evidence
+## 9. Acceptance checklist mapped to unconditional assertions
 
 | # | Criterion | Evidence |
 |---|-----------|----------|
-| 1 | Exact-one camera → helper | Source: `if (cameras.length !== 1) return`; Unit: `cameraFrustumHelper.test.ts`; E2e: `selecting opted-in animator creates helper` |
-| 2 | Zero/multiple → no helper | Source: `findAllDescendantCameras()` + length check; Unit: `returns empty array`, `returns multiple cameras`; E2e: `selecting unrelated object removes helper` |
-| 3 | Direct camera → no custom helper | Source: `isScrollAnimator(obj)` guard; E2e: `selecting PerspectiveCamera directly creates no custom helper` |
-| 4 | Helper at scene root, exact identity | Source: `scene.add(helper)`; E2e: `helper targets exact camera identity` (UUID stable), `helper parent is scene root` |
-| 5 | Selection/remount/destroy cleanup | E2e: `repeated selection/deselection` (counters), `scene remount cleans up helper`, `ownedHelperCount: 0` |
-| 6 | Stub-only diagnostic, safe teardown, exact fields | Source: `__spark_stub === true` gate; `if (current === exposeHelperDiagnostic) delete`; E2e: `diagnostic is available in stub build`, `diagnostic fields have correct types`, `diagnostic cleaned up after scene remount` |
-| 7 | Production build no diagnostic | Source: conditional on `__spark_stub`; stub only loaded via VITE_E2E_STUB_SPARK alias |
-| 8 | Two factory calls → isolated objects | Unit: `sceneObjects.test.ts` — distinct wrappers, cameras, targets, animators, SparkControls, mutation isolation |
-| 9 | Baby Yoda wrapper → baby_yoda.svelte metadata | E2e: `SplatWrapper has Studio source metadata targeting baby_yoda.svelte` — deep-search userData.threlteStudio |
-| 10 | Wrapper transform persists across reload | E2e: `wrapper transform persists across capacity reload` — 9 values asserted exactly |
-| 11 | SparkControls dispose exactly once | Unit: `dispose clears listeners, idempotent`; E2e: `SparkControls instance recreated after scene remount` |
-| 12 | Editor camera doesn't overwrite app camera | E2e: `app-camera debug coordinates remain correct while editor camera is active` — X/Y/Z stable, data-active toggles |
-| 13 | No Svelte warnings | `npm run check` → 0 errors, 0 warnings |
-| 14 | AGENTS.md corrected | Factory signature, exact-one contract, stub-only diagnostic, safe teardown |
-| 15 | All commands pass | See below |
+| 1 | Owned-helper count reads `userData`, no fallback, detects stale | Source: `child.userData[HELPER_BRAND]`; no fallback branch; E2e: `ownedHelperCount` across cycles |
+| 2 | Exact scene-root parent UUID and app-camera target UUID | E2e: `helperParentUuid === sceneUuid`, `targetCameraUuid === appCameraUuid` |
+| 3 | Zero/one/multiple tests import production resolver | Source: `import { findAllDescendantCameras }` from production module in both component and test |
+| 4 | Diagnostic stub-only, safe teardown | Source: `__spark_stub === true` gate; `if (current === exposeHelperDiagnostic) delete`; E2e: remount cleanup |
+| 5 | Baby Yoda metadata test fails without exact source | Source: `throw` on missing wrapper/studio/no match; E2e: unconditional `toContain('baby_yoda.svelte')` |
+| 6 | Declarative transform on wrapper, asserted before/after remount | Source: `position={[0,0,0]} rotation={[0,0,0]} scale={[1,1,1]}`; E2e: `wrapperBefore === wrapperAfter` |
+| 7 | Capacity reload preserves 9 runtime transform values | E2e: `wrapperAfter === wrapperTransform` (all 9 values) |
+| 8 | Old SparkControls disposed exactly once, new distinct/not disposed | E2e: old count=1, new count=0, distinct IDs |
+| 9 | Editor-camera evidence precisely scoped | E2e: app-camera X/Y/Z + data-active only; no editor orientation claim |
+| 10 | `npm run check` zero errors, zero warnings | `svelte-check found 0 errors and 0 warnings` |
+| 11 | Lint, unit, e2e, build all pass | See below |
+| 12 | `AGENTS.md` documents final accurate contracts | Resolver module, brand fix, `sceneUuid`, disposal tracking |
 
-## 11. Exact final full-suite command results
+## 10. Exact full-suite results
 
 ```
 $ npm run check
@@ -131,12 +111,14 @@ $ npm run test:e2e
 85 passed (25.1s)
 
 $ npm run build
-✓ built in 4.95s
+✓ built in 4.73s
 ```
 
-## 12. AGENTS.md corrections
+## 11. AGENTS.md update confirmation
 
-- **Factory signature:** `createSceneObjects(profile, opts)` → `createSceneObjects(profile)` (removed stale `opts` parameter, added `SplatWrapper` to return list)
-- **CameraFrustumHelper key file entry:** Added exact-one contract, branded helpers, stub-gated diagnostic
-- **Camera Frustum Helper section:** Updated from "finds the first descendant" to "resolves **all** descendant cameras, creates helper only when **exactly one** found". Added branded helper description.
-- **Test diagnostic:** Updated from `{ helperExists, targetCameraType }` to full field list with stub-only gating and safe teardown description
+Concise corrections applied:
+- Added `descendantCameraResolver.ts` to key files with description
+- Corrected CameraFrustumHelper entry: imports resolver, `userData` brand check, no fallback
+- Corrected Camera Frustum Helper section: `findAllDescendantCameras()` import, `child.userData[HELPER_BRAND]` counting, no component-state fallback
+- Updated test diagnostic fields: added `sceneUuid`, clarified independent scene inspection
+- Updated Stub diagnostics: added `sparkControlsDisposals`, `__stub_scene_uuid`, `__stub_app_camera_uuid`, registration/disposal hooks

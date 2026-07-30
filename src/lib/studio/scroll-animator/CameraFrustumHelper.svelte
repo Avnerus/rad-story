@@ -4,6 +4,7 @@
   import { useThrelte, useTask } from '@threlte/core'
   import { CameraHelper, PerspectiveCamera, Object3D } from 'three'
   import { isScrollAnimator } from './transactionGuard'
+  import { findAllDescendantCameras } from './descendantCameraResolver'
 
   /**
    * CameraFrustumHelper — shows a Three.js CameraHelper for the descendant
@@ -36,20 +37,6 @@
 
   // Brand owned helpers so we can count them in the scene
   const HELPER_BRAND = '__camera_frustum_helper_owned'
-
-  /**
-   * Resolve all descendant PerspectiveCamera objects in an Object3D hierarchy.
-   * Returns an array (may be empty, single, or multiple).
-   */
-  function findAllDescendantCameras(obj: Object3D): PerspectiveCamera[] {
-    const results: PerspectiveCamera[] = []
-    obj.traverse((child) => {
-      if (child.type === 'PerspectiveCamera') {
-        results.push(child as PerspectiveCamera)
-      }
-    })
-    return results
-  }
 
   /**
    * Remove and dispose the current helper.
@@ -146,24 +133,22 @@
     targetCameraUuid: string | null
     /** UUID of the parent (scene root) of this component's helper, or null. */
     helperParentUuid: string | null
+    /** UUID of the Three.js scene root. */
+    sceneUuid: string | null
     /** Total helpers created by this instance over its lifetime. */
     helpersCreated: number
     /** Total helpers disposed by this instance over its lifetime. */
     helpersDisposed: number
   } {
-    // Count branded helpers in the scene by checking scene children
-    let ownedCount = 0
     const scene = threlte.scene
+    // Count branded helpers by inspecting scene children's userData independently
+    let ownedCount = 0
     if (scene) {
       for (const child of scene.children) {
-        if ((child as unknown as Record<string, unknown>)[HELPER_BRAND] === true) {
+        if ((child.userData as Record<string, unknown>)[HELPER_BRAND] === true) {
           ownedCount++
         }
       }
-    }
-    // Fallback: if the helper exists and is attached (has a parent), count it
-    if (ownedCount === 0 && helper && helper.parent) {
-      ownedCount = 1
     }
     return {
       ownedHelperCount: ownedCount,
@@ -171,6 +156,7 @@
       targetCameraType: helperTargetCamera ? helperTargetCamera.type : null,
       targetCameraUuid: helperTargetCamera ? helperTargetCamera.uuid : null,
       helperParentUuid: helper?.parent ? helper.parent.uuid : null,
+      sceneUuid: scene ? scene.uuid : null,
       helpersCreated,
       helpersDisposed,
     }

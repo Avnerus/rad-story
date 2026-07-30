@@ -111,6 +111,18 @@
   onMount(() => {
     if (typeof window === 'undefined') return
 
+    // Stub-only: expose scene UUID, app camera UUID, and register SparkControls
+    // for disposal tracking — all for e2e identity assertions
+    if ((window as unknown as Record<string, unknown>).__spark_stub === true) {
+      const scene = threlte.scene
+      ;(window as unknown as Record<string, unknown>).__stub_scene_uuid = scene?.uuid ?? null
+      ;(window as unknown as Record<string, unknown>).__stub_app_camera_uuid = appCamera.uuid
+      if (sparkControls) {
+        const register = (window as unknown as Record<string, unknown>).__spark_stub_register_controls
+        if (typeof register === 'function') register(sparkControls)
+      }
+    }
+
     // Register GSAP ScrollTrigger
     gsap.registerPlugin(ScrollTrigger)
 
@@ -148,7 +160,14 @@
       scrollTrigger = null
     }
     // Dispose SparkControls on scene unmount (single owner)
-    sparkControls?.dispose()
+    if (sparkControls) {
+      // Stub-only: record disposal for e2e lifecycle assertions
+      if ((window as unknown as Record<string, unknown>).__spark_stub === true) {
+        const record = (window as unknown as Record<string, unknown>).__spark_stub_record_controls_disposal
+        if (typeof record === 'function') record(sparkControls)
+      }
+      sparkControls.dispose()
+    }
   })
 </script>
 

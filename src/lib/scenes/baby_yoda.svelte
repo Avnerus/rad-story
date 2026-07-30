@@ -53,5 +53,5 @@
 
   <T is={sparkControls} name="Spark" settings={sparkControls.settings} />
 
-  <T is={splatWrapper} name="SplatWrapper" />
+  <T is={splatWrapper} name="SplatWrapper" position={[0, 0, 0]} rotation={[0, 0, 0]} scale={[1, 1, 1]} />
 </SceneRuntime>

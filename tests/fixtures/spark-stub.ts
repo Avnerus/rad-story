@@ -25,6 +25,10 @@ const _allMeshes: SplatMesh[] = []
 /** Test-only: reference to the current SplatWrapper for e2e transform assertions. */
 let _testWrapper: Object3D | null = null
 
+/** Test-only: SparkControls disposal tracking keyed by instance identity. */
+const _sparkControlsDisposals = new Map<string, number>()
+let _sparkControlsCounter = 0
+
 /** Stub pager that tracks identity and capacity. */
 export class SplatPager {
   id: number
@@ -207,6 +211,8 @@ interface StubDiagnostics {
   drivingGeneration: number
   /** Test-only: current SplatWrapper for e2e transform assertions. */
   wrapper: Object3D | null
+  /** Test-only: SparkControls disposal counts keyed by stub-assigned ID. */
+  sparkControlsDisposals: Record<string, number>
 }
 
 /** Marker: proves the running build uses the Spark stub. */
@@ -217,6 +223,21 @@ interface StubDiagnostics {
     // Test-only: hook for SparkSplats to register its wrapper
     ;(window as unknown as Record<string, unknown>).__spark_stub_set_wrapper = (w: Object3D) => {
       _testWrapper = w
+    }
+
+    // Test-only: hook for SceneRuntime to register SparkControls for disposal tracking
+    ;(window as unknown as Record<string, unknown>).__spark_stub_register_controls = (ctrl: { uuid: string }) => {
+      const id = `spark_${++_sparkControlsCounter}`
+      ;(ctrl as Record<string, unknown>).__stub_controls_id = id
+      _sparkControlsDisposals.set(id, 0)
+    }
+
+    // Test-only: hook for SceneRuntime to record a SparkControls disposal
+    ;(window as unknown as Record<string, unknown>).__spark_stub_record_controls_disposal = (ctrl: { uuid: string }) => {
+      const id = (ctrl as Record<string, unknown>).__stub_controls_id as string | undefined
+      if (id && _sparkControlsDisposals.has(id)) {
+        _sparkControlsDisposals.set(id, (_sparkControlsDisposals.get(id) ?? 0) + 1)
+      }
     }
 
     Object.defineProperty(window, '__spark_stub_diagnostics', {
@@ -243,6 +264,14 @@ interface StubDiagnostics {
           /** Test-only: current SplatWrapper for e2e transform assertions. */
           get wrapper() {
             return _testWrapper
+          },
+          /** Test-only: SparkControls disposal counts keyed by stub-assigned ID. */
+          get sparkControlsDisposals() {
+            const result: Record<string, number> = {}
+            for (const [k, v] of _sparkControlsDisposals) {
+              result[k] = v
+            }
+            return result
           },
         }
       },

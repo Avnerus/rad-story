@@ -1,28 +1,15 @@
 import { describe, it, expect } from 'vitest'
 import { Object3D, PerspectiveCamera, CameraHelper } from 'three'
+import { findAllDescendantCameras } from '$lib/studio/scroll-animator/descendantCameraResolver'
 
 /**
- * Unit tests for the CameraFrustumHelper exact-one camera contract.
+ * Unit tests for the production descendantCameraResolver.
  *
- * These tests verify the descendant camera resolution logic in isolation,
- * without depending on the Svelte component or Studio integration.
+ * These tests exercise the actual function used by CameraFrustumHelper,
+ * not a copy. A regression in the production code will fail these tests.
  */
 
-/**
- * Resolve all descendant PerspectiveCamera objects in an Object3D hierarchy.
- * Mirrors the logic in CameraFrustumHelper.svelte.
- */
-function findAllDescendantCameras(obj: Object3D): PerspectiveCamera[] {
-  const results: PerspectiveCamera[] = []
-  obj.traverse((child) => {
-    if (child.type === 'PerspectiveCamera') {
-      results.push(child as PerspectiveCamera)
-    }
-  })
-  return results
-}
-
-describe('CameraFrustumHelper exact-one camera resolution', () => {
+describe('findAllDescendantCameras', () => {
   it('returns empty array when no descendant cameras', () => {
     const parent = new Object3D()
     parent.add(new Object3D())
@@ -78,7 +65,6 @@ describe('CameraFrustumHelper exact-one camera resolution', () => {
   it('exact-one contract: zero cameras → no helper', () => {
     const parent = new Object3D()
     const cameras = findAllDescendantCameras(parent)
-    // Helper is only created when cameras.length === 1
     const wouldCreateHelper = cameras.length === 1
     expect(wouldCreateHelper).toBe(false)
   })
@@ -107,7 +93,6 @@ describe('CameraHelper disposal', () => {
   it('CameraHelper geometry and materials can be disposed', () => {
     const cam = new PerspectiveCamera()
     const helper = new CameraHelper(cam)
-    // CameraHelper creates LineSegments with LineBasicMaterial
     expect(helper.geometry).toBeDefined()
     expect(helper.material).toBeDefined()
 

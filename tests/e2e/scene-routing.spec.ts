@@ -40,9 +40,24 @@ async function getHelperDiagnostic(page: import('@playwright/test').Page) {
       targetCameraType: string | null
       targetCameraUuid: string | null
       helperParentUuid: string | null
+      sceneUuid: string | null
       helpersCreated: number
       helpersDisposed: number
     })()
+  })
+}
+
+/** Helper: get stub scene UUID from SceneRuntime diagnostic */
+async function getStubSceneUuid(page: import('@playwright/test').Page): Promise<string | null> {
+  return page.evaluate(() => {
+    return (window as unknown as Record<string, unknown>).__stub_scene_uuid as string | null
+  })
+}
+
+/** Helper: get stub app camera UUID from SceneRuntime diagnostic */
+async function getStubAppCameraUuid(page: import('@playwright/test').Page): Promise<string | null> {
+  return page.evaluate(() => {
+    return (window as unknown as Record<string, unknown>).__stub_app_camera_uuid as string | null
   })
 }
 
@@ -51,7 +66,6 @@ test.describe('Scene routing', () => {
     await page.goto('/scene/baby_yoda')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
-    // Viewer header should show scene name
     const header = page.locator('.viewer-header .url-label')
     await expect(header).toBeVisible()
     await expect(header).toContainText('baby_yoda')
@@ -61,7 +75,6 @@ test.describe('Scene routing', () => {
     await page.goto('/scene/baby_yoda')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
-    // Refresh and verify it still loads
     await page.reload()
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
     const header = page.locator('.viewer-header .url-label')
@@ -96,8 +109,6 @@ test.describe('Scene routing', () => {
   test('baby_yoda scene uses hard-coded URL (no query string mutation)', async ({ page }) => {
     await page.goto('/scene/baby_yoda')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
-
-    // URL should not have ?url= parameter
     const url = page.url()
     expect(url).not.toContain('url=')
   })
@@ -128,15 +139,10 @@ test.describe('Scene routing', () => {
   })
 
   test('browser back from scene route returns to landing', async ({ page }) => {
-    // Start at landing
     await page.goto('/')
     await expect(page.getByRole('heading', { name: 'RAD Story' })).toBeVisible()
-
-    // Navigate to scene via direct URL
     await page.goto('/scene/baby_yoda')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
-
-    // Go back
     await page.goBack()
     await expect(page.getByRole('heading', { name: 'RAD Story' })).toBeVisible({ timeout: 10_000 })
   })
@@ -144,17 +150,12 @@ test.describe('Scene routing', () => {
   test('scene remount: navigating away and back does not stack resources', async ({ page }) => {
     await page.goto('/scene/baby_yoda')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
-
-    // Navigate to landing
     await page.goto('/')
     await expect(page.getByRole('heading', { name: 'RAD Story' })).toBeVisible()
-
-    // Navigate back to scene
     await page.goto('/scene/baby_yoda')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
     await waitForDebugElement(page)
 
-    // Camera should be at initial position (no stacking)
     const state = await getCameraState(page)
     expect(state.y).toBeCloseTo(0, 0)
     expect(state.z).toBeCloseTo(-1, 0)
@@ -185,13 +186,11 @@ test.describe('Camera frustum helper', () => {
     await page.goto('/scene/baby_yoda')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
-    // Wait for Studio hierarchy to load
     const animatorItem = page.getByText('Camera ScrollAnimator')
     await expect(animatorItem).toBeVisible({ timeout: 15_000 })
     await animatorItem.click()
     await page.waitForTimeout(500)
 
-    // Assert helper was created with exact evidence
     const diag = await getHelperDiagnostic(page)
     expect(diag, 'helper diagnostic available').not.toBeNull()
     expect(diag!.helperExists, 'helper created for opted-in animator').toBe(true)
@@ -202,13 +201,22 @@ test.describe('Camera frustum helper', () => {
     expect(diag!.helperParentUuid, 'helper parent (scene root) has UUID').not.toBeNull()
     expect(diag!.helpersCreated, 'helpersCreated counter incremented').toBe(1)
     expect(diag!.helpersDisposed, 'no helpers disposed yet').toBe(0)
+
+    // Assert exact scene-root parent identity
+    const sceneUuid = await getStubSceneUuid(page)
+    expect(sceneUuid).not.toBeNull()
+    expect(diag!.helperParentUuid, 'helper parent is scene root').toBe(sceneUuid)
+
+    // Assert exact app-camera target identity
+    const appCameraUuid = await getStubAppCameraUuid(page)
+    expect(appCameraUuid).not.toBeNull()
+    expect(diag!.targetCameraUuid, 'helper targets app camera').toBe(appCameraUuid)
   })
 
   test('selecting unrelated object removes helper', async ({ page }) => {
     await page.goto('/scene/baby_yoda')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
-    // First select the animator to create the helper
     await page.getByText('Camera ScrollAnimator').click()
     await page.waitForTimeout(500)
 
@@ -216,13 +224,12 @@ test.describe('Camera frustum helper', () => {
     expect(diagBefore!.helperExists).toBe(true)
     expect(diagBefore!.ownedHelperCount).toBe(1)
 
-    // Now select Spark (unrelated)
+    // Select Spark (unrelated)
     const sparkItem = page.getByText('Spark')
     await expect(sparkItem.first()).toBeVisible({ timeout: 15_000 })
     await sparkItem.first().click()
     await page.waitForTimeout(500)
 
-    // Helper should be removed
     const diagAfter = await getHelperDiagnostic(page)
     expect(diagAfter!.helperExists, 'helper removed for unrelated selection').toBe(false)
     expect(diagAfter!.ownedHelperCount, 'zero owned helpers after deselection').toBe(0)
@@ -233,21 +240,18 @@ test.describe('Camera frustum helper', () => {
     await page.goto('/scene/baby_yoda')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
-    // First create a helper by selecting the animator
     await page.getByText('Camera ScrollAnimator').click()
     await page.waitForTimeout(500)
     const diagBefore = await getHelperDiagnostic(page)
     expect(diagBefore!.helperExists).toBe(true)
 
-    // Now deselect by clicking on SplatWrapper (not a camera or animator)
     await page.getByText('SplatWrapper').first().click()
     await page.waitForTimeout(500)
 
-    // Custom helper should be removed (SplatWrapper is not an opted-in animator)
     const diagAfter = await getHelperDiagnostic(page)
     expect(diagAfter!.helperExists, 'helper removed when selecting non-animator').toBe(false)
 
-    // Now select the PerspectiveCamera directly
+    // Select the PerspectiveCamera directly
     await page.evaluate(() => {
       const items = document.querySelectorAll('.tv-item-text')
       for (const item of items) {
@@ -260,7 +264,6 @@ test.describe('Camera frustum helper', () => {
     })
     await page.waitForTimeout(500)
 
-    // Custom helper should NOT exist (Studio's built-in Helpers handles this)
     const diagFinal = await getHelperDiagnostic(page)
     expect(diagFinal!.helperExists, 'no custom helper for direct camera selection').toBe(false)
     expect(diagFinal!.ownedHelperCount, 'zero owned helpers for direct camera').toBe(0)
@@ -271,14 +274,12 @@ test.describe('Camera frustum helper', () => {
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
     for (let i = 0; i < 3; i++) {
-      // Select animator → helper created
       await page.getByText('Camera ScrollAnimator').click()
       await page.waitForTimeout(300)
       const diagOn = await getHelperDiagnostic(page)
       expect(diagOn!.helperExists, `iteration ${i}: helper created`).toBe(true)
       expect(diagOn!.ownedHelperCount, `iteration ${i}: exactly one owned`).toBe(1)
 
-      // Select unrelated → helper removed
       await page.getByText('Spark').first().click()
       await page.waitForTimeout(300)
       const diagOff = await getHelperDiagnostic(page)
@@ -286,7 +287,6 @@ test.describe('Camera frustum helper', () => {
       expect(diagOff!.ownedHelperCount, `iteration ${i}: zero owned after removal`).toBe(0)
     }
 
-    // Final state: counters reflect 3 create + 3 dispose
     const diagFinal = await getHelperDiagnostic(page)
     expect(diagFinal!.helpersCreated).toBe(3)
     expect(diagFinal!.helpersDisposed).toBe(3)
@@ -296,40 +296,36 @@ test.describe('Camera frustum helper', () => {
     await page.goto('/scene/baby_yoda')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
-    // Create helper by selecting animator
     await page.getByText('Camera ScrollAnimator').click()
     await page.waitForTimeout(500)
     const diagBefore = await getHelperDiagnostic(page)
     expect(diagBefore!.helperExists).toBe(true)
 
-    // Navigate away and back
     await page.goto('/')
     await expect(page.getByRole('heading', { name: 'RAD Story' })).toBeVisible()
     await page.goto('/scene/baby_yoda')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
-    // After remount, no helper should exist (nothing selected)
     const diagAfter = await getHelperDiagnostic(page)
     expect(diagAfter!.helperExists, 'helper cleaned up after remount').toBe(false)
     expect(diagAfter!.ownedHelperCount, 'zero owned helpers after remount').toBe(0)
-    // New component instance starts with fresh counters
     expect(diagAfter!.helpersCreated).toBe(0)
     expect(diagAfter!.helpersDisposed).toBe(0)
   })
 
-  test('helper targets exact camera identity', async ({ page }) => {
+  test('helper targets exact app-camera identity', async ({ page }) => {
     await page.goto('/scene/baby_yoda')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
-    // Select animator
     await page.getByText('Camera ScrollAnimator').click()
     await page.waitForTimeout(500)
 
     const diag = await getHelperDiagnostic(page)
-    expect(diag!.targetCameraUuid).not.toBeNull()
-    expect(diag!.targetCameraUuid).not.toBe('')
+    const appCameraUuid = await getStubAppCameraUuid(page)
+    expect(appCameraUuid).not.toBeNull()
+    expect(diag!.targetCameraUuid, 'helper targets exact app camera').toBe(appCameraUuid)
 
-    // The helper's target camera UUID should be stable across re-selections
+    // Stable across re-selections
     await page.getByText('Spark').first().click()
     await page.waitForTimeout(300)
     await page.getByText('Camera ScrollAnimator').click()
@@ -339,7 +335,7 @@ test.describe('Camera frustum helper', () => {
     expect(diag2!.targetCameraUuid).toBe(diag!.targetCameraUuid)
   })
 
-  test('helper parent is scene root', async ({ page }) => {
+  test('helper parent is exact scene root', async ({ page }) => {
     await page.goto('/scene/baby_yoda')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
@@ -347,9 +343,10 @@ test.describe('Camera frustum helper', () => {
     await page.waitForTimeout(500)
 
     const diag = await getHelperDiagnostic(page)
-    // Helper parent UUID should not be null (it's attached to the scene root)
-    expect(diag!.helperParentUuid).not.toBeNull()
-    expect(diag!.helperParentUuid).not.toBe('')
+    const sceneUuid = await getStubSceneUuid(page)
+    expect(sceneUuid).not.toBeNull()
+    expect(diag!.helperParentUuid, 'helper parent is exact scene root').toBe(sceneUuid)
+    expect(diag!.sceneUuid, 'diagnostic sceneUuid matches').toBe(sceneUuid)
   })
 })
 
@@ -373,10 +370,10 @@ test.describe('Helper diagnostic lifecycle', () => {
     const diag = await getHelperDiagnostic(page)
     expect(typeof diag!.ownedHelperCount).toBe('number')
     expect(typeof diag!.helperExists).toBe('boolean')
-    // Null-able fields: string or null when no helper is active
     expect(diag!.targetCameraType === null || typeof diag!.targetCameraType === 'string').toBe(true)
     expect(diag!.targetCameraUuid === null || typeof diag!.targetCameraUuid === 'string').toBe(true)
     expect(diag!.helperParentUuid === null || typeof diag!.helperParentUuid === 'string').toBe(true)
+    expect(diag!.sceneUuid === null || typeof diag!.sceneUuid === 'string').toBe(true)
     expect(typeof diag!.helpersCreated).toBe('number')
     expect(typeof diag!.helpersDisposed).toBe('number')
   })
@@ -385,20 +382,16 @@ test.describe('Helper diagnostic lifecycle', () => {
     await page.goto('/scene/baby_yoda')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
-    // Diagnostic exists before remount
     const diagBefore = await getHelperDiagnostic(page)
     expect(diagBefore).not.toBeNull()
 
-    // Navigate away and back
     await page.goto('/')
     await expect(page.getByRole('heading', { name: 'RAD Story' })).toBeVisible()
     await page.goto('/scene/baby_yoda')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
-    // New diagnostic installed by new component instance
     const diagAfter = await getHelperDiagnostic(page)
     expect(diagAfter, 'diagnostic reinstalled after remount').not.toBeNull()
-    // Fresh counters from new instance
     expect(diagAfter!.helpersCreated).toBe(0)
     expect(diagAfter!.helpersDisposed).toBe(0)
   })
@@ -413,55 +406,40 @@ test.describe('Baby Yoda SplatWrapper', () => {
     await page.goto('/scene/baby_yoda')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
-    // Inspect the SplatWrapper's userData.threlteStudio for source target.
-    // Threlte Studio attaches metadata to objects declared via literal <T> nodes.
-    // The metadata includes source file information pointing to the scene file.
     const sourceInfo = await page.evaluate(() => {
       const d = (window as unknown as Record<string, unknown>).__spark_stub_diagnostics as {
         wrapper: { userData: Record<string, unknown> } | null
       }
       const wrapper = d.wrapper
-      if (!wrapper) return { found: false, userDataKeys: [] }
+      if (!wrapper) throw new Error('SplatWrapper not found in stub diagnostics')
       const studio = wrapper.userData?.threlteStudio as Record<string, unknown> | undefined
-      const userDataKeys = Object.keys(wrapper.userData).filter(k => k !== '__upbound__')
-      if (!studio) return { found: true, hasStudio: false, userDataKeys, studioKeys: [] }
-      const studioKeys = Object.keys(studio)
-      // Deep-inspect all values in studio metadata for any string containing 'baby_yoda'
+      if (!studio) throw new Error('userData.threlteStudio not found on SplatWrapper')
+
+      // Deep-inspect all values in studio metadata for the source file path
       let sourceFile: string | null = null
-      function findFile(obj: unknown, path: string): void {
+      function findFile(obj: unknown): void {
         if (typeof obj === 'string' && obj.includes('baby_yoda')) {
           sourceFile = obj
         } else if (obj && typeof obj === 'object') {
-          for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
-            findFile(v, `${path}.${k}`)
+          for (const v of Object.values(obj as Record<string, unknown>)) {
+            findFile(v)
           }
         }
       }
-      findFile(studio, 'threlteStudio')
-      return { found: true, hasStudio: true, userDataKeys, studioKeys, sourceFile, studioJson: JSON.stringify(studio) }
+      findFile(studio)
+      if (!sourceFile) throw new Error(`No baby_yoda.svelte reference in threlteStudio metadata: ${JSON.stringify(studio)}`)
+      return sourceFile
     })
 
-    expect(sourceInfo.found, 'SplatWrapper exists in stub diagnostics').toBe(true)
-
-    if (sourceInfo.hasStudio) {
-      // When Studio source metadata is present, it should reference baby_yoda.svelte
-      expect(sourceInfo.sourceFile, `SplatWrapper Studio source file (metadata: ${sourceInfo.studioJson})`).not.toBeNull()
-      expect(sourceInfo.sourceFile, 'SplatWrapper targets baby_yoda.svelte').toContain('baby_yoda.svelte')
-    } else {
-      // In stub builds without full Studio source sync, verify the wrapper
-      // has userData keys indicating it was processed by Threlte's <T> system.
-      const hasThrelteKeys = sourceInfo.userDataKeys.some((k: string) =>
-        k.includes('threlte') || k.includes('studio') || k === 'name'
-      )
-      expect(hasThrelteKeys, 'SplatWrapper has Threlte/Studio userData keys').toBe(true)
-    }
+    // Normalize path separators for cross-platform comparison
+    const normalized = sourceInfo.replace(/\\/g, '/')
+    expect(normalized, 'SplatWrapper targets baby_yoda.svelte').toContain('baby_yoda.svelte')
   })
 
   test('wrapper transform persists across capacity reload', async ({ page }) => {
     await page.goto('/scene/baby_yoda')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
-    // Select Spark and open pane
     const sparkItem = page.getByText('Spark')
     await expect(sparkItem.first()).toBeVisible({ timeout: 15_000 })
     await sparkItem.first().click()
@@ -486,13 +464,11 @@ test.describe('Baby Yoda SplatWrapper', () => {
       }
     })
 
-    // Trigger capacity reload
     const capacityInput = page.locator('input#spark-maxPagedSplats')
     await capacityInput.fill('131072')
     await capacityInput.press('Enter')
     await page.waitForTimeout(3000)
 
-    // Wrapper transform preserved exactly after reload
     const wrapperAfter = await page.evaluate(() => {
       const d = (window as unknown as Record<string, unknown>).__spark_stub_diagnostics as {
         wrapper: { position: { x: number; y: number; z: number }; rotation: { x: number; y: number; z: number }; scale: { x: number; y: number; z: number } } | null
@@ -508,9 +484,22 @@ test.describe('Baby Yoda SplatWrapper', () => {
     expect(wrapperAfter).toEqual(wrapperTransform)
   })
 
-  test('wrapper exists and is accessible after scene remount', async ({ page }) => {
+  test('wrapper declarative transform persists across scene remount', async ({ page }) => {
     await page.goto('/scene/baby_yoda')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
+
+    // Assert the declarative identity transform from baby_yoda.svelte
+    const wrapperBefore = await page.evaluate(() => {
+      const d = (window as unknown as Record<string, unknown>).__spark_stub_diagnostics as {
+        wrapper: { position: { x: number; y: number; z: number }; rotation: { x: number; y: number; z: number }; scale: { x: number; y: number; z: number } } | null
+      }
+      const w = d.wrapper!
+      return {
+        x: w.position.x, y: w.position.y, z: w.position.z,
+        rx: w.rotation.x, ry: w.rotation.y, rz: w.rotation.z,
+        sx: w.scale.x, sy: w.scale.y, sz: w.scale.z,
+      }
+    })
 
     // Navigate away and back
     await page.goto('/')
@@ -518,17 +507,20 @@ test.describe('Baby Yoda SplatWrapper', () => {
     await page.goto('/scene/baby_yoda')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
-    // Verify the wrapper exists and is accessible after remount
+    // Assert the same declarative transform values after remount
     const wrapperAfter = await page.evaluate(() => {
       const d = (window as unknown as Record<string, unknown>).__spark_stub_diagnostics as {
-        wrapper: { name: string; position: { x: number; y: number; z: number } } | null
+        wrapper: { position: { x: number; y: number; z: number }; rotation: { x: number; y: number; z: number }; scale: { x: number; y: number; z: number } } | null
       }
-      const w = d.wrapper
-      if (!w) return null
-      return { name: w.name, x: w.position.x, y: w.position.y, z: w.position.z }
+      const w = d.wrapper!
+      return {
+        x: w.position.x, y: w.position.y, z: w.position.z,
+        rx: w.rotation.x, ry: w.rotation.y, rz: w.rotation.z,
+        sx: w.scale.x, sy: w.scale.y, sz: w.scale.z,
+      }
     })
-    expect(wrapperAfter, 'wrapper exists after remount').not.toBeNull()
-    expect(wrapperAfter!.name).toBe('SplatWrapper')
+
+    expect(wrapperAfter).toEqual(wrapperBefore)
   })
 })
 
@@ -537,25 +529,56 @@ test.describe('Baby Yoda SplatWrapper', () => {
 // ---------------------------------------------------------------------------
 
 test.describe('SparkControls disposal', () => {
-  test('SparkControls instance recreated after scene remount', async ({ page }) => {
+  test('old SparkControls disposed exactly once, new instance distinct', async ({ page }) => {
     await page.goto('/scene/baby_yoda')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
-    // Spark object should be in the hierarchy
-    const sparkItem = page.getByText('Spark')
-    await expect(sparkItem.first()).toBeVisible({ timeout: 15_000 })
+    // Capture initial disposal state and the registered controls ID
+    const initialData = await page.evaluate(() => {
+      const d = (window as unknown as Record<string, unknown>).__spark_stub_diagnostics as {
+        sparkControlsDisposals: Record<string, number>
+      }
+      const disposals = { ...d.sparkControlsDisposals }
+      const ids = Object.keys(disposals)
+      return { disposals, ids }
+    })
 
-    // Navigate away — scene unmounts, SparkControls.dispose() called
-    await page.goto('/')
-    await expect(page.getByRole('heading', { name: 'RAD Story' })).toBeVisible()
+    expect(initialData.ids.length, 'one SparkControls registered').toBe(1)
+    const controlsId = initialData.ids[0]
+    expect(initialData.disposals[controlsId], 'initial disposal count is 0').toBe(0)
 
-    // Navigate back — new scene runtime, new SparkControls
-    await page.goto('/scene/baby_yoda')
+    // Navigate away via SPA (← Home button, aria-label="Go back") to preserve stub module state
+    await page.getByRole('button', { name: 'Go back' }).click()
+    await expect(page.getByRole('heading', { name: 'RAD Story' })).toBeVisible({ timeout: 10_000 })
+
+    // The old SparkControls should have been disposed exactly once
+    const afterUnmount = await page.evaluate((id) => {
+      const d = (window as unknown as Record<string, unknown>).__spark_stub_diagnostics as {
+        sparkControlsDisposals: Record<string, number>
+      }
+      return { count: d.sparkControlsDisposals[id] ?? -1, all: { ...d.sparkControlsDisposals } }
+    }, controlsId)
+    expect(afterUnmount.count, `old SparkControls disposed exactly once (all: ${JSON.stringify(afterUnmount.all)})`).toBe(1)
+
+    // Navigate back to scene via SPA (pushState + popstate, not full page load)
+    await page.evaluate(() => {
+      window.history.pushState({}, '', '/scene/baby_yoda')
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    })
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
-    // Spark object should be in the hierarchy again (new instance)
-    const sparkItem2 = page.getByText('Spark')
-    await expect(sparkItem2.first()).toBeVisible({ timeout: 15_000 })
+    // New SparkControls registered with 0 disposals, old one still at 1
+    const afterRemount = await page.evaluate((oldId) => {
+      const d = (window as unknown as Record<string, unknown>).__spark_stub_diagnostics as {
+        sparkControlsDisposals: Record<string, number>
+      }
+      const all = { ...d.sparkControlsDisposals }
+      const newIds = Object.keys(all).filter(id => id !== oldId)
+      return { oldCount: all[oldId] ?? -1, newIds, all }
+    }, controlsId)
+    expect(afterRemount.oldCount, 'old SparkControls still disposed once').toBe(1)
+    expect(afterRemount.newIds.length, 'new SparkControls instance exists').toBe(1)
+    expect(afterRemount.all[afterRemount.newIds[0]], 'new SparkControls not yet disposed').toBe(0)
   })
 })
 
@@ -564,7 +587,7 @@ test.describe('SparkControls disposal', () => {
 // ---------------------------------------------------------------------------
 
 test.describe('Editor camera / app camera regression', () => {
-  test('app-camera debug coordinates remain correct while editor camera is active', async ({ page }) => {
+  test('app-camera debug coordinates and active ownership remain correct while editor camera is active', async ({ page }) => {
     await page.goto('/scene/baby_yoda')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
     await waitForDebugElement(page)
@@ -579,13 +602,14 @@ test.describe('Editor camera / app camera regression', () => {
     await page.getByRole('button', { name: 'Editor Camera' }).click()
     await page.waitForTimeout(500)
 
-    // App camera debug should still report the same position (not overwritten by editor camera)
+    // App camera debug still reports the same position — app camera look-at
+    // is not overwritten by the editor camera (SceneRuntime always uses appCamera)
     const state2 = await getCameraState(page)
     expect(state2.x, 'app camera X unchanged with editor camera active').toBeCloseTo(state1.x, 0)
     expect(state2.y, 'app camera Y unchanged with editor camera active').toBeCloseTo(state1.y, 0)
     expect(state2.z, 'app camera Z unchanged with editor camera active').toBeCloseTo(state1.z, 0)
 
-    // data-active should be false (editor camera is active)
+    // data-active should be false (editor camera is the active Threlte camera)
     const activeAttr = await page.evaluate(() =>
       document.querySelector('[data-testid="camera-state"]')?.getAttribute('data-active')
     )
@@ -595,7 +619,6 @@ test.describe('Editor camera / app camera regression', () => {
     await page.getByRole('button', { name: 'Editor Camera' }).click()
     await page.waitForTimeout(500)
 
-    // data-active should be true again
     const activeAttr2 = await page.evaluate(() =>
       document.querySelector('[data-testid="camera-state"]')?.getAttribute('data-active')
     )
