@@ -4,13 +4,13 @@
 
 Add first-class, file-backed scenes to RAD Story. A scene is selected by URL and corresponds to an actual Svelte source file under `src/lib/scenes/`. Each scene must own its hard-coded RAD URL and its Studio-authorable declarations so that model transforms, camera/target scroll keyframes, and Spark settings can be edited and source-synced independently into that scene file.
 
-The requested example and canonical route are:
+The requested example and route are:
 
 - Scene file: `src/lib/scenes/baby_yoda.svelte` (use the repository's filename casing convention consistently)
-- URL: `/scenes/baby_yoda`
+- URL: `/scene/baby_yoda`
 - RAD URL: `https://avner.us/baby_yoda-lod.rad`
 
-The request also mentions `/scene/{sceneName}` once. Treat `/scenes/{sceneName}` as canonical because the explicit example uses it. If supporting `/scene/{sceneName}` as a compatibility alias is trivial and unambiguous, redirect or normalize it to the plural route; otherwise document that the canonical route is plural.
+Support only the singular route namespace `/scene/{sceneName}`. Do not add `/scenes/{sceneName}` as an alias. The URL route is singular even though the source directory remains plural: `src/lib/scenes/`.
 
 Also add a declarative way for a camera-bearing `ScrollAnimator` in a scene file to request camera-frustum visualization. When that animator is selected in Studio, the helper for its descendant `PerspectiveCamera` must be displayed just as it is when the camera itself is selected. The scene declaration should make this opt-in obvious and source-local.
 
@@ -43,7 +43,7 @@ For scene discovery/routing, use a statically analyzable registry derived from a
 
 - only valid files below `src/lib/scenes/` can become scenes
 - scene names are normalized and validated; path traversal or arbitrary imports are impossible
-- direct navigation and browser refresh at `/scenes/baby_yoda` load the scene
+- direct navigation and browser refresh at `/scene/baby_yoda` load the scene
 - unknown scene names render a clear not-found state and a way back
 - history/back/forward behavior remains correct
 - the existing landing URL workflow should remain functional unless a clean, tested product decision makes scene routes the replacement; do not silently regress it
@@ -128,7 +128,7 @@ The important point is not this exact API. The important points are that shared 
 
 ## Acceptance criteria
 
-1. Directly opening or refreshing `/scenes/baby_yoda` loads the Baby Yoda RAD scene and its scrollable viewer without first using the landing form.
+1. Directly opening or refreshing `/scene/baby_yoda` loads the Baby Yoda RAD scene and its scrollable viewer without first using the landing form.
 2. The route maps to a real Svelte file in `src/lib/scenes/`; an unknown or invalid scene name produces a tested not-found state without attempting arbitrary imports.
 3. The Baby Yoda scene hard-codes `https://avner.us/baby_yoda-lod.rad` in its Svelte source, not in routing logic, query parameters, or a global shared default.
 4. The scene Svelte file is lean and declarative. Shared rendering, scrolling, look-at, reload, and lifecycle logic exists in reusable runtime code and is not repeated there.
@@ -158,7 +158,8 @@ Create focused new tests, then run at minimum:
 
 Add unit coverage for pure route parsing/name validation/scene registry behavior and any extracted camera-helper selection/lifecycle logic. Add e2e coverage for:
 
-- direct visit and refresh of `/scenes/baby_yoda`
+- direct visit and refresh of `/scene/baby_yoda`
+- rejection/not-found behavior for the unsupported plural path `/scenes/baby_yoda`
 - invalid and unknown scene paths
 - Baby Yoda hard-coded URL being used with no `?url=` mutation
 - scroll 0% and 100% camera/target behavior in the scene
@@ -187,7 +188,7 @@ Use the Spark stub for deterministic e2e tests as the existing suite does. If a 
 Write `.codex-handoff/status.md` with:
 
 1. Summary of the implemented architecture and why Studio source sync targets each scene file.
-2. Route syntax and scene discovery/validation behavior, including how the singular/plural wording was resolved.
+2. Route syntax and scene discovery/validation behavior, confirming that only singular `/scene/{sceneName}` URLs are supported while files remain under plural `src/lib/scenes/`.
 3. Exact files added/changed and their responsibilities.
 4. Baby Yoda scene details and its declared RAD URL.
 5. Declarative camera-frustum-helper API and lifecycle behavior.
