@@ -1,163 +1,82 @@
-# Surgical follow-up: make status reactive and complete pager handoff
+# Mission: close Spark reload activation lifecycle and evidence gaps
 
 ## Objective
 
-Correct four specific remaining problems without redesigning the Spark controls feature:
+Finish the `Spark` controls implementation by making capacity reload completion truly represent full mesh activation: the replacement mesh must be attached to the current driving pager before the coordinator promise resolves, `isReloading` clears, or success is reported. Fix the new Svelte reactivity warning and strengthen the existing stub tests so their assertions directly prove the behavior claimed in the status report.
 
-1. reload status must actually update the open pane reactively;
-2. success must mean the replacement mesh is attached to the new driving pager;
-3. capacity e2e must assert identities/capacity rather than input text;
-4. verification must stop describing the Spark-stub build as real splat rendering.
-
-Keep the current coordinator, stable wrapper, extension UI, settings system, and all-green baseline.
-
-## Verified code defects
-
-### Status is not reactive
-
-`RadStoryScene.handleReloadStatus()` assigns a plain property:
-
-```ts
-sparkControls.reloadStatus = status
-```
-
-`SparkControlsExtension` reads that property only in an effect driven by selection and transaction `revision`. A reload status update is neither a Svelte reactive mutation visible to that effect nor a transaction, so `uiState.reloading` and `uiState.reloadError` do not update.
-
-`SparkReloadStatusBridge` receives `update()` calls but nothing subscribes to it.
-
-Implement one coherent instance-owned mechanism:
-
-- expose a subscribe/unsubscribe API from `SparkControls` or attach the existing bridge to the selected controller;
-- the extension must subscribe when one Spark controller is selected and clean up on selection change/destroy;
-- update `uiState.reloading`/`reloadError` directly from notifications;
-- remove redundant unused bridge layers;
-- test live start, success, failure, supersession, selection change, and destroy behavior.
-
-### Success occurs before pager handoff
-
-The coordinator calls `status.success()` immediately after synchronous `onReloadComplete`, while AGENTS.md correctly states `SplatMesh.initialized` precedes pager attachment. Therefore the pane can claim completion before:
-
-```ts
-replacementMesh.paged?.pager === newRealRenderer.pager
-```
-
-Make activation/readiness asynchronous:
-
-- attach the initialized replacement mesh to the stable wrapper;
-- wait through a bounded, cancellation-aware render/update mechanism for public pager identity equality;
-- confirm the pager is not disposed and has the normalized capacity;
-- only then resolve reload and emit success;
-- on timeout/failure, emit error and leave a deterministic recoverable scene state;
-- superseded/destroyed generations must cancel readiness and dispose their replacement.
-
-Use animation/render events or another public event-driven mechanism, not fixed sleeps.
-
-### Stub and e2e do not model/assert handoff
-
-The stub defines pager objects but never assigns `mesh.paged.pager` during its render/update path. Existing capacity tests only verify the input is rounded and no error text appears.
-
-Extend the stub so its public behavior models Spark's relevant handoff:
-
-- driving renderer discovers the active nested stub SplatMesh during render/update;
-- assigns its pager to `mesh.paged.pager`;
-- exposes stable test diagnostics for renderer, pager, mesh, generation, active-mesh count, disposed state, and capacity.
-
-Capacity e2e must assert:
-
-- reload progress becomes visible, then clears;
-- old/new renderer IDs differ;
-- old/new pager IDs differ and old is disposed;
-- old/new mesh IDs differ and old is disposed;
-- new `PagedSplats.pager` ID equals the new driving renderer pager ID;
-- capacity equals the normalized input;
-- exactly one active mesh remains;
-- rapid edits settle on the final capacity/generation;
-- wrapper transform and another Spark setting persist;
-- destroy/remount produces no late activation.
-
-### Verification report confuses stub with real Spark
-
-When `VITE_E2E_STUB_SPARK=true`, Spark classes and splat rendering are stubbed. A remote Baby Yoda URL in that build is not real Spark paging/rendering.
-
-- Describe stub verification only as stub behavior.
-- Perform a real non-stub check for the actual RAD capacity reload.
-- If GPU stalls block native pointer commands, use handler-level DOM dispatch/evaluate for the pane input as allowed by AGENTS.md, then inspect public debug state and screenshots. State clearly which parts prove handler behavior versus native actionability.
-- Do not claim real splat rendering from the stub.
-
-## Source-sync test quality
-
-The new transaction tests manually reproduce the extension's transaction object rather than testing production code. Extract a small production helper used by the extension to build/describe the root `settings` transaction, then test that helper with the public transactions contract. Keep writable-setter undo/redo tests.
-
-Direct dev-server source-sync/undo remains desirable. If GPU stalls prevent native actions, use the same DOM-dispatch diagnostic and inspect the actual source edit/history result. Restore the intended authored value before final status.
+Do not redesign the feature. Preserve the current `Spark` outline object, 22 live controls, stable wrapper, dual-renderer routing, and public pager-identity approach.
 
 ## Files likely involved
 
 - `src/lib/spark/SparkReloadRuntime.ts`
-- `src/lib/spark/SparkReloadStatusBridge.ts` (remove or connect properly)
-- `src/lib/spark/SparkControls.ts`
 - `src/lib/components/SparkSplats.svelte`
-- `src/lib/components/SparkStudioBridge.svelte`
 - `src/lib/components/RadStoryScene.svelte`
 - `src/lib/studio/spark-controls/SparkControlsExtension.svelte`
-- a small production transaction helper
-- Spark stub, coordinator/transaction unit tests, e2e tests
+- `tests/unit/SparkReloadCoordinator.test.ts`
+- `tests/e2e/rad-story.spec.ts`
+- `tests/fixtures/spark-stub.ts` only if deterministic activation control is needed
 - `AGENTS.md`
 
-## Constraints
+## Constraints and critical implementation guidance
 
-- Preserve public API use, dual renderers, real-camera LOD ownership, stable wrapper, coordinator generation cancellation, and settings behavior.
-- No fixed delays for readiness.
-- Do not expose `enableDriveLod`.
-- Do not regress existing tests.
-- Do not commit the user's unrelated `package-lock.json`.
+- Change the coordinator completion callback type to allow `void | Promise<void>` and `await` it inside `_doReload`.
+- A reload request must remain pending through replacement attachment and pager handoff. `requestReload()` and `isReloading` must not finish early.
+- Callback rejection must be caught by the coordinator for the current generation, reported through `status.fail(...)` and `onReloadError`, with no unhandled rejection or permanently stuck status.
+- Centralize success/failure ownership enough that each current generation has one coherent terminal result. Do not let a superseded generation clear or fail the current generation.
+- Preserve race safety: superseded meshes are disposed, only the latest generation becomes authoritative, and destroy cancels safely.
+- Make `splatsRef` and `bridgeRef` correctly reactive in Svelte 5 (for example, typed `$state(...)`) so `onMeshReload={splatsRef?.reload}` is reliably updated and `npm run check` has no warning from this feature.
+- When subscribing to `SparkControls.reloadStatus`, immediately initialize the pane from its current `isReloading` and `error` values. Selecting `Spark` midway through a reload must show the current state without waiting for another notification.
+- Continue using public Spark APIs/fields already established by the implementation. No private Threlte Studio imports or timing sleeps.
+- Leave the user's uncommitted `package-lock.json` change untouched.
 
 ## Acceptance criteria
 
-- Open pane visibly transitions idle → reloading → success/error from coordinator notifications.
-- Status subscriptions clean up on selection change, remount, and destroy.
-- Reload success occurs only after public mesh/renderer pager identity matches and capacity is confirmed.
-- Stub genuinely models pager attachment.
-- Capacity e2e directly verifies old/new identities, disposal, attachment, capacity, single active mesh, rapid final-wins, and preserved state.
-- Production transaction helper is exercised by tests.
-- Real non-stub Baby Yoda capacity reload is performed and clearly distinguished from stub verification.
-- Source-sync/undo evidence uses production transaction logic and, if feasible, actual dev source/history.
-- Check, lint, all unit tests, full e2e, and build pass.
-- AGENTS.md/status contain no contradictory claims.
+- `SparkReloadCoordinator.requestReload()` resolves only after an async completion/activation callback resolves.
+- `SparkReloadCoordinator.isReloading` remains true for that full interval.
+- Async completion rejection is caught and produces the expected current-generation failure notification without an unhandled rejection.
+- Superseded async activation cannot publish success/failure for the newest generation.
+- The Spark pane visibly reflects an already-running reload when the object is selected mid-reload.
+- Capacity reload still preserves the stable wrapper and its authored transform plus unrelated Spark settings.
+- After reload, the active replacement mesh's pager ID directly equals `drivingPagerId`; that exact driving pager has the normalized requested `maxSplats`; the replaced pager/mesh identities are explicitly shown disposed; exactly one current active mesh remains.
+- Rapid edits settle on the final normalized capacity and final driving pager/mesh generation, with no stale active mesh or stale UI state.
+- The progress test directly observes the reloading state as true before observing it clear. Make stub activation deterministically controllable if the current microtask is too fast; do not merely wait for the final false state.
+- `npm run check` reports zero errors and no warning introduced by the Spark implementation.
+- Re-check every acceptance item before finalizing.
 
-## Tests to run
+## Tests to add or strengthen
 
-- `npm run check`
-- `npm run lint`
-- `npm run test:unit`
-- `npm run test:e2e`
-- `npm run build`
+- Unit: async completion callback keeps the coordinator promise and `isReloading` pending until explicitly resolved.
+- Unit: async completion callback rejection is caught, status fails once for the current generation, and error callback is invoked.
+- Unit: supersession/destroy during async activation cannot publish a stale terminal state.
+- E2E: deterministically assert progress becomes visible, then clears after pager attachment.
+- E2E: assert the active replacement mesh pager ID equals `drivingPagerId`, and the pager with that ID has the normalized requested capacity.
+- E2E: assert exact old/new identities and disposal/current-active state rather than aggregate `contains`/`at least one` checks.
+- E2E: set a non-default wrapper transform before capacity reload and assert its exact values afterward; also retain an unrelated quality setting.
+- E2E: rapid capacity edits assert final diagnostic capacity and exactly one current active mesh.
+- Run `npm run check`, `npm run lint`, `npm run test:unit`, `npm run test:e2e`, and `npm run build`.
+- A new real-GPU manual run is optional unless these fixes change production pager behavior beyond awaiting the already-existing callback. Report clearly whether it was run.
 
 ## Things Pi must not change
 
-- Do not add another unconnected status bridge.
-- Do not signal success at mesh initialization alone.
-- Do not assert pager handoff from input normalization.
-- Do not call a stub build real Spark rendering.
-- Do not duplicate production transaction logic only inside tests.
-- Do not include unrelated changes.
+- Do not remove, rename, or reduce the `Spark` outline object or its 22 controls.
+- Do not revert corrected degree-based cone defaults or change the documented frustum/refinement explanation.
+- Do not replace the stable `SplatWrapper` or dual SparkRenderer architecture.
+- Do not add arbitrary delays, private Studio imports, global singleton reload state, or remount the whole scene.
+- Do not alter ScrollAnimator, camera ownership, scroll behavior, unrelated UI, or `package-lock.json`.
+- Do not weaken existing tests to make them pass.
 
-## Expected completion report
+## Documentation and completion report
 
-Write `.codex-handoff/status.md` with:
+Update `AGENTS.md` with concise, fresh-session-relevant information and source references for the final async activation contract, reactive component refs, and deterministic diagnostic coverage. It does not need a full implementation log.
 
-1. Reactive status subscription lifecycle
-2. Async pager-readiness mechanism and cancellation
-3. Direct old/new identity/capacity evidence
-4. Stub modeling and capacity e2e assertions
-5. Production transaction helper/source-sync evidence
-6. Real non-stub Baby Yoda capacity/recovery evidence
-7. Stub versus real distinction
-8. Acceptance checklist
-9. Exact all-green results
-10. Files changed
-11. Remaining non-core limitations
-12. Commit hash(es)
+Write the report to `.codex-handoff/status.md` with:
 
-Update `AGENTS.md` concisely with verified final behavior. Remove the unused bridge or document its real subscription path.
+1. Summary of the completion-contract fix.
+2. Exact lifecycle and generation semantics.
+3. Direct test evidence mapped to every acceptance criterion.
+4. Changed files and why.
+5. Exact command results.
+6. Remaining limitations, clearly separating stub and real Spark evidence.
+7. Final commit hash.
 
-Always write `status.md` as the last action before committing and pushing. Re-check every acceptance item first. After the final push, do not verify, inspect, or modify anything.
+Always write `status.md` as the last action before committing and pushing. After pushing, perform no more verification or modifications. Re-check that every acceptance criterion above is met immediately before finalizing the mission.
