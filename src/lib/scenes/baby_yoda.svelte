@@ -1,5 +1,6 @@
 <script lang="ts">
   import { T } from '@threlte/core'
+  import { untrack } from 'svelte'
   import type { DeviceProfile } from '$lib/types'
   import { createSceneObjects } from './sceneObjects'
   import SceneRuntime from '$lib/components/SceneRuntime.svelte'
@@ -13,8 +14,10 @@
 
   const RAD_URL = 'https://avner.us/baby_yoda-lod.rad'
 
+  // untrack() explicitly captures the initial profile value — scene objects
+  // are created once at startup and profile is immutable after that
   const { camera, cameraTarget, cameraAnimator, targetAnimator, sparkControls, splatWrapper } =
-    createSceneObjects(profile)
+    createSceneObjects(untrack(() => profile))
 </script>
 
 <SceneRuntime

@@ -19,7 +19,9 @@
   let activeUrl = $state('')
   let errorMsg = $state('')
   let loading = $state(false)
-  let profile: DeviceProfile = getDeviceProfile()
+  // profile is immutable after startup — $state.raw avoids unnecessary
+  // reactivity and eliminates state_referenced_locally warnings in children
+  let profile: DeviceProfile = $state.raw(getDeviceProfile())
 
   // Scene route state
   let sceneMatch = $state<RouteMatch | null>(null)

@@ -18,8 +18,8 @@
    * built-in Helpers extension already provides that behavior. This
    * integration only extends selection for opted-in ScrollAnimators.
    *
-   * Contract: the selected animator must have exactly one descendant
-   * PerspectiveCamera. The first one found via traverse is used.
+   * Contract: the selected animator must have **exactly one** descendant
+   * PerspectiveCamera. Zero or multiple matches produce no custom helper.
    */
 
   let { children }: { children?: Snippet } = $props()
@@ -30,30 +30,25 @@
   let helper: CameraHelper | null = null
   let helperTargetCamera: PerspectiveCamera | null = null
 
-  // Test-only diagnostic: expose helper state for e2e assertions
-  function exposeHelperDiagnostic(): { helperExists: boolean; targetCameraType: string | null } {
-    return {
-      helperExists: helper !== null,
-      targetCameraType: helperTargetCamera?.type ?? null,
-    }
-  }
+  // Lifecycle counters for stub diagnostics
+  let helpersCreated = 0
+  let helpersDisposed = 0
 
-  if (typeof window !== 'undefined') {
-    ;(window as unknown as Record<string, unknown>).__camera_frustum_helper_diagnostic = exposeHelperDiagnostic
-  }
+  // Brand owned helpers so we can count them in the scene
+  const HELPER_BRAND = '__camera_frustum_helper_owned'
 
   /**
-   * Find the first descendant PerspectiveCamera in an Object3D hierarchy.
+   * Resolve all descendant PerspectiveCamera objects in an Object3D hierarchy.
+   * Returns an array (may be empty, single, or multiple).
    */
-  function findDescendantCamera(obj: Object3D): PerspectiveCamera | null {
-    let result: PerspectiveCamera | null = null
+  function findAllDescendantCameras(obj: Object3D): PerspectiveCamera[] {
+    const results: PerspectiveCamera[] = []
     obj.traverse((child) => {
-      if (result) return
       if (child.type === 'PerspectiveCamera') {
-        result = child as PerspectiveCamera
+        results.push(child as PerspectiveCamera)
       }
     })
-    return result
+    return results
   }
 
   /**
@@ -75,6 +70,7 @@
           if (typeof mat.dispose === 'function') mat.dispose()
         }
       })
+      helpersDisposed++
     }
     helper = null
     helperTargetCamera = null
@@ -99,15 +95,19 @@
     const animator = obj as unknown as { showChildCameraFrustumWhenSelected?: boolean }
     if (!animator.showChildCameraFrustumWhenSelected) return
 
-    const targetCamera = findDescendantCamera(obj)
-    if (!targetCamera) return
+    // Exact-one contract: resolve ALL descendant cameras
+    const cameras = findAllDescendantCameras(obj)
+    if (cameras.length !== 1) return
 
+    const targetCamera = cameras[0]
     const scene = threlte.scene
     if (!scene) return
 
     helper = new CameraHelper(targetCamera)
     helper.userData.ignoreOverrideMaterial = true
+    helper.userData[HELPER_BRAND] = true
     helperTargetCamera = targetCamera
+    helpersCreated++
     scene.add(helper)
   })
 
@@ -120,7 +120,66 @@
 
   onDestroy(() => {
     removeHelper()
+
+    // Remove diagnostic on destroy only if it still points to this instance
+    // so an old instance cannot delete a newer instance's diagnostic
+    if (typeof window !== 'undefined') {
+      const current = (window as unknown as Record<string, unknown>).__camera_frustum_helper_diagnostic
+      if (current === exposeHelperDiagnostic) {
+        delete (window as unknown as Record<string, unknown>).__camera_frustum_helper_diagnostic
+      }
+    }
   })
+
+  // ---------------------------------------------------------------------------
+  // Test-only diagnostic: exposed ONLY in e2e stub builds
+  // ---------------------------------------------------------------------------
+
+  function exposeHelperDiagnostic(): {
+    /** Number of owned helpers currently attached to the scene (branded). */
+    ownedHelperCount: number
+    /** Whether this component's helper is currently active. */
+    helperExists: boolean
+    /** Type of the camera targeted by this component's helper. */
+    targetCameraType: string | null
+    /** UUID of the camera targeted by this component's helper. */
+    targetCameraUuid: string | null
+    /** UUID of the parent (scene root) of this component's helper, or null. */
+    helperParentUuid: string | null
+    /** Total helpers created by this instance over its lifetime. */
+    helpersCreated: number
+    /** Total helpers disposed by this instance over its lifetime. */
+    helpersDisposed: number
+  } {
+    // Count branded helpers in the scene by checking scene children
+    let ownedCount = 0
+    const scene = threlte.scene
+    if (scene) {
+      for (const child of scene.children) {
+        if ((child as unknown as Record<string, unknown>)[HELPER_BRAND] === true) {
+          ownedCount++
+        }
+      }
+    }
+    // Fallback: if the helper exists and is attached (has a parent), count it
+    if (ownedCount === 0 && helper && helper.parent) {
+      ownedCount = 1
+    }
+    return {
+      ownedHelperCount: ownedCount,
+      helperExists: helper !== null,
+      targetCameraType: helperTargetCamera ? helperTargetCamera.type : null,
+      targetCameraUuid: helperTargetCamera ? helperTargetCamera.uuid : null,
+      helperParentUuid: helper?.parent ? helper.parent.uuid : null,
+      helpersCreated,
+      helpersDisposed,
+    }
+  }
+
+  // Install diagnostic only in stub builds
+  if (typeof window !== 'undefined' && (window as unknown as Record<string, unknown>).__spark_stub === true) {
+    ;(window as unknown as Record<string, unknown>).__camera_frustum_helper_diagnostic = exposeHelperDiagnostic
+  }
 </script>
 
 <!-- No DOM output — manages Three.js CameraHelper lifecycle only -->

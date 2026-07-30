@@ -1,5 +1,6 @@
 <script lang="ts">
   import { T } from '@threlte/core'
+  import { untrack } from 'svelte'
   import type { DeviceProfile } from '$lib/types'
   import { createSceneObjects } from '$lib/scenes/sceneObjects'
   import SceneRuntime from './SceneRuntime.svelte'
@@ -12,8 +13,10 @@
 
   let { url, profile, onReady }: Props = $props()
 
+  // untrack() explicitly captures the initial profile value — scene objects
+  // are created once at startup and profile is immutable after that
   const { camera, cameraTarget, cameraAnimator, targetAnimator, sparkControls, splatWrapper } =
-    createSceneObjects(profile)
+    createSceneObjects(untrack(() => profile))
 </script>
 
 <SceneRuntime
