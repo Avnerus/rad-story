@@ -76,9 +76,11 @@
   })
 
   // Mesh reload callback — wired from SparkSplats to SparkStudioBridge
-  let splatsRef: { reload: (url: string) => Promise<void> } | null = null
+  // $state ensures onMeshReload={splatsRef?.reload} updates reactively
+  let splatsRef = $state<{ reload: (url: string) => Promise<void> } | null>(null)
   // Bridge ref for pager identity and renderer update
-  let bridgeRef: { getPagerIdentity: () => unknown; triggerRendererUpdate: () => void } | null = null
+  // $state ensures pagerIdentity/triggerUpdate callbacks update reactively
+  let bridgeRef = $state<{ getPagerIdentity: () => unknown; triggerRendererUpdate: () => void } | null>(null)
 
   // Reload status: SparkSplats coordinator writes to sparkControls.reloadStatus directly
   function handleReloadStatus(status: import('$lib/spark/SparkReloadRuntime').ReloadStatus): void {

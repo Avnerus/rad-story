@@ -66,15 +66,14 @@
    * LOD worker initialization), so we first wait for the pager to exist,
    * then wait for mesh.paged.pager to match it.
    */
-  async function waitForPagerHandoff(
+  function waitForPagerHandoff(
     newMesh: SplatMesh,
     generation: number,
     timeoutMs = 5_000,
   ): Promise<void> {
     // If no pager identity check is available, skip the wait
     if (!pagerIdentity) {
-      coordinator?.status.success()
-      return
+      return Promise.resolve()
     }
 
     const deadline = Date.now() + timeoutMs
@@ -110,7 +109,6 @@
               return
             }
             cancelled = true
-            coordinator?.status.success()
             resolve()
             return
           }
@@ -143,10 +141,12 @@
       coordinator.status.subscribe(onStatusChange)
     }
 
-    coordinator.onReloadComplete(async (newMeshObj: object) => {
+    // Completion callback: attach mesh to wrapper, then await pager handoff.
+    // The coordinator awaits this promise; requestReload and isReloading
+    // remain pending until pager handoff resolves or rejects.
+    coordinator.onReloadComplete(async (newMeshObj: object, generation: number) => {
       if (destroyed) return
       const newMesh = newMeshObj as SplatMesh
-      const generation = coordinator?.generation ?? 0
 
       // Remove old mesh from wrapper
       if (mesh) {
@@ -158,15 +158,8 @@
       mesh = newMesh
       wrapper.add(mesh)
 
-      // Wait for pager handoff before signalling success
-      try {
-        await waitForPagerHandoff(newMesh, generation)
-      } catch (err) {
-        if (!destroyed && coordinator?.generation === generation) {
-          const message = err instanceof Error ? err.message : String(err)
-          coordinator?.status.fail(message)
-        }
-      }
+      // Await pager handoff — rejection is caught by the coordinator
+      await waitForPagerHandoff(newMesh, generation)
     })
   })
 

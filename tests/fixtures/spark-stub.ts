@@ -149,6 +149,7 @@ export class SplatMesh extends Object3D {
   declare type: string
   initialized: Promise<SplatMesh>
   paged: PagedSplats | undefined
+  disposed = false
 
   constructor(_options?: Record<string, unknown>) {
     super()
@@ -163,6 +164,7 @@ export class SplatMesh extends Object3D {
   }
 
   dispose(): void {
+    this.disposed = true
     this.paged?.dispose()
     this.paged = undefined
   }

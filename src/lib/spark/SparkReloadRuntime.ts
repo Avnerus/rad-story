@@ -7,7 +7,16 @@
  * - Superseded requests are aborted (their meshes disposed)
  * - Component destruction invalidates all in-flight requests
  * - No arbitrary timing delays
- * - Completion tied to SplatMesh.initialized promise
+ *
+ * Async completion contract:
+ * - The `onReloadComplete` callback may return `void` or `Promise<void>`.
+ *   The coordinator `await`s it; the requestReload promise and `isReloading`
+ *   remain pending until the callback resolves.
+ * - If the callback rejects, the coordinator catches it for the current
+ *   generation, calls `status.fail(...)` and `onReloadError`, and resolves
+ *   the requestReload promise (no unhandled rejection).
+ * - Only the current generation can publish a terminal result. A superseded
+ *   generation's callback resolution/rejection is silently ignored.
  *
  * Reload status (isReloading, error) is reported through a `SparkReloadStatus`
  * instance so that the Spark Controls pane can display progress and errors.
@@ -100,6 +109,15 @@ interface ReloadRequest {
 }
 
 /**
+ * Completion callback type — may be sync or async.
+ * The coordinator awaits any returned promise.
+ */
+export type ReloadCompleteCallback = (
+  mesh: object,
+  generation: number,
+) => void | Promise<void>
+
+/**
  * Instance of the reload coordinator. Created per SparkSplats component.
  */
 export class SparkReloadCoordinator {
@@ -112,8 +130,8 @@ export class SparkReloadCoordinator {
   readonly status = new SparkReloadStatus()
 
   /**
-   * Request a mesh reload. Returns a promise that resolves when the new
-   * mesh is initialized (SplatMesh.initialized).
+   * Request a mesh reload. Returns a promise that resolves only after
+   * the completion callback (mesh attachment + pager handoff) settles.
    *
    * Rapid calls are coalesced: only the latest generation wins.
    * Superseded generations dispose their meshes.
@@ -155,9 +173,24 @@ export class SparkReloadCoordinator {
         return
       }
 
-      // Notify caller that mesh is ready — caller handles attaching to scene
-      // and waits for pager handoff before signalling success/fail
-      this._onReloadComplete?.(mesh, generation)
+      // Await the completion callback (may be async — e.g., pager handoff).
+      // The requestReload promise and isReloading remain pending until this settles.
+      try {
+        await this._onReloadComplete?.(mesh, generation)
+      } catch (activationErr) {
+        // Completion callback rejected — only fail if still current generation
+        if (!this._destroyed && this._currentRequest?.generation === generation) {
+          const message = activationErr instanceof Error ? activationErr.message : String(activationErr)
+          this.status.fail(message)
+          this._onReloadError?.(activationErr, generation)
+        }
+        return
+      }
+
+      // Success path — only if still current generation
+      if (!this._destroyed && this._currentRequest?.generation === generation) {
+        this.status.success()
+      }
     } catch (err) {
       if (!this._destroyed && this._currentRequest?.generation === generation) {
         const message = err instanceof Error ? err.message : String(err)
@@ -171,12 +204,12 @@ export class SparkReloadCoordinator {
     }
   }
 
-  /** Called when a reload completes successfully. */
-  private _onReloadComplete: ((mesh: object, generation: number) => void) | null = null
+  /** Called when a reload completes successfully. May return a promise. */
+  private _onReloadComplete: ReloadCompleteCallback | null = null
   /** Called when a reload fails. */
   private _onReloadError: ((err: unknown, generation: number) => void) | null = null
 
-  onReloadComplete(fn: (mesh: object, generation: number) => void): void {
+  onReloadComplete(fn: ReloadCompleteCallback): void {
     this._onReloadComplete = fn
   }
 

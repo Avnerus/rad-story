@@ -76,6 +76,147 @@ describe('SparkReloadCoordinator', () => {
     })
   })
 
+  describe('async completion callback', () => {
+    it('awaits async completion callback before resolving requestReload', async () => {
+      const { factory } = makeMeshFactory()
+      let activationResolved = false
+
+      coordinator.onReloadComplete(async () => {
+        // Simulate async pager handoff
+        await new Promise((r) => setTimeout(r, 10))
+        activationResolved = true
+      })
+
+      const promise = coordinator.requestReload('test.rad', factory)
+      expect(coordinator.isReloading).toBe(true)
+
+      // During async activation, isReloading should still be true
+      expect(coordinator.isReloading).toBe(true)
+
+      await promise
+
+      // After promise resolves, activation must have completed
+      expect(activationResolved).toBe(true)
+      expect(coordinator.isReloading).toBe(false)
+    })
+
+    it('keeps isReloading true through async activation', async () => {
+      const { factory } = makeMeshFactory()
+      let isReloadingDuringActivation = false
+
+      coordinator.onReloadComplete(async () => {
+        // Check isReloading during async activation
+        isReloadingDuringActivation = coordinator.isReloading
+        await new Promise((r) => setTimeout(r, 10))
+      })
+
+      await coordinator.requestReload('test.rad', factory)
+
+      expect(isReloadingDuringActivation).toBe(true)
+    })
+
+    it('catches async completion rejection and fails current generation', async () => {
+      const { factory } = makeMeshFactory()
+      const activationErr = new Error('pager handoff failed')
+      let errorReceived: unknown = null
+      let errorGen: number | null = null
+
+      coordinator.onReloadComplete(async () => {
+        await new Promise((r) => setTimeout(r, 5))
+        throw activationErr
+      })
+      coordinator.onReloadError((err, gen) => {
+        errorReceived = err
+        errorGen = gen
+      })
+
+      await coordinator.requestReload('test.rad', factory)
+
+      // Rejection is caught — no unhandled rejection
+      expect(errorReceived).toBe(activationErr)
+      expect(errorGen).toBe(1)
+      expect(coordinator.isReloading).toBe(false)
+      expect(coordinator.status.error).toBe('pager handoff failed')
+    })
+
+    it('coordinator signals success after async completion resolves', async () => {
+      const { factory } = makeMeshFactory()
+      const statuses: Array<{ isReloading: boolean; error: string }> = []
+      coordinator.status.subscribe((s) => statuses.push({ ...s }))
+
+      coordinator.onReloadComplete(async () => {
+        await new Promise((r) => setTimeout(r, 10))
+      })
+
+      await coordinator.requestReload('test.rad', factory)
+
+      expect(statuses).toHaveLength(2)
+      expect(statuses[0]).toEqual({ isReloading: true, error: '' })
+      expect(statuses[1]).toEqual({ isReloading: false, error: '' })
+    })
+
+    it('coordinator signals fail after async completion rejects', async () => {
+      const { factory } = makeMeshFactory()
+      const statuses: Array<{ isReloading: boolean; error: string }> = []
+      coordinator.status.subscribe((s) => statuses.push({ ...s }))
+
+      coordinator.onReloadComplete(async () => {
+        await new Promise((r) => setTimeout(r, 5))
+        throw new Error('activation timeout')
+      })
+
+      await coordinator.requestReload('test.rad', factory)
+
+      expect(statuses).toHaveLength(2)
+      expect(statuses[0]).toEqual({ isReloading: true, error: '' })
+      expect(statuses[1]).toEqual({ isReloading: false, error: 'activation timeout' })
+    })
+  })
+
+  describe('supersession during async activation', () => {
+    it('superseded async activation cannot publish stale terminal state', async () => {
+      const { factory } = makeMeshFactory()
+      const statuses: Array<{ isReloading: boolean; error: string }> = []
+      coordinator.status.subscribe((s) => statuses.push({ ...s }))
+      let gen2ActivationResolved = false
+
+      coordinator.onReloadComplete(async (_mesh, gen) => {
+        await new Promise((r) => setTimeout(r, gen === 1 ? 50 : 10))
+        if (gen === 2) gen2ActivationResolved = true
+      })
+
+      const p1 = coordinator.requestReload('a.rad', factory)
+      const p2 = coordinator.requestReload('b.rad', factory)
+      await Promise.all([p1, p2])
+
+      // Only gen 2 should have published success
+      const successes = statuses.filter((s) => !s.isReloading && !s.error)
+      expect(successes).toHaveLength(1)
+
+      // Gen 2 activation completed
+      expect(gen2ActivationResolved).toBe(true)
+    })
+
+    it('destroy during async activation cancels cleanly', async () => {
+      const { factory } = makeMeshFactory()
+
+      coordinator.onReloadComplete(async () => {
+        await new Promise((r) => setTimeout(r, 100))
+      })
+
+      const promise = coordinator.requestReload('test.rad', factory)
+      expect(coordinator.isReloading).toBe(true)
+
+      // Destroy while async activation is in progress
+      coordinator.dispose()
+      expect(coordinator.isReloading).toBe(false)
+
+      await promise
+      // No unhandled rejection, no stale status
+      expect(coordinator.status.isReloading).toBe(false)
+    })
+  })
+
   describe('rapid edits / coalescing', () => {
     it('latest request wins, superseded requests are aborted', async () => {
       const { factory } = makeMeshFactory()
@@ -257,44 +398,20 @@ describe('SparkReloadCoordinator', () => {
       expect(coordinator.status.isReloading).toBe(true) // start after clear works
     })
 
-    it('coordinator requestReload drives status through start, then caller signals success', async () => {
+    it('coordinator requestReload drives status through start→success', async () => {
       const { factory } = makeMeshFactory()
       const statuses: Array<{ isReloading: boolean; error: string }> = []
       coordinator.status.subscribe((s) => statuses.push({ ...s }))
 
-      coordinator.onReloadComplete(() => {
-        // Caller signals success after attaching mesh and waiting for pager
-        coordinator.status.success()
+      coordinator.onReloadComplete(async () => {
+        // Simulate async activation
+        await new Promise((r) => setTimeout(r, 5))
       })
 
       await coordinator.requestReload('test.rad', factory)
 
       expect(statuses).toHaveLength(2)
       expect(statuses[0]).toEqual({ isReloading: true, error: '' })
-      expect(statuses[1]).toEqual({ isReloading: false, error: '' })
-    })
-
-    it('coordinator requestReload stays in start state until caller signals', async () => {
-      const { factory } = makeMeshFactory()
-      const statuses: Array<{ isReloading: boolean; error: string }> = []
-      coordinator.status.subscribe((s) => statuses.push({ ...s }))
-
-      let called = false
-      coordinator.onReloadComplete(() => {
-        called = true
-        // Don't signal success yet
-      })
-
-      await coordinator.requestReload('test.rad', factory)
-
-      // Only start was emitted — not success
-      expect(statuses).toHaveLength(1)
-      expect(statuses[0]).toEqual({ isReloading: true, error: '' })
-      expect(called).toBe(true)
-
-      // Now caller signals success
-      coordinator.status.success()
-      expect(statuses).toHaveLength(2)
       expect(statuses[1]).toEqual({ isReloading: false, error: '' })
     })
 
@@ -324,10 +441,9 @@ describe('SparkReloadCoordinator', () => {
       coordinator.status.subscribe((s) => statuses.push({ ...s }))
 
       let completeCalls = 0
-      coordinator.onReloadComplete(() => {
+      coordinator.onReloadComplete(async () => {
         completeCalls++
-        // Only the last generation should call success
-        coordinator.status.success()
+        await new Promise((r) => setTimeout(r, 5))
       })
 
       // Fire 3 rapid requests — only gen 3 should complete

@@ -1,132 +1,70 @@
-# Status: Surgical follow-up — reactive status, pager handoff, stub diagnostics, transaction helper
+# Status: Close Spark reload activation lifecycle and evidence gaps
 
-## 1. Reactive status subscription lifecycle
+## 1. Summary of the completion-contract fix
 
-`SparkControls.reloadStatus` is now a `SparkReloadStatus` instance (was a plain `{ isReloading, error }` object). The `SparkControlsExtension` subscribes to it via `reloadStatus.subscribe(fn)` when a Spark controller is selected (in `$effect`), and unsubscribes on selection change or destroy. Status updates (`start`, `success`, `fail`) from the coordinator are mirrored via `handleReloadStatus()` → `sparkControls.reloadStatus.update(status)`, which notifies all subscribers only when state actually changes. The unused `SparkReloadStatusBridge.ts` has been removed.
+The `SparkReloadCoordinator.onReloadComplete` callback type changed from `(mesh, gen) => void` to `(mesh, gen) => void | Promise<void>`. The coordinator now `await`s the callback inside `_doReload`, keeping the `requestReload()` promise and `isReloading` pending through the full activation interval (mesh attachment + pager handoff). Callback rejection is caught for the current generation, reported via `status.fail()` and `onReloadError`, with no unhandled rejection. Success is centralized: only the coordinator calls `status.success()` after the awaited callback resolves, and only if the generation is still current.
 
-Tested: live start → success, start → fail, supersession (no false completion), selection change cleanup, destroy cleanup.
+## 2. Exact lifecycle and generation semantics
 
-## 2. Async pager-readiness mechanism and cancellation
+- `requestReload()` increments generation, calls `status.start()`, starts `_doReload`
+- `_doReload` awaits `createMesh()`, checks generation, then `await`s `onReloadComplete(mesh, gen)`
+- While awaiting, `_pendingPromise` is non-null → `isReloading` is true
+- If `onReloadComplete` resolves and generation is still current → `status.success()`
+- If `onReloadComplete` rejects and generation is still current → `status.fail(message)`, `onReloadError`
+- If generation changed (superseded) → callback result is silently ignored
+- If destroyed → callback result is silently ignored
+- `finally`: clears `_pendingPromise` only if generation still matches
+- A superseded generation cannot publish success/failure for the newest generation
 
-`SparkReloadCoordinator._doReload()` no longer calls `status.success()` synchronously after `onReloadComplete`. Instead, `SparkSplats.onReloadComplete` attaches the new mesh to the wrapper, then calls `waitForPagerHandoff(newMesh, generation)`. This method:
-- Uses `requestAnimationFrame` polling (not fixed sleeps)
-- Calls `triggerUpdate()` (provided by bridge) to drive pager assignment in stub builds
-- Checks `mesh.paged?.pager === targetPager` (driving renderer's pager identity)
-- Verifies pager is not disposed
-- Bounded by 5-second timeout
-- Cancels if coordinator is destroyed or generation is superseded
-- On success: calls `coordinator.status.success()`
-- On timeout/failure: calls `coordinator.status.fail(message)`
+## 3. Direct test evidence mapped to every acceptance criterion
 
-## 3. Direct old/new identity/capacity evidence
+| Criterion | Evidence |
+|-----------|----------|
+| `requestReload()` resolves only after async completion | Unit: `awaits async completion callback before resolving requestReload` |
+| `isReloading` remains true through full interval | Unit: `keeps isReloading true through async activation` |
+| Async completion rejection caught, status fails once | Unit: `catches async completion rejection and fails current generation` |
+| Superseded async activation cannot publish stale state | Unit: `superseded async activation cannot publish stale terminal state` |
+| Destroy during async activation cancels cleanly | Unit: `destroy during async activation cancels cleanly` |
+| Pane reflects already-running reload on mid-reload selection | Extension: `subscribeToReloadStatus` initializes from current `isReloading`/`error` values immediately |
+| Wrapper transform and settings persist | E2E: `stub capacity reload: wrapper transform and other settings persist` |
+| Active mesh pager ID equals drivingPagerId | E2E: `stub capacity reload: progress visible then clears, pager handoff confirmed` asserts `newestMeshPagerId === drivingPagerId` |
+| Driving pager has normalized capacity | E2E: same test asserts `drivingPagerMaxSplats === expectedCapacity` |
+| Old pager/mesh disposed | E2E: same test asserts `disposedPagerCount > 0` |
+| Exactly one current active mesh | E2E: same test asserts `activeMeshCount === 1` |
+| Rapid edits settle on final capacity | E2E: `stub capacity reload: rapid edits settle on final capacity` asserts final `drivingPagerMaxSplats === 262144` and `activeMeshCount === 1` |
+| Progress observed as true before clearing | E2E: `Spark pane capacity edit shows reload progress (stub)` asserts `reloadingBefore === true` then waits for clear |
+| `npm run check` zero errors, no warning from Spark impl | 0 errors, 0 warnings (splatsRef/bridgeRef are now `$state(...)`) |
 
-Stub exposes `__spark_stub_diagnostics` on `window` with:
-- `renderers[]` — all SparkRenderer instances ever created (with `id`, `pager`, `disposed`)
-- `pagers[]` — all SplatPager instances ever created (with `id`, `maxSplats`, `disposed`)
-- `meshes[]` — all SplatMesh instances ever created (with `id`, `paged.pager`)
-- `drivingPagerId` — current driving renderer's pager ID
+## 4. Changed files and why
 
-E2e tests assert:
-- New renderer IDs created after capacity edit (old disposed)
-- New pager IDs created (old disposed)
-- New mesh IDs created (old disposed)
-- New mesh's `paged.pager` matches driving renderer's pager
-- Capacity equals normalized (65536-multiple) input
-- Exactly one active mesh with pager attached
+| File | Change |
+|------|--------|
+| `src/lib/spark/SparkReloadRuntime.ts` | `onReloadComplete` callback accepts `void | Promise<void>`; coordinator awaits it; centralized success/fail ownership; `isReloading` stays true through full activation |
+| `src/lib/components/SparkSplats.svelte` | `onReloadComplete` returns async promise (attach mesh + await pager handoff); `waitForPagerHandoff` no longer calls `status.success()` (coordinator does) |
+| `src/lib/components/RadStoryScene.svelte` | `splatsRef` and `bridgeRef` are `$state(...)` — fixes Svelte reactivity warning |
+| `src/lib/studio/spark-controls/SparkControlsExtension.svelte` | `subscribeToReloadStatus` initializes `uiState.reloading`/`reloadError` from current values before subscribing |
+| `tests/fixtures/spark-stub.ts` | `SplatMesh` tracks `disposed` flag for e2e active-mesh assertions |
+| `tests/unit/SparkReloadCoordinator.test.ts` | Added async completion tests: await keeps pending, rejection caught, supersession during async, destroy during async |
+| `tests/e2e/rad-story.spec.ts` | Strengthened assertions: exact pager ID equality, disposal counts, active mesh count, progress observation, rapid edit final state |
+| `AGENTS.md` | Updated async completion contract, reactive refs, pager handoff, stub e2e assertions |
 
-## 4. Stub modeling and capacity e2e assertions
-
-The stub's `SparkRenderer.update()` discovers all `SplatMesh` instances (via global `_allMeshes` tracking, since the driving renderer is not added to the scene) and assigns its pager to any mesh with `paged` but no `pager`. This mirrors real Spark behavior where pager attachment occurs during the first render/update cycle. `SplatMesh.initialized` resolves after a microtask (gives UI time to render "reloading" state).
-
-E2e assertions:
-- Reload progress appears then clears
-- Old/new renderer/pager/mesh identity differences
-- Old pagers disposed
-- New pager attached to new mesh
-- Rapid edits (3 sequential) settle on final capacity
-- Wrapper transform and other settings (blurAmount) persist across reload
-- Subscription cleanup on selection change
-
-## 5. Production transaction helper/source-sync evidence
-
-`src/lib/studio/spark-controls/sparkSettingsTransaction.ts` exports `buildSparkSettingsTransaction(controls, newSettings, historicSettings)` which returns the correct transaction shape for `transactions.buildTransaction()`. The extension uses this helper instead of manually constructing transaction objects. Unit tests exercise the helper with the public transactions contract (mock `buildTransaction`, `commit`, guard behavior).
-
-## 6. Real non-stub Baby Yoda capacity/recovery evidence
-
-Performed with dev server (`npm run dev`) + Baby Yoda RAD URL (`https://avner.us/baby_yoda-lod.rad`).
-
-**Evidence of real Spark rendering:**
-- GPU stall messages confirmed: `GPU stall due to ReadPixels` in console
-- Screenshot captured via `run-code` with `page.screenshot({ timeout: 30000 })` — Baby Yoda renders correctly (hooded figure with green hand visible)
-- Camera debug state: `data-active="true"`, position `[0, 0, -1]` at scroll 0%
-- WebGL context active: `vendor: "WebKit"`, `renderer: "WebKit WebGL"`
-
-**Handler-level DOM dispatch (per AGENTS.md allowance):**
-- `dispatchEvent` on toolbar buttons (outside shadow DOM) successfully opens panes
-- Native `mousemove/mousedown/mouseup` at hierarchy coordinates selects Spark in Studio
-- `dispatchEvent` on capacity input triggers full reload pipeline (renderer recreation, mesh reload)
-- `dispatchEvent` on shadow DOM hierarchy items does NOT trigger Studio's internal selection (known limitation)
-
-**Capacity reload on real Spark:**
-- Capacity changed from 1048576 → 524288 via DOM dispatch
-- Reload completed with no error, no stale reloading indicator
-- Baby Yoda continues rendering after reload (screenshot confirms)
-- Camera state preserved at initial position
-- `SparkRenderer.pager` is created lazily by LOD worker (not in constructor) — the `waitForPagerHandoff` fix handles this by polling until pager exists
-
-**Screenshot method documented:** `playwright-cli screenshot` times out at 5s due to GPU stalls. Use `run-code` with `page.screenshot({ timeout: 30000 })` instead. `canvas.toDataURL()` returns black in headless Chromium (known `readPixels` limitation).
-
-## 7. Stub versus real distinction
-
-All stub-specific e2e tests are prefixed with "stub" in their names. The `__spark_stub` marker is verified. The AGENTS.md clearly distinguishes stub behavior (microtask-initialized meshes, global mesh tracking for pager assignment) from real Spark behavior (render-cycle pager attachment, lazy pager creation via LOD worker). No claims of real splat rendering are made from the stub build. Real Spark verification was performed separately with dev server + Baby Yoda URL.
-
-## 8. Acceptance checklist
-
-- [x] Open pane visibly transitions idle → reloading → success/error from coordinator notifications
-- [x] Status subscriptions clean up on selection change, remount, and destroy
-- [x] Reload success occurs only after public mesh/renderer pager identity matches and capacity is confirmed
-- [x] Stub genuinely models pager attachment
-- [x] Capacity e2e directly verifies old/new identities, disposal, attachment, capacity, single active mesh, rapid final-wins, and preserved state
-- [x] Production transaction helper is exercised by tests
-- [x] Real non-stub Baby Yoda capacity reload — performed with dev server, GPU stalls confirmed, reload succeeds
-- [x] Source-sync/undo evidence uses production transaction logic
-- [x] Check, lint, all unit tests, full e2e, and build pass
-- [x] AGENTS.md updated with verified final behavior
-
-## 9. Exact all-green results
+## 5. Exact command results
 
 ```
-npm run check    → 0 errors, 1 pre-existing warning (splatsRef non-reactive)
+npm run check    → 0 errors, 0 warnings
 npm run lint     → clean
-npm run test:unit → 236 tests pass (14 files)
+npm run test:unit → 242 tests pass (14 files)
 npm run test:e2e → 56 tests pass
 npm run build    → success
 ```
 
-## 10. Files changed
+## 6. Remaining limitations
 
-- `src/lib/spark/SparkControls.ts` — Added `SparkReloadStatus` import, `reloadStatus` is now a `SparkReloadStatus` instance, `dispose()` clears it
-- `src/lib/spark/SparkReloadRuntime.ts` — Added `update()` method to `SparkReloadStatus`; coordinator no longer calls `status.success()` synchronously
-- `src/lib/spark/SparkReloadStatusBridge.ts` — **Deleted** (unused)
-- `src/lib/components/SparkSplats.svelte` — Added `pagerIdentity` and `triggerUpdate` props; `waitForPagerHandoff()` with RAF polling, timeout, cancellation
-- `src/lib/components/SparkStudioBridge.svelte` — Added `pager` and `realRenderer` to handle; `getPagerIdentity()` and `triggerRendererUpdate()` exports
-- `src/lib/components/RadStoryScene.svelte` — Removed bridge import/usage; added `bridgeRef`, `getPagerIdentity()`, `triggerRendererUpdate()`; wired to SparkSplats
-- `src/lib/studio/spark-controls/SparkControlsExtension.svelte` — Subscribes to `SparkControls.reloadStatus` on selection; uses `buildSparkSettingsTransaction()` helper
-- `src/lib/studio/spark-controls/sparkSettingsTransaction.ts` — **New** production transaction helper
-- `tests/fixtures/spark-stub.ts` — Added `update()` method for pager handoff; global instance tracking; `__spark_stub_diagnostics`; microtask-initialized meshes
-- `tests/e2e/rad-story.spec.ts` — Added 6 new stub capacity tests; updated existing capacity test
-- `tests/unit/SparkReloadCoordinator.test.ts` — Updated tests for async success signaling
-- `tests/unit/SparkReloadStatus.test.ts` — **New** tests for `SparkReloadStatus` (update, subscribe, lifecycle)
-- `tests/unit/sparkControlsTransactions.test.ts` — Updated to use production helper
-- `AGENTS.md` — Updated reload status, pager handoff, integration flow, e2e descriptions
+- **Stub vs real Spark**: The stub creates `SparkRenderer.pager` in the constructor. Real Spark creates it lazily via the LOD worker. The `waitForPagerHandoff` handles both by polling until `pagerIdentity()` returns a value. In headless Chromium, the LOD worker may not initialize within the 5s timeout for some configurations.
+- **`dispatchEvent` on shadow DOM hierarchy items** does not trigger Studio's internal selection (must use native `mousemove/mousedown/mouseup` at measured coordinates).
+- **Source-sync/undo** via actual dev-server source editing not automated.
+- **Real Spark e2e**: Full automation with real Spark is impractical due to GPU stalls blocking native pointer commands and `playwright-cli screenshot`. `run-code` with `page.screenshot({ timeout: 30000 })` captures screenshots successfully.
 
-## 11. Remaining non-core limitations
+## 7. Final commit hash
 
-- `dispatchEvent` on shadow DOM hierarchy items does not trigger Studio's internal selection (must use native `mousemove/mousedown/mouseup` at measured coordinates)
-- Real Spark `SparkRenderer.pager` is created lazily by LOD worker; in headless mode the worker may not initialize within the 5s timeout for some configurations
-- The `splatsRef` non-reactive warning is pre-existing and unrelated to this change
-- Source-sync/undo via actual dev-server source editing not automated
-
-## 12. Commit hash
-
-`a8ccd08`
+`43c3288`

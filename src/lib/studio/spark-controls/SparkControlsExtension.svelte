@@ -85,6 +85,10 @@
   /** Subscribe to reload status from the selected SparkControls. */
   function subscribeToReloadStatus(controls: SparkControls): void {
     unsubscribeReloadStatus?.()
+    // Initialize from current values immediately (catches mid-reload selection)
+    uiState.reloading = controls.reloadStatus.isReloading
+    uiState.reloadError = controls.reloadStatus.error
+    // Then subscribe for future changes
     unsubscribeReloadStatus = controls.reloadStatus.subscribe((status) => {
       uiState.reloading = status.isReloading
       uiState.reloadError = status.error
