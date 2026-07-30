@@ -10,7 +10,7 @@ The requested example and route are:
 - URL: `/scene/baby_yoda`
 - RAD URL: `https://avner.us/baby_yoda-lod.rad`
 
-Support only the singular route namespace `/scene/{sceneName}`. Do not add `/scenes/{sceneName}` as an alias. The URL route is singular even though the source directory remains plural: `src/lib/scenes/`.
+Support the route namespace `/scene/{sceneName}`. The source files remain in `src/lib/scenes/`.
 
 Also add a declarative way for a camera-bearing `ScrollAnimator` in a scene file to request camera-frustum visualization. When that animator is selected in Studio, the helper for its descendant `PerspectiveCamera` must be displayed just as it is when the camera itself is selected. The scene declaration should make this opt-in obvious and source-local.
 
@@ -159,7 +159,6 @@ Create focused new tests, then run at minimum:
 Add unit coverage for pure route parsing/name validation/scene registry behavior and any extracted camera-helper selection/lifecycle logic. Add e2e coverage for:
 
 - direct visit and refresh of `/scene/baby_yoda`
-- rejection/not-found behavior for the unsupported plural path `/scenes/baby_yoda`
 - invalid and unknown scene paths
 - Baby Yoda hard-coded URL being used with no `?url=` mutation
 - scroll 0% and 100% camera/target behavior in the scene
@@ -188,7 +187,7 @@ Use the Spark stub for deterministic e2e tests as the existing suite does. If a 
 Write `.codex-handoff/status.md` with:
 
 1. Summary of the implemented architecture and why Studio source sync targets each scene file.
-2. Route syntax and scene discovery/validation behavior, confirming that only singular `/scene/{sceneName}` URLs are supported while files remain under plural `src/lib/scenes/`.
+2. Route syntax and scene discovery/validation behavior for `/scene/{sceneName}`, while source files remain under `src/lib/scenes/`.
 3. Exact files added/changed and their responsibilities.
 4. Baby Yoda scene details and its declared RAD URL.
 5. Declarative camera-frustum-helper API and lifecycle behavior.
