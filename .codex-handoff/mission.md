@@ -1,154 +1,158 @@
-# Mission: File-backed scenes and camera-rig frustum helper
+# Follow-up mission: make scene persistence and camera helpers non-vacuous
 
 ## Objective
 
-Add first-class, file-backed scenes to RAD Story. A scene is selected by URL and corresponds to an actual Svelte source file under `src/lib/scenes/`. Each scene must own its hard-coded RAD URL and its Studio-authorable declarations so that model transforms, camera/target scroll keyframes, and Spark settings can be edited and source-synced independently into that scene file.
+Keep the new `/scene/{sceneName}` architecture, but correct the defects found during Codex verification. The current implementation does not yet satisfy the core requirement that every scene persist its model transform in its own Svelte file, and the camera/helper lifecycle has correctness regressions that the new tests do not actually assert.
 
-The requested example and route are:
+Do not redo the feature. Make focused architectural corrections, strengthen the tests so they prove the requested behavior, update `AGENTS.md`, and report honestly.
 
-- Scene file: `src/lib/scenes/baby_yoda.svelte` (use the repository's filename casing convention consistently)
-- URL: `/scene/baby_yoda`
-- RAD URL: `https://avner.us/baby_yoda-lod.rad`
+## Verified defects to fix
 
-Support the route namespace `/scene/{sceneName}`. The source files remain in `src/lib/scenes/`.
+### 1. The model/SplatWrapper is not scene-owned or scene-persistent
 
-Also add a declarative way for a camera-bearing `ScrollAnimator` in a scene file to request camera-frustum visualization. When that animator is selected in Studio, the helper for its descendant `PerspectiveCamera` must be displayed just as it is when the camera itself is selected. The scene declaration should make this opt-in obvious and source-local.
+`SceneRuntime.svelte` instantiates shared `SparkSplats.svelte`, and `SparkSplats.svelte` still creates its own `wrapper` and owns this literal declaration:
 
-## Architectural direction
+```svelte
+<T is={wrapper} name="SplatWrapper" />
+```
 
-Refactor `RadStoryScene.svelte` into a reusable scene runtime/host plus lean, declarative scene files.
+That source metadata points to shared `SparkSplats.svelte`, not `src/lib/scenes/baby_yoda.svelte`. The status report's claim that the Baby Yoda model/SplatWrapper transform source-syncs into the scene file is therefore unsupported and architecturally false.
 
-The runtime/host should own shared behavior only:
+Externalize the stable wrapper so each scene creates/owns it and contains a literal source-syncable `<T is={splatWrapper} ...>` declaration. `SparkSplats` may manage the internal `SplatMesh` child and reload lifecycle, but it must use the scene-provided wrapper rather than declaring the authorable wrapper in shared source. Preserve the stable-wrapper reload invariant and diagnostics.
 
-- ScrollTrigger creation, attachment, traversal-based animator playback, and cleanup
-- per-frame camera look-at behavior and active-camera/debug state
-- Spark renderer bridge and reload lifecycle
-- common loading/ready wiring
-- shared Studio integration that cannot live declaratively in a scene
+The ad-hoc URL viewer also needs an explicit wrapper declaration in its owning source, without sharing a mutable wrapper with file-backed scenes.
 
-Each file under `src/lib/scenes/` should own only scene-specific declarations/data:
+### 2. The helper flag has two sources of truth
 
-- the hard-coded RAD URL
-- literal scene objects exposed to Studio, especially the camera `ScrollAnimator`, target `ScrollAnimator`, `PerspectiveCamera`, `CameraTarget`, `SparkControls`, and splat wrapper/model declaration as appropriate
-- keyframe arrays, settings, names, and scene-specific transforms
-- the declarative opt-in for selecting the camera animator to show the descendant camera frustum
+Baby Yoda calls:
 
-The scene file must remain lean: do not copy renderer setup, ScrollTrigger lifecycle, reload coordination, camera tasks, or other orchestration into every scene. Avoid maintaining the same keyframes/settings twice (for example once in constructor assignments and once in markup). There must be one source-syncable declarative value for each authored property.
+```ts
+createSceneObjects(profile, { showFrustum: true })
+```
 
-Preserve Threlte Studio source sync. In particular, do not hide authorable objects behind a reusable abstraction if doing so causes Studio transactions to update a shared component rather than the selected scene file. Prefer literal `<T>` nodes in each scene file for values Studio must rewrite. Validate this behavior rather than assuming that a config object or wrapper component remains source-syncable.
+and also declares:
 
-Use a small explicit scene contract between the scene file and runtime. A Svelte 5 snippet/context/composition design is acceptable if it keeps the authorable `<T>` declarations literal in the scene source. Keep object ownership and cleanup clear. Do not create global singleton scene objects that leak state across navigation or HMR.
+```svelte
+showChildCameraFrustumWhenSelected
+```
 
-For scene discovery/routing, use a statically analyzable registry derived from actual Svelte scene modules (for example a narrowly scoped `import.meta.glob`), or an equally small typed registry if Studio/Vite source transformation requires it. Requirements:
+Remove the imperative `showFrustum` option/assignment. The literal scene attribute must be the only authored source of truth.
 
-- only valid files below `src/lib/scenes/` can become scenes
-- scene names are normalized and validated; path traversal or arbitrary imports are impossible
-- direct navigation and browser refresh at `/scene/baby_yoda` load the scene
-- unknown scene names render a clear not-found state and a way back
-- history/back/forward behavior remains correct
-- the existing landing URL workflow should remain functional unless a clean, tested product decision makes scene routes the replacement; do not silently regress it
-- entering a scene route must not write the hard-coded RAD URL into the query string
+### 3. Scene-created SparkControls leaks on route unmount
 
-Do not introduce SvelteKit solely for this feature. The current app is a client-side Vite/Svelte app; implement the smallest robust pathname router unless repository constraints prove otherwise.
+`baby_yoda.svelte` creates `SparkControls` but never disposes it. Only the ad-hoc `RadStoryScene.svelte` currently calls `sparkControls.dispose()`.
 
-## Camera-frustum helper direction
+Define one clear owner and dispose every scene's controller exactly once on scene removal. Prefer putting shared cleanup into the runtime ownership contract so lean scene files do not repeat lifecycle scripts, if that is safe. Avoid double-disposal.
 
-First inspect how the installed Threlte Studio version currently detects selection and displays the helper for a selected `PerspectiveCamera`. Reuse public APIs where possible and do not import private Studio internals.
+### 4. SceneRuntime now controls the editor camera incorrectly
 
-Add a declarative, typed opt-in located in the camera animator declaration. A property on `ScrollAnimator` (with a clear name such as `showChildCameraFrustumWhenSelected`) is one possible design; a tiny declarative child/marker is also acceptable if it produces cleaner ownership and source sync. Choose the smallest public-API-compatible design and document the final contract.
+The old code always applied look-at to the real app `PerspectiveCamera`. The new runtime calls `lookAt` on `threlte.camera.current`, so enabling Studio's editor camera causes the runtime to force the editor camera toward `CameraTarget` every frame. It also changes the debug position fields to the editor camera, contrary to the documented debug contract.
 
-Behavior:
+Pass the actual scene app camera and camera target through a typed runtime contract. Always apply target look-at to that app camera. Keep the editor camera freely controllable. Debug `data-x/y/z` must remain the app camera's world position, while `data-active` alone reports whether it is currently active.
 
-- selecting the opted-in camera `ScrollAnimator` shows the helper for its intended descendant `PerspectiveCamera`
-- selecting the `PerspectiveCamera` itself continues to show the helper
-- selecting unrelated objects does not show that camera's helper
-- deselection, scene changes, Studio editor-camera toggles, HMR, and component destruction clean up correctly
-- no duplicate helpers, stale helpers, or leaked subscriptions/Three objects
-- the helper tracks the animated camera's current world transform and projection changes
-- the helper is editor visualization only and does not affect the rendered scene or production camera ownership
-- do not assume the first arbitrary descendant camera is correct if the declarative contract can identify it explicitly
+Do not find the intended camera or target by repeated whole-scene traversal, magic names, or `_isAppCamera` markers when the scene already owns exact object references.
 
-If the built-in Studio helper cannot be extended through public APIs, implement a small owned `CameraHelper` integration with equivalent selection behavior. Keep it out of normal rendering where appropriate and dispose/remove it safely.
+### 5. The custom CameraHelper has transform, duplication, and disposal bugs
+
+The helper is added to the selected animator even though Three's `CameraHelper` uses the target camera's world matrix. Parenting it under the already-transformed animator can apply the animator transform twice. Add the owned helper to the appropriate scene/helper root so its world transform is correct.
+
+The custom integration also creates a helper when the `PerspectiveCamera` itself is selected, even though Studio already provides that behavior. This can create two helpers. The custom integration should extend selection behavior only for the opted-in animator and leave direct camera selection to Studio, unless inspection proves the installed public integration requires a different non-duplicating approach.
+
+On removal, call the appropriate helper disposal API in addition to detaching it. Repeated selection changes, scene remounts, HMR, and destruction must not leak geometry/materials or helpers.
+
+Do not silently choose the first camera from an arbitrarily complex descendant hierarchy. Establish a small unambiguous declarative contract: for example require exactly one descendant `PerspectiveCamera`, or provide a scene-local declarative target identifier. Document and test the chosen rule.
+
+### 6. The new helper e2e tests are vacuous
+
+The current assertions amount to "the debug element still exists" or `page.evaluate(() => true)`. They do not prove a helper was created, targets the correct camera, uses the correct parent/world transform, disappears, avoids duplication, or is disposed.
+
+Add a narrow deterministic test hook/diagnostic in the stub build or extract an independently testable helper controller. Tests must assert actual helper identity/count/target/parent/lifecycle state. Do not use "no crash" as evidence for visible behavior.
+
+### 7. The scene file is not yet lean
+
+`baby_yoda.svelte` repeats debug state shape, callback copying, debug DOM, loading hint, and lifecycle glue. A new scene would have to copy this boilerplate, conflicting with the request that scene files contain lean declarative authoring tags without redundant runtime code.
+
+Move shared debug/loading plumbing into shared runtime/UI code. The scene file should contain only minimal imports/object construction plus its RAD URL and literal authorable declarations. Adding another scene should not require copying the debug state object, callbacks, debug element, loading hint, Spark cleanup, or renderer lifecycle.
+
+### 8. Routing and dynamic-component warnings need correction
+
+Paths under `/scene/` with invalid names currently fall through to the landing route instead of a clear not-found state. Treat malformed, empty, and unknown scene names consistently as not found, while `/` remains the landing route.
+
+`<svelte:component>` introduced a new Svelte 5 deprecation warning. Use the supported Svelte 5 dynamic-component form, such as a capitalized reactive component variable, and leave no new warnings. Do not claim this warning is pre-existing.
+
+### 9. The reported verification was not fully green
+
+The report says `npm run test:e2e` had one failure while simultaneously marking "existing tests remain green" complete. A required full-suite command must pass before finalization. If a timing test is flaky, make it deterministic rather than accepting a failed run.
 
 ## Files likely involved
 
 - `src/App.svelte`
-- `src/lib/components/RadStoryScene.svelte` (likely split/renamed into a runtime host)
-- new runtime/context components or typed scene contract under `src/lib/components/` or `src/lib/scenes/`
-- new `src/lib/scenes/baby_yoda.svelte`
-- `src/lib/spark/ScrollAnimator.ts` if the opt-in is a typed property
-- Studio selection/helper integration under `src/lib/studio/`
-- transaction guards only if a new declarative authoring property requires deliberate persistence rules
-- `tests/unit/` for routing/registry/contract and helper lifecycle logic
-- `tests/e2e/` for direct scene routing, source-facing scene identity, Studio edits, scroll playback, Spark controls, and helper selection behavior
+- `src/lib/router.ts`
+- `src/lib/components/SceneRuntime.svelte`
+- `src/lib/components/RadStoryScene.svelte`
+- `src/lib/components/SparkSplats.svelte`
+- `src/lib/scenes/baby_yoda.svelte`
+- `src/lib/scenes/sceneObjects.ts`
+- `src/lib/studio/scroll-animator/CameraFrustumHelper.svelte`
+- possibly a small extracted helper controller/runtime under `src/lib/studio/scroll-animator/`
+- focused unit/e2e tests and Spark-stub diagnostics
 - `AGENTS.md`
 
-Keep the scope narrow and adjust the exact file list after inspecting only the relevant code.
+Adjust this list only as required by the focused fixes.
 
 ## Constraints
 
-- Maintain Svelte 5, TypeScript, Threlte, and current Studio public APIs.
-- Preserve the existing single boolean `scrub: true` ScrollTrigger and scene-wide branded `ScrollAnimator` traversal behavior.
-- Preserve the real-camera/editor-camera ownership round trip and camera-target look-at invariant.
-- Preserve the dual Spark renderer, stable `SplatWrapper`, race-safe reload, pager handoff, and reload-status behavior.
-- Preserve device-profile defaults and per-scene editable Spark settings. A scene may seed its `SparkControls` from a device profile, but Studio persistence must result in stable scene-local declarative values without duplicate initialization.
-- Model/SplatWrapper transforms authored in one scene must not affect another scene.
-- Keyframes and Spark settings authored in one scene must persist to that scene's Svelte file and must not update a shared runtime file or another scene.
-- Scene switching/remounting must clean up ScrollTrigger, runtime attachment, renderer/mesh resources, helpers, stores/subscriptions, and debug bindings.
-- Use no private `@threlte/studio` imports.
-- Avoid unrelated dependency upgrades or formatting churn.
-- Preserve the user's existing unrelated `package-lock.json` modification unless the feature genuinely requires a dependency change; never overwrite it casually.
-- Do not add redundant imperative assignments that mirror authored markup.
-- Do not weaken transaction guards or allow transform source sync onto `ScrollAnimator`/`SparkControls` unintentionally.
-- Keep accessibility and clear loading/error/not-found feedback.
-
-## Critical implementation suggestion
-
-Aim for composition resembling the following responsibility split, but adapt syntax to what Svelte 5 and Studio source sync actually support:
-
-```svelte
-<!-- src/lib/scenes/baby_yoda.svelte: illustrative, not prescribed API -->
-<SceneRuntime radUrl={BABY_YODA_URL} ...>
-  <T
-    is={cameraAnimator}
-    name="Camera ScrollAnimator"
-    keyframes={[...]}
-    showChildCameraFrustumWhenSelected
-  >
-    <T is={camera} name="PerspectiveCamera" makeDefault />
-  </T>
-
-  <T is={targetAnimator} name="Camera Target ScrollAnimator" keyframes={[...]} />
-  <T is={sparkControls} name="Spark" settings={{ ... }} />
-  <SceneSplats ... />
-</SceneRuntime>
-```
-
-The important point is not this exact API. The important points are that shared runtime code occurs once, each scene's authored values occur once, and Studio rewrites the selected scene file.
+- Preserve the `/scene/{sceneName}` route and `src/lib/scenes/` source directory.
+- Preserve literal `<T>` declarations in the individual scene file for every property/object Studio must source-sync there.
+- Preserve the dual Spark renderer, pager handoff, reload coordinator, stable wrapper, status propagation, and settings behavior.
+- Preserve boolean `scrub: true`, traversal-based ScrollAnimator playback, camera-target look-at, and editor-camera ownership.
+- Preserve the landing/ad-hoc RAD URL workflow.
+- Use public Threlte/Studio APIs only.
+- Keep authored values single-source: no constructor/markup duplication.
+- Do not add production-only test globals; gate narrow diagnostics exactly as existing Spark stub diagnostics are gated.
+- Do not hide failed checks as "flaky" in the final acceptance result.
+- Do not touch the user's unrelated local `package-lock.json` change or introduce unrelated dependency/formatting churn.
 
 ## Acceptance criteria
 
-1. Directly opening or refreshing `/scene/baby_yoda` loads the Baby Yoda RAD scene and its scrollable viewer without first using the landing form.
-2. The route maps to a real Svelte file in `src/lib/scenes/`; an unknown or invalid scene name produces a tested not-found state without attempting arbitrary imports.
-3. The Baby Yoda scene hard-codes `https://avner.us/baby_yoda-lod.rad` in its Svelte source, not in routing logic, query parameters, or a global shared default.
-4. The scene Svelte file is lean and declarative. Shared rendering, scrolling, look-at, reload, and lifecycle logic exists in reusable runtime code and is not repeated there.
-5. Studio can edit and persist the Baby Yoda model/SplatWrapper transform, camera and target scroll keyframes, and all Spark controls into the Baby Yoda scene source. Source sync targets the scene file, not a shared runtime file.
-6. Scene-authored keyframes/settings/transforms have a single source of truth; no constructor/markup duplication can overwrite Studio edits on remount.
-7. Existing landing-page URL viewing still works, or any intentional replacement is explicitly documented and fully tested. Existing query-string reload behavior for ad-hoc URL viewing is not accidentally broken.
-8. Browser back/forward navigation, route entry, scene remount, loading completion, and cleanup work without duplicate ScrollTriggers, renderers, meshes, subscriptions, or helpers.
-9. The Baby Yoda scene preserves scroll animation, camera-target look-at, Studio editor-camera toggle behavior, Spark Controls editing, capacity reload behavior, and the stable splat wrapper.
-10. A clear declarative opt-in exists on/in the camera scroll animator declaration for the frustum behavior.
-11. Selecting the opted-in camera scroll animator displays a correctly updating helper for its intended `PerspectiveCamera`. Selecting the camera directly still works; selecting unrelated objects or leaving the scene hides and cleans up the helper.
-12. The helper implementation uses public APIs, does not alter camera ownership/render output, produces no duplicates, and is lifecycle-safe.
-13. New unit and e2e tests cover the new routing/registry behavior, per-scene isolation/source-sync target where automation permits, Baby Yoda direct load and scrolling, and camera-helper selection/lifecycle.
-14. Existing tests remain green.
-15. `AGENTS.md` is updated with concise current architecture, scene authoring instructions, route/registry rules, the Baby Yoda example, the declarative frustum-helper contract, and relevant source references. Do not turn it into a chronological implementation log.
+1. `src/lib/scenes/baby_yoda.svelte` contains the literal source-syncable SplatWrapper/model `<T>` declaration and its transform attributes; shared `SparkSplats.svelte` no longer owns the authorable wrapper declaration for file-backed scenes.
+2. Editing the Baby Yoda wrapper transform builds source metadata targeting `baby_yoda.svelte`, and a reload/remount preserves the scene-authored transform.
+3. Two distinct scene instances/files cannot share wrapper, keyframe, SparkControls, helper, or mutable runtime state. Add a focused isolation test even if only one production example scene is shipped.
+4. Baby Yoda has exactly one declarative helper opt-in and no imperative duplicate.
+5. Every scene-created `SparkControls` and scene-owned Three resource is disposed exactly once on unmount.
+6. Runtime look-at always affects the app camera, never the Studio editor camera. Editor-camera navigation remains free, and ownership toggles still round-trip.
+7. Debug camera coordinates always describe the app camera; `data-active` changes with editor-camera ownership.
+8. Selecting the opted-in camera animator creates exactly one custom helper for the intended camera at the correct scene-level parent/world transform.
+9. Selecting the camera directly produces no custom duplicate; Studio's built-in behavior remains intact.
+10. Selecting an unrelated object, deselecting, remounting, or destroying removes and disposes the custom helper. Repeated selection creates no accumulation.
+11. Helper tests assert actual helper state and lifecycle; no `evaluate(() => true)`, "no crash", or unrelated debug-element proxy assertions remain.
+12. `baby_yoda.svelte` is genuinely lean and scene-specific. Shared debug/loading/lifecycle boilerplate occurs once outside individual scene files.
+13. `/scene/baby_yoda` still loads directly and on refresh; invalid, empty, and unknown names under `/scene/` show the not-found UI.
+14. The landing and ad-hoc URL viewer remain functional.
+15. No new Svelte deprecation warning remains; dynamic scene rendering uses supported Svelte 5 syntax.
+16. All unit and e2e tests, check, lint, and build complete successfully in the final full runs.
+17. `AGENTS.md` is corrected with the final scene wrapper ownership, typed runtime camera/target contract, helper behavior, cleanup rules, and source references. Keep it concise rather than an implementation log.
 
-Before finalizing, re-check every acceptance-criteria item explicitly and resolve or clearly report any unmet item.
+Before finalizing, re-check every acceptance criterion against code and a real assertion. Do not mark an item complete merely because the app did not crash.
 
-## Tests to run
+## Tests to create or strengthen
 
-Create focused new tests, then run at minimum:
+Add focused tests for:
+
+- route parsing of `/`, the valid Baby Yoda path, unknown names, malformed names, and an empty scene name
+- scene registry/name safety
+- scene-owned SplatWrapper source metadata/transaction target
+- per-scene wrapper/controller/object isolation
+- stable scene wrapper transform across Spark capacity reload and remount
+- app-camera look-at and debug position while editor camera is active
+- editor-camera ownership toggle round trip
+- helper creation with exact target and scene-level parent
+- exactly one custom helper for animator selection
+- zero custom helpers for direct camera and unrelated selection
+- helper removal and disposal on selection change, repeated toggle, scene remount, and destroy
+- no duplicate ScrollTriggers/renderers/controllers after navigation
+
+Run, in the final full verification:
 
 - `npm run check`
 - `npm run lint`
@@ -156,45 +160,36 @@ Create focused new tests, then run at minimum:
 - `npm run test:e2e`
 - `npm run build`
 
-Add unit coverage for pure route parsing/name validation/scene registry behavior and any extracted camera-helper selection/lifecycle logic. Add e2e coverage for:
-
-- direct visit and refresh of `/scene/baby_yoda`
-- invalid and unknown scene paths
-- Baby Yoda hard-coded URL being used with no `?url=` mutation
-- scroll 0% and 100% camera/target behavior in the scene
-- browser history/back-forward if navigation UI is added
-- camera selection vs opted-in animator selection vs unrelated selection, including helper visibility and cleanup
-- scene remount/repeated navigation without duplicate runtime resources
-- representative Studio edits for keyframes, Spark settings, and splat wrapper transform, with evidence that the scene-owned declarations are the source-sync targets
-
-Use the Spark stub for deterministic e2e tests as the existing suite does. If a source-file rewrite cannot safely run inside e2e, test transaction metadata/source target deterministically and include a concise manual Studio source-sync verification. Manually verify the real Baby Yoda URL when practical, but do not substitute manual checking for deterministic automated coverage.
+All must pass. Do not perform only isolated reruns after a failed full suite and call the result green.
 
 ## Things Pi must not change
 
-- Do not replace or redesign the Spark renderer/reload architecture.
-- Do not change ScrollAnimator interpolation/canonicalization semantics.
-- Do not replace boolean ScrollTrigger scrubbing with numeric scrub or per-frame transform reapplication.
-- Do not remove the landing/ad-hoc URL experience without an explicit, justified product decision in the report.
-- Do not make scene routing capable of importing arbitrary filesystem paths.
-- Do not move scene-specific editable values into a central shared config if that prevents Studio from persisting to the individual Svelte scene file.
-- Do not use private Studio modules or patch `node_modules`.
-- Do not broadly relax source-sync transaction guards.
-- Do not commit generated build artifacts, Playwright reports, screenshots, or unrelated lockfile churn.
-- Do not modify unrelated user work.
+- Do not redesign the scene registry or introduce SvelteKit.
+- Do not add another production scene merely to test isolation.
+- Do not regress the existing Spark reload ownership fixes.
+- Do not change ScrollAnimator sampling/interpolation semantics.
+- Do not force the editor camera to look at the scene target.
+- Do not patch Studio internals or `node_modules`.
+- Do not keep the helper's direct-camera branch if it duplicates Studio's built-in helper.
+- Do not keep the SplatWrapper `<T>` solely in shared runtime code.
+- Do not retain vacuous e2e assertions.
+- Do not modify unrelated user work or generated artifacts.
 
 ## Expected completion report
 
 Write `.codex-handoff/status.md` with:
 
-1. Summary of the implemented architecture and why Studio source sync targets each scene file.
-2. Route syntax and scene discovery/validation behavior for `/scene/{sceneName}`, while source files remain under `src/lib/scenes/`.
-3. Exact files added/changed and their responsibilities.
-4. Baby Yoda scene details and its declared RAD URL.
-5. Declarative camera-frustum-helper API and lifecycle behavior.
-6. Tests added and exact commands/results.
-7. Manual verification performed, if any.
-8. Acceptance-criteria checklist, item by item.
-9. Known limitations, follow-ups, or deviations.
-10. Confirmation that `AGENTS.md` was updated concisely.
+1. Exact corrections made for each verified defect above.
+2. Final ownership table for scene objects, SplatWrapper, SplatMesh, SparkControls, camera helper, and cleanup.
+3. Evidence that Studio source sync for wrapper transform, keyframes, and Spark settings targets `baby_yoda.svelte`.
+4. Camera/editor-camera look-at and debug-state behavior.
+5. Helper declarative contract, parent/target rules, disposal behavior, and non-vacuous assertions.
+6. How scene-file boilerplate was removed.
+7. Route/not-found and Svelte dynamic-component correction.
+8. Changed files and focused rationale.
+9. Exact final full-suite command results.
+10. Acceptance-criteria checklist mapped to concrete tests or source evidence.
+11. Remaining limitations without marking unmet criteria complete.
+12. Confirmation that `AGENTS.md` was updated concisely.
 
-Always write `status.md` as the last action before committing and pushing. After writing it, do not perform any more verification or modification. Commit all intended changes, including the report, to the current branch and push them. Do not run tests or edit files after the final push.
+Always write `status.md` as the final content change before committing and pushing. Re-check all acceptance criteria immediately before writing it. After writing the report, do not run more verification or modify files. Commit all intended changes, including the report, push the current branch, and do not perform any further checks or edits after the final push.
