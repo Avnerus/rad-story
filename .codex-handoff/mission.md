@@ -1,133 +1,152 @@
-# Follow-up mission: prove live mode switching and persisted settings
+# Mission: Scene-scoped Spark Controls and unobstructed edit route
 
 ## Objective
 
-Keep the implemented playback/edit architecture unchanged. Close two verification gaps and one diff-hygiene issue:
+Make the Spark Controls Studio extension operate automatically on the active scene's `SparkControls` instance. Authors must not need to select the `Spark` hierarchy object before opening or using the pane.
 
-1. Prove view/edit transitions clean up correctly during a live SPA route change, not only through full-page `page.goto()` navigation.
-2. Prove the complete persisted Spark settings snapshot is applied identically in playback and edit mode; controller registration alone is insufficient.
-3. Remove the trailing whitespace introduced in `SceneRuntime.svelte`.
+Also remove the viewer header from `/scene/{scene_name}/edit`: neither the Home button nor the `Scene: name` indicator should overlay the Studio toolbar. Keep the header unchanged in playback and ad-hoc viewer modes.
 
-## Required corrections
-
-### Live SPA cross-mode transitions
-
-The current cross-mode tests use `page.goto()` between view and edit URLs. That destroys/reloads the document and cannot detect leaks in App's live `{#if sceneMode === 'edit'}` branch transition.
-
-Add a small test helper that changes history and dispatches `popstate`, matching the production router:
-
-```ts
-window.history.pushState({}, '', path)
-window.dispatchEvent(new PopStateEvent('popstate'))
-```
-
-Test both directions within the same document:
-
-- edit → view
-- view → edit
-- repeated edit ↔ view cycles
-
-Start edit → view with the editor camera enabled and the custom frustum helper active. After the live transition, assert:
-
-- old Studio UI and hierarchy are removed
-- helper and its diagnostic are removed
-- editor camera no longer owns the renderer
-- the new scene's app camera is active
-- old SparkControls is disposed exactly once
-- old renderers/meshes are disposed as appropriate
-- exactly one current scene runtime, active mesh/wrapper, driving renderer/pager, and ScrollTrigger remain
-
-For view → edit, assert exactly one Studio toolbar/hierarchy/helper diagnostic appears and no old playback runtime resources remain.
-
-Use or extend narrow stub diagnostics for exact identities/counts. Do not infer cleanup merely from DOM disappearance.
-
-### Exact persisted Spark settings evidence
-
-The current playback test treats the presence of an entry in `sparkControlsDisposals` as proof that settings reached the controller. It proves only registration.
-
-Extend the existing stub-only SparkControls registration diagnostic to capture a plain snapshot of the controller's complete `settings` object, keyed by controller ID. Assert:
-
-- playback has one current controller with all 22 settings
-- edit has one current controller with all 22 settings
-- view and edit snapshots are deeply equal because they come from the same scene source
-- representative values also reach the live Spark renderers, including at least `maxPagedSplats`, one ordinary quality field, one LOD field, and one foveation field
-- switching modes recreates controller/renderer identities but preserves the complete settings values
-
-Do not duplicate expected settings in App/router code. The diagnostic reads actual scene-created controller/renderers.
-
-### Diff hygiene
-
-Remove the blank line containing trailing whitespace at `src/lib/components/SceneRuntime.svelte:13`. Ensure `git diff --check` is clean.
+This mission follows the completed playback/edit route split. Full-page navigation and direct route loads are intentional; do not introduce SPA transitions between playback and edit modes.
 
 ## Files likely involved
 
-- `tests/e2e/playback-edit.spec.ts`
-- `tests/fixtures/spark-stub.ts`
+- `src/lib/studio/spark-controls/SparkControlsExtension.svelte`
+- A small active-controller runtime/registry near `src/lib/studio/spark-controls/`, if useful
 - `src/lib/components/SceneRuntime.svelte`
-- possibly existing Spark stub diagnostic types/hooks
-- `AGENTS.md` only if diagnostic documentation changes materially
+- `src/App.svelte`
+- Relevant unit tests for any new runtime/registry
+- `tests/e2e/spark-controls.spec.ts` or the current Spark Controls e2e suite
+- `tests/e2e/playback-edit.spec.ts`
+- `AGENTS.md`
 
-Avoid production architecture changes unless a narrow identity diagnostic is required.
+Use the actual current structure and keep changes scoped; do not scan or refactor unrelated areas.
 
-## Constraints
+## Constraints and implementation guidance
 
-- Preserve `/scene/{sceneName}` as Studio-free playback.
-- Preserve `/scene/{sceneName}/edit` as Studio editing.
-- Preserve the same registry component in both modes.
-- Keep CameraFrustumHelper owned by the Scroll Animator extension.
-- Keep diagnostics stub-only and absent in production.
-- Preserve Spark reload/pager behavior, stable wrapper, default camera, source sync, and existing deterministic tests.
-- Do not add dependencies or change unrelated files.
-- Do not touch the user's unrelated `package-lock.json`.
+### Active scene Spark Controls
+
+- Decouple the Spark Controls pane from `useObjectSelection()`. Hierarchy selection must not determine which controller the pane edits.
+- Prefer explicit registration of the mounted scene's `SparkControls` instance through a small reactive runtime/bridge instead of traversing the Three scene and taking the first branded object.
+- Registration must have attach/detach lifecycle safety:
+  - A destroyed or older scene must not clear a newer scene's active controller.
+  - Remounts and route reloads must not leave stale controller or reload-status subscriptions.
+  - The no-controller state should be handled safely and clearly.
+- The active controller must remain stable while the author selects a camera, ScrollAnimator, SplatWrapper, another hierarchy object, multiple objects, or nothing.
+- Keep transactions associated with the actual active `SparkControls` object so Threlte Studio source sync continues to target the correct scene's declarative `settings` attribute.
+- Continue subscribing to `activeController.reloadStatus`; unsubscribe when the active controller changes or the extension is destroyed.
+- Keep the `Spark` hierarchy object and its source-sync metadata unless there is a proven reason to remove it. The change is that selection is no longer required.
+- Preserve all validation, controlled renderer recreation, mesh reload, and transaction-guard invariants.
+- The app currently has one active scene per Canvas. Still make registration identity-safe rather than relying on detach ordering.
+- Apply the same behavior wherever the existing Spark Controls extension is available, including the ad-hoc editor, unless the current architecture makes that unsafe. Do not regress ad-hoc authoring.
+
+Critical shape only, not a mandated API:
+
+```ts
+const detach = activeSparkControlsRuntime.attach(sparkControls)
+
+onDestroy(detach) // detach clears only if this registration is still current
+```
+
+The extension should react to the runtime's active controller and build transactions against that object without requiring hierarchy selection.
+
+### Edit-route header
+
+- On `/scene/{scene_name}/edit`, do not render the viewer header at all.
+- Remove both the Home button and `Scene: name` indicator from that mode; do not replace them with another overlay.
+- Keep the playback route header unchanged.
+- Keep the ad-hoc viewer/editor header behavior unchanged.
+- The loading overlay and other required non-header UI may remain.
+- Ensure direct navigation and refresh on an edit URL also have no header.
+
+### Navigation
+
+- Full page `page.goto`/direct-load behavior between playback and edit is the accepted design.
+- Do not add client-side SPA transitions or a playback/edit toggle for this mission.
 
 ## Acceptance criteria
 
-1. Cross-mode tests transition with `pushState` + `popstate` in the same document.
-2. Edit → view with active editor camera/helper leaves no Studio/helper/editor-camera state and exactly one healthy playback runtime.
-3. View → edit leaves exactly one Studio/editor runtime and no stale playback resources.
-4. Repeated live mode switches do not accumulate renderers, meshes, pagers, controllers, helpers, ScrollTriggers, subscriptions, or overlays.
-5. Stub diagnostics expose complete current Spark settings snapshots keyed by controller identity.
-6. Playback and edit settings snapshots contain all 22 fields and are deeply identical.
-7. Representative persisted settings are asserted on the actual live Spark renderers in both modes.
-8. Controller/renderer identities change across mode remount while settings values remain identical.
-9. Existing direct navigation, refresh, history, playback camera, and edit-source-sync tests remain green.
-10. `git diff --check` reports no whitespace errors.
-11. Check reports zero errors/warnings; lint, unit, full e2e, and build pass.
-12. `AGENTS.md` remains concise and accurate.
+1. Opening the Spark Controls pane in a scene editor immediately shows and edits the active scene's settings without selecting `Spark`.
+2. Selecting any other hierarchy object, selecting multiple objects, or clearing selection does not disable, retarget, or reset the Spark Controls pane.
+3. Spark edits still persist to the correct scene Svelte source and retain all current validation behavior.
+4. Reload progress and errors continue to reflect the active controller, including when hierarchy selection changes during a reload.
+5. Scene/editor remounts do not retain stale controllers or subscriptions, and an older detach cannot clear a newer registration.
+6. `/scene/baby_yoda/edit` renders no viewer header, Home button, or `Scene: baby_yoda` indicator.
+7. The Studio toolbar is unobstructed at the top of the edit route.
+8. `/scene/baby_yoda` retains its playback header and behavior.
+9. The ad-hoc viewer/editor retains its existing header and Spark authoring behavior.
+10. Existing playback/edit route behavior remains full-page/direct-load based; no SPA transition requirement is introduced.
+11. Existing ScrollAnimator, camera-frustum-helper, renderer, reload, source-sync, and scene persistence behavior remains intact.
+12. `AGENTS.md` is updated with concise current architecture and source references for automatic active-scene Spark Controls and edit-route header visibility.
 
-## Tests to run
+Before finalizing, re-check every acceptance criterion explicitly.
 
-- focused Playwright tests for the live cross-mode transitions
-- `npm run check`
-- `npm run lint`
-- `npm run test:unit`
-- `npm run test:e2e`
-- `npm run build`
-- `git diff --check`
+## Tests to add or update
 
-Run the complete suite after focused work and report exact totals.
+- Add unit tests for the active-controller runtime/registry if one is introduced:
+  - attach publishes the controller;
+  - current detach clears it;
+  - stale detach cannot clear a newer controller;
+  - subscriber cleanup/remount behavior;
+  - safe no-controller state.
+- Update Spark Controls e2e coverage to open and use the pane without first selecting `Spark`.
+- Verify numeric, boolean, nullable, cone-angle, and capacity edits still target the active controller and preserve source-sync behavior.
+- Verify selecting a non-Spark object, multiple objects, and no object leaves the pane bound to the same active controller.
+- Preserve or extend the mid-reload selection-change test so progress/error state remains correct without Spark selection.
+- Add route tests proving:
+  - `/scene/baby_yoda/edit` has no viewer header, Home button, or scene-name indicator;
+  - the Studio toolbar has no header overlap using actual bounding rectangles where practical;
+  - `/scene/baby_yoda` still has its playback header;
+  - ad-hoc mode retains its existing header.
+- Add remount/direct-refresh coverage sufficient to detect a stale active controller.
+- Run:
+  - `npm run check`
+  - `npm run lint`
+  - `npm run test:unit`
+  - `npm run test:e2e`
+  - `npm run build`
+  - `git diff --check`
+
+Create new tests for the new behavior; do not rely only on modifying old assertions.
 
 ## Things Pi must not change
 
-- Do not replace live SPA tests with `page.goto()` tests.
-- Do not use DOM disappearance alone as cleanup evidence.
-- Do not treat controller registration as settings evidence.
-- Do not hard-code a second settings source for comparison.
-- Do not redesign routing, scene files, Studio hosting, or Spark lifecycle.
-- Do not modify unrelated user work, lockfiles, dependencies, or generated output.
+- Do not implement SPA transitions between playback and edit.
+- Do not change the `/scene/{scene_name}` and `/scene/{scene_name}/edit` route contract.
+- Do not add or refer to a `/scenes` route.
+- Do not revisit the transform gizmo appearance. The reported wireframe/white appearance was Studio's Wireframe render mode and is resolved by returning to Rendered mode.
+- Do not remove the playback or ad-hoc header.
+- Do not move persisted scene settings into browser storage, a central manifest, or runtime-only state.
+- Do not move the hard-coded splat URL out of the scene Svelte file.
+- Do not weaken transaction guards or permit Spark transforms/nested settings paths to source-sync.
+- Do not alter Spark defaults, validation bounds, renderer propagation, reload coordination, pager handoff, or race-safety behavior except where strictly necessary for this feature.
+- Do not refactor unrelated scene, Studio, Spark, or routing code.
+- Do not modify unrelated user work, including `package-lock.json`.
+
+## Documentation
+
+Update `AGENTS.md` with concise, up-to-date information that a fresh agent needs:
+
+- where the active Spark controller registration/runtime lives;
+- how `SceneRuntime` attaches and detaches it;
+- how `SparkControlsExtension` edits it independently of hierarchy selection;
+- the lifecycle/stale-detach invariant;
+- edit-route versus playback/ad-hoc header behavior;
+- relevant source and test file references.
+
+Do not turn `AGENTS.md` into a chronological implementation log.
 
 ## Expected completion report
 
 Write `.codex-handoff/status.md` with:
 
-1. Live SPA transition mechanism and exact cleanup identities/counts.
-2. Complete controller settings diagnostic format.
-3. View/edit settings equality and renderer propagation evidence.
-4. Repeated-cycle leak evidence.
-5. Diff-hygiene result.
-6. Changed files and rationale.
-7. Acceptance checklist mapped to unconditional assertions.
-8. Exact full-suite results and warning counts.
-9. `AGENTS.md` update confirmation, if changed.
+1. Summary of the implementation.
+2. Files changed and why.
+3. Active-controller lifecycle and transaction-targeting explanation.
+4. Header visibility behavior by route/mode.
+5. Tests added or updated.
+6. Exact commands run and results.
+7. Explicit acceptance-criteria checklist.
+8. Any limitations, risks, or manual checks still needed.
+9. Final commit hash pushed to the current branch.
 
-Always write `status.md` as the final content change before committing and pushing. Re-check all acceptance criteria immediately before writing it. After writing the report, do not run more verification or modify files. Commit all intended changes, push the current branch, and stop.
+Always write `status.md` as the last action before committing/pushing. After writing it, perform no more verification or modification. Push the completed implementation and report to the current branch.
