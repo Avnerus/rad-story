@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { T } from '@threlte/core'
   import { onMount, onDestroy } from 'svelte'
   import { Object3D } from 'three'
   import { SplatMesh } from '@sparkjsdev/spark'
@@ -7,6 +6,12 @@
 
   interface Props {
     url: string
+    /**
+     * Scene-provided stable wrapper Object3D. The wrapper is declared as a
+     * literal `<T>` in the scene file so Studio source sync targets the scene.
+     * SparkSplats manages the internal SplatMesh child and reload lifecycle.
+     */
+    wrapper: Object3D
     /** Optional callback to receive reload status updates (for pane UI). */
     onStatusChange?: (status: ReloadStatus) => void
     /**
@@ -23,13 +28,7 @@
     triggerUpdate?: () => void
   }
 
-  let { url, onStatusChange, pagerIdentity, triggerUpdate }: Props = $props()
-
-  // Stable wrapper Object3D that owns transform/name/visibility.
-  // The SplatMesh child is replaced during capacity reload but the
-  // wrapper (and its authored transform) persists.
-  const wrapper = new Object3D()
-  wrapper.name = 'SplatWrapper'
+  let { url, wrapper, onStatusChange, pagerIdentity, triggerUpdate }: Props = $props()
 
   let mesh: SplatMesh | null = $state(null)
   let coordinator: SparkReloadCoordinator | null = null
@@ -64,7 +63,7 @@
     return coordinator?.status ?? null
   }
 
-  /** Exposed for e2e diagnostics — returns the stable wrapper Object3D. */
+  /** Exposed for e2e diagnostics — returns the scene-provided wrapper Object3D. */
   export function getWrapper(): Object3D {
     return wrapper
   }
@@ -219,5 +218,4 @@
   })
 </script>
 
-<!-- Stable wrapper preserves transform across SplatMesh reloads -->
-<T is={wrapper} name="SplatWrapper" />
+<!-- No DOM output — manages SplatMesh lifecycle inside the scene-provided wrapper -->

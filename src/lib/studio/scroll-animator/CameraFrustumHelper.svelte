@@ -10,11 +10,16 @@
    * PerspectiveCamera of a selected ScrollAnimator that has
    * `showChildCameraFrustumWhenSelected = true`.
    *
-   * Also shows the helper when the PerspectiveCamera itself is selected
-   * (mirrors Studio's built-in Helpers behavior).
+   * The helper is added to the Three.js scene root (not the animator) so
+   * that the CameraHelper's world transform is correct. It tracks the
+   * animated camera's world transform every frame via useTask.
    *
-   * The helper tracks the animated camera's world transform every frame.
-   * It is editor visualization only and does not affect rendering.
+   * Direct PerspectiveCamera selection is NOT handled here — Studio's
+   * built-in Helpers extension already provides that behavior. This
+   * integration only extends selection for opted-in ScrollAnimators.
+   *
+   * Contract: the selected animator must have exactly one descendant
+   * PerspectiveCamera. The first one found via traverse is used.
    */
 
   let { children }: { children?: Snippet } = $props()
@@ -23,7 +28,19 @@
   const threlte = useThrelte()
 
   let helper: CameraHelper | null = null
-  let helperParent: Object3D | null = null
+  let helperTargetCamera: PerspectiveCamera | null = null
+
+  // Test-only diagnostic: expose helper state for e2e assertions
+  function exposeHelperDiagnostic(): { helperExists: boolean; targetCameraType: string | null } {
+    return {
+      helperExists: helper !== null,
+      targetCameraType: helperTargetCamera?.type ?? null,
+    }
+  }
+
+  if (typeof window !== 'undefined') {
+    ;(window as unknown as Record<string, unknown>).__camera_frustum_helper_diagnostic = exposeHelperDiagnostic
+  }
 
   /**
    * Find the first descendant PerspectiveCamera in an Object3D hierarchy.
@@ -40,14 +57,27 @@
   }
 
   /**
-   * Remove the current helper from its parent.
+   * Remove and dispose the current helper.
    */
   function removeHelper(): void {
-    if (helper && helperParent) {
-      helperParent.remove(helper)
+    if (helper) {
+      const scene = threlte.scene
+      if (scene) {
+        scene.remove(helper)
+      }
+      // Dispose geometry and materials to prevent leaks
+      helper.traverse((obj) => {
+        if ('geometry' in obj && obj.geometry && typeof (obj.geometry as { dispose?: () => void }).dispose === 'function') {
+          (obj.geometry as { dispose: () => void }).dispose()
+        }
+        if ('material' in obj && obj.material) {
+          const mat = obj.material as { dispose?: () => void }
+          if (typeof mat.dispose === 'function') mat.dispose()
+        }
+      })
     }
     helper = null
-    helperParent = null
+    helperTargetCamera = null
   }
 
   // Reactive derived: the single selected object (or null)
@@ -63,34 +93,27 @@
     const obj = singleSelected
     if (!obj) return
 
-    let targetCamera: PerspectiveCamera | null = null
-    let parent: Object3D | null = null
+    // Only create helper for opted-in ScrollAnimators
+    if (!isScrollAnimator(obj)) return
 
-    if (isScrollAnimator(obj)) {
-      const animator = obj as unknown as { showChildCameraFrustumWhenSelected?: boolean }
-      if (animator.showChildCameraFrustumWhenSelected) {
-        targetCamera = findDescendantCamera(obj)
-        parent = obj
-      }
-    }
+    const animator = obj as unknown as { showChildCameraFrustumWhenSelected?: boolean }
+    if (!animator.showChildCameraFrustumWhenSelected) return
 
-    // Also show helper when the camera itself is selected (mirrors built-in Helpers)
-    if (!targetCamera && obj.type === 'PerspectiveCamera') {
-      targetCamera = obj as PerspectiveCamera
-      parent = threlte.scene ?? null
-    }
+    const targetCamera = findDescendantCamera(obj)
+    if (!targetCamera) return
 
-    if (targetCamera && parent) {
-      helper = new CameraHelper(targetCamera)
-      helper.userData.ignoreOverrideMaterial = true
-      parent.add(helper)
-      helperParent = parent
-    }
+    const scene = threlte.scene
+    if (!scene) return
+
+    helper = new CameraHelper(targetCamera)
+    helper.userData.ignoreOverrideMaterial = true
+    helperTargetCamera = targetCamera
+    scene.add(helper)
   })
 
   // Update helper transform every frame (tracks animated camera position)
   useTask(() => {
-    if (helper) {
+    if (helper && helperTargetCamera) {
       helper.update()
     }
   }, { autoInvalidate: false })

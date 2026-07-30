@@ -44,6 +44,10 @@ describe('parseRoute', () => {
     expect(parseRoute('/random/path')).toEqual({ kind: 'landing' })
   })
 
+  it('returns landing for /scene with no trailing slash', () => {
+    expect(parseRoute('/scene')).toEqual({ kind: 'landing' })
+  })
+
   it('returns scene match for valid scene names', () => {
     const match = parseRoute('/scene/baby_yoda')
     expect(match.kind).toBe('scene')
@@ -61,17 +65,26 @@ describe('parseRoute', () => {
     }
   })
 
-  it('returns not-found for path traversal attempts', () => {
-    const match = parseRoute('/scene/../router')
-    // The regex won't match paths with slashes, so this falls through to landing
-    expect(match.kind).toBe('landing')
+  it('returns not-found for empty scene name (/scene/)', () => {
+    const match = parseRoute('/scene/')
+    expect(match.kind).toBe('not-found')
+    if (match.kind === 'not-found') {
+      expect(match.attemptedName).toBe('')
+    }
   })
 
-  it('returns not-found for uppercase scene names (rejected by validator)', () => {
+  it('returns not-found for uppercase scene names', () => {
     const match = parseRoute('/scene/Baby_Yoda')
-    // The route regex [a-z0-9_] doesn't match uppercase, but the broader
-    // regex [a-zA-Z0-9_] in parseRoute catches it, then validateSceneName rejects
-    // it → not-found
+    expect(match.kind).toBe('not-found')
+  })
+
+  it('returns not-found for names with special characters', () => {
+    const match = parseRoute('/scene/my-scene')
+    expect(match.kind).toBe('not-found')
+  })
+
+  it('returns not-found for path traversal attempts', () => {
+    const match = parseRoute('/scene/../router')
     expect(match.kind).toBe('not-found')
   })
 })

@@ -2,9 +2,9 @@
  * Reusable helpers for creating scene objects.
  *
  * Every scene file imports from here to create its camera, target,
- * ScrollAnimators, and SparkControls. The helpers produce plain
- * Three.js objects; the scene file declares them via literal `<T>` nodes
- * so that Studio source sync rewrites the scene file.
+ * ScrollAnimators, SparkControls, and SplatWrapper. The helpers produce
+ * plain Three.js objects; the scene file declares them via literal `<T>`
+ * nodes so that Studio source sync rewrites the scene file.
  *
  * Keyframes and settings are authored ONLY in the `<T>` attributes of the
  * scene file — never duplicated here. The constructors provide empty
@@ -22,7 +22,7 @@ import type { DeviceProfile } from '$lib/types'
  * for keyframes, settings, and transforms.
  */
 export interface SceneObjects {
-  /** The app's PerspectiveCamera (marked for debug tracking). */
+  /** The app's PerspectiveCamera. */
   camera: PerspectiveCamera
   /** The CameraTarget Object3D that the camera always looks at. */
   cameraTarget: Object3D
@@ -32,41 +32,33 @@ export interface SceneObjects {
   targetAnimator: ScrollAnimator
   /** SparkControls for per-scene Spark settings. Set via <T> attributes. */
   sparkControls: SparkControls
+  /** Stable wrapper Object3D for the SplatMesh. Declared via <T> in scene file. */
+  splatWrapper: Object3D
 }
 
 /**
  * Create a standard set of scene objects for a scroll-based splat scene.
  *
- * Keyframes and Spark settings are NOT set here — they are authored
- * exclusively in the `<T>` attributes of the scene file.
+ * Keyframes, settings, and frustum opt-in are authored exclusively in the
+ * `<T>` attributes of the scene file. This function creates empty defaults.
  *
  * @param profile - Device profile for SparkControls seed values.
- * @param sparkOverrides - Optional overrides for SparkControls profile values.
- * @param showFrustum - Whether the camera animator should show a child camera frustum helper when selected.
  */
 export function createSceneObjects(
   profile: DeviceProfile,
-  opts?: {
-    sparkOverrides?: Record<string, unknown>
-    showFrustum?: boolean
-  },
 ): SceneObjects {
   const camera = new PerspectiveCamera(60, 1, 0.1, 10_000)
-  camera.userData._isAppCamera = true
 
   const cameraTarget = new Object3D()
   cameraTarget.name = 'CameraTarget'
 
   const cameraAnimator = new ScrollAnimator()
   cameraAnimator.name = 'Camera ScrollAnimator'
-  if (opts?.showFrustum) {
-    cameraAnimator.showChildCameraFrustumWhenSelected = true
-  }
 
   const targetAnimator = new ScrollAnimator()
   targetAnimator.name = 'Camera Target ScrollAnimator'
 
-  // SparkControls seeded from device profile + optional overrides
+  // SparkControls seeded from device profile
   const sparkInitial: Record<string, unknown> = {
     lodSplatScale: profile.sparkRenderer.lodSplatScale,
     lodRenderScale: profile.sparkRenderer.lodRenderScale,
@@ -77,11 +69,11 @@ export function createSceneObjects(
     coneFoveate: profile.sparkRenderer.coneFoveate,
     behindFoveate: profile.sparkRenderer.behindFoveate,
   }
-  if (opts?.sparkOverrides) {
-    Object.assign(sparkInitial, opts.sparkOverrides)
-  }
 
   const sparkControls = new SparkControls(sparkInitial)
+
+  const splatWrapper = new Object3D()
+  splatWrapper.name = 'SplatWrapper'
 
   return {
     camera,
@@ -89,5 +81,6 @@ export function createSceneObjects(
     cameraAnimator,
     targetAnimator,
     sparkControls,
+    splatWrapper,
   }
 }

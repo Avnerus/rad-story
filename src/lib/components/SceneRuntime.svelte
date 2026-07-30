@@ -1,7 +1,7 @@
 <script lang="ts">
   import { useThrelte, useTask } from '@threlte/core'
   import { onMount, onDestroy, type Snippet } from 'svelte'
-  import { Object3D, Vector3 } from 'three'
+  import { Object3D, PerspectiveCamera, Vector3 } from 'three'
   import { ScrollTrigger } from 'gsap/ScrollTrigger'
   import { gsap } from 'gsap'
   import { isScrollAnimator } from '$lib/studio/scroll-animator/transactionGuard'
@@ -12,31 +12,22 @@
   import SparkSplats from './SparkSplats.svelte'
   import CameraFrustumHelper from '$lib/studio/scroll-animator/CameraFrustumHelper.svelte'
 
-  /** Shared debug state exposed to parent via Svelte context. */
-  export interface SceneDebugState {
-    progress: number
-    cameraX: number
-    cameraY: number
-    cameraZ: number
-    targetX: number
-    targetY: number
-    targetZ: number
-    cameraActive: boolean
-    loaded: boolean
-  }
-
   interface Props {
     url: string
     profile: DeviceProfile
     onReady?: () => void
     /** Scene-specific SparkControls instance for the bridge. */
     sparkControls?: SparkControls | null
-    /** Callback to receive debug state updates (for parent's debug element). */
-    onDebugState?: (state: SceneDebugState) => void
+    /** Scene-provided stable wrapper for the SplatMesh. */
+    splatWrapper: Object3D
+    /** The app's PerspectiveCamera — always used for look-at and debug. */
+    appCamera: PerspectiveCamera
+    /** The CameraTarget Object3D — always used for look-at and debug. */
+    cameraTarget: Object3D
     children?: Snippet
   }
 
-  let { url, profile, onReady, sparkControls = null, onDebugState, children }: Props = $props()
+  let { url, profile, onReady, sparkControls = null, splatWrapper, appCamera, cameraTarget, children }: Props = $props()
 
   // Camera debug state for e2e tests (world-space)
   let cameraProgress = $state(0)
@@ -92,76 +83,29 @@
   }
 
   function updateDebugState(): void {
-    const currentCamera = threlte.camera.current
-    if (currentCamera) {
-      currentCamera.getWorldPosition(_camWorld)
-      cameraWorldX = _camWorld.x
-      cameraWorldY = _camWorld.y
-      cameraWorldZ = _camWorld.z
-    }
+    // Always use the app camera (not threlte.camera.current)
+    appCamera.getWorldPosition(_camWorld)
+    cameraWorldX = _camWorld.x
+    cameraWorldY = _camWorld.y
+    cameraWorldZ = _camWorld.z
 
-    // Find CameraTarget in scene for debug state
-    const sceneRef = threlte.scene
-    if (sceneRef) {
-      sceneRef.traverse((obj: Object3D) => {
-        if (obj.name === 'CameraTarget') {
-          obj.getWorldPosition(_targetWorld)
-        }
-      })
-    }
+    cameraTarget.getWorldPosition(_targetWorld)
     targetWorldX = _targetWorld.x
     targetWorldY = _targetWorld.y
     targetWorldZ = _targetWorld.z
-
-    // Push debug state to parent
-    if (onDebugState) {
-      onDebugState({
-        progress: cameraProgress,
-        cameraX: cameraWorldX,
-        cameraY: cameraWorldY,
-        cameraZ: cameraWorldZ,
-        targetX: targetWorldX,
-        targetY: targetWorldY,
-        targetZ: targetWorldZ,
-        cameraActive: cameraIsActive,
-        loaded,
-      })
-    }
   }
 
   // Threlte task: update camera look-at and debug state every frame
+  // Always uses the app camera — never forces the editor camera
   useTask(() => {
-    const currentCamera = threlte.camera.current
-    if (!currentCamera) return
-
-    // Find CameraTarget in scene
-    const sceneRef = threlte.scene
-    if (sceneRef) {
-      let targetPos: Vector3 | null = null
-      sceneRef.traverse((obj: Object3D) => {
-        if (obj.name === 'CameraTarget') {
-          targetPos = obj.getWorldPosition(_targetWorld)
-        }
-      })
-      if (targetPos) {
-        currentCamera.lookAt(targetPos)
-      }
-    }
+    cameraTarget.getWorldPosition(_targetWorld)
+    appCamera.lookAt(_targetWorld)
     updateDebugState()
   }, { autoInvalidate: false })
 
-  // Diagnostic: check if the default Threlte camera is active
+  // Diagnostic: check if the app camera is the active Threlte camera
   useTask(() => {
-    const current = threlte.camera.current
-    // Find the PerspectiveCamera that was made default
-    const sceneRef = threlte.scene
-    if (sceneRef) {
-      sceneRef.traverse((obj: Object3D) => {
-        if (obj.type === 'PerspectiveCamera' && obj.userData._isAppCamera === true) {
-          cameraIsActive = current === obj
-        }
-      })
-    }
+    cameraIsActive = threlte.camera.current === appCamera
   }, { autoInvalidate: false })
 
   onMount(() => {
@@ -194,8 +138,6 @@
 
     // Mark as loaded
     loaded = true
-    // Push initial debug state so parent's debug element is populated
-    updateDebugState()
     onReady?.()
   })
 
@@ -205,8 +147,13 @@
       scrollTrigger.kill()
       scrollTrigger = null
     }
+    // Dispose SparkControls on scene unmount (single owner)
+    sparkControls?.dispose()
   })
 </script>
+
+<!-- SparkSplats: stable SplatWrapper with reload coordination (before bridge so splatsRef is set) -->
+<SparkSplats bind:this={splatsRef} {url} wrapper={splatWrapper} onStatusChange={handleReloadStatus} pagerIdentity={getPagerIdentity} triggerUpdate={triggerRendererUpdate} />
 
 <!-- SparkStudioBridge: manages dual SparkRenderer lifecycle -->
 <SparkStudioBridge bind:this={bridgeRef} {profile} {sparkControls} radUrl={url} onMeshReload={splatsRef?.reload} />
@@ -216,8 +163,24 @@
   {@render children()}
 {/if}
 
-<!-- SparkSplats: stable SplatWrapper with reload coordination -->
-<SparkSplats bind:this={splatsRef} {url} onStatusChange={handleReloadStatus} pagerIdentity={getPagerIdentity} triggerUpdate={triggerRendererUpdate} />
-
 <!-- Camera frustum helper: shows CameraHelper for opted-in ScrollAnimators -->
 <CameraFrustumHelper />
+
+<!-- Visually hidden debug element for e2e tests -->
+<div
+  class="camera-debug"
+  data-testid="camera-state"
+  data-progress={cameraProgress.toFixed(3)}
+  data-x={cameraWorldX.toFixed(3)}
+  data-y={cameraWorldY.toFixed(3)}
+  data-z={cameraWorldZ.toFixed(3)}
+  data-target-x={targetWorldX.toFixed(3)}
+  data-target-y={targetWorldY.toFixed(3)}
+  data-target-z={targetWorldZ.toFixed(3)}
+  data-active={cameraIsActive}
+  aria-hidden="true"
+></div>
+
+{#if !loaded}
+  <div class="scroll-hint">Scroll to change view</div>
+{/if}

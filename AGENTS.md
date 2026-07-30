@@ -10,9 +10,9 @@ Supports two viewing modes:
 
 **Key files:**
 - `src/App.svelte` — Root component. Landing screen ↔ viewer/scene/not-found state machine. Pathname router for `/scene/{sceneName}`. `<Canvas>` with `<Studio>` wrapping either `RadStoryScene` (ad-hoc) or a dynamic scene component (file-backed).
-- `src/lib/components/SceneRuntime.svelte` — Reusable scene runtime: ScrollTrigger creation/attachment, scene-wide `ScrollAnimator` playback via `scene.traverse`, per-frame camera look-at, debug state, Spark bridge, reload lifecycle, and `CameraFrustumHelper`. Receives scene-specific `<T>` declarations via a `children` snippet.
-- `src/lib/components/RadStoryScene.svelte` — Ad-hoc URL scene. Uses `createSceneObjects()` helper + `SceneRuntime`. Literal `<T>` nodes for camera/target animators, SparkControls. Debug element rendered outside `<Canvas>`.
-- `src/lib/components/SparkSplats.svelte` — SplatMesh lifecycle in a stable `Object3D` wrapper (`SplatWrapper`). The wrapper owns transform/name/visibility and persists across mesh reloads. Exports `reload(url)` for `SparkStudioBridge` to call. Uses `SparkReloadCoordinator` for race-safe reload coordination.
+- `src/lib/components/SceneRuntime.svelte` — Reusable scene runtime: ScrollTrigger creation/attachment, scene-wide `ScrollAnimator` playback via `scene.traverse`, per-frame camera look-at (always on app camera, never editor camera), debug state, Spark bridge, reload lifecycle, `CameraFrustumHelper`, and SparkControls disposal. Receives scene-specific `<T>` declarations via a `children` snippet. Typed props: `appCamera: PerspectiveCamera`, `cameraTarget: Object3D`, `splatWrapper: Object3D`.
+- `src/lib/components/RadStoryScene.svelte` — Ad-hoc URL scene. Uses `createSceneObjects()` helper + `SceneRuntime`. Literal `<T>` nodes for camera/target animators, SparkControls, and SplatWrapper.
+- `src/lib/components/SparkSplats.svelte` — SplatMesh lifecycle inside a scene-provided `wrapper` Object3D. The wrapper is created by the scene file and declared via a literal `<T>` for Studio source sync. SparkSplats manages the internal `SplatMesh` child and reload coordination. Exports `reload(url)` for `SparkStudioBridge` to call. Uses `SparkReloadCoordinator` for race-safe reload coordination.
 - `src/lib/components/SparkStudioBridge.svelte` — Manages dual SparkRenderer lifecycle via `createSparkStudioRenderer`. Subscribes to `SparkControls` settings changes and propagates them to both renderers. On `maxPagedSplats` changes, calls `reconfigureMaxPagedSplats()` and triggers SplatMesh reload via `onMeshReload` callback.
 - `src/lib/router.ts` — Lightweight pathname router for `/scene/{sceneName}`. Uses `parseRoute()` and `navigateToScene()`/`navigateToLanding()` with `history.pushState` + `popstate`.
 - `src/lib/scenes/registry.ts` — Static scene discovery via `import.meta.glob('./[a-z0-9_]*.svelte', { eager: true })`. Validates names against `/^[a-z0-9_]+$/`. Maps normalized names to Svelte component default exports.
@@ -22,7 +22,7 @@ Supports two viewing modes:
 - `src/lib/spark/ScrollAnimator.ts` — Three.js `Object3D` subclass with `keyframes` property, `showChildCameraFrustumWhenSelected` boolean, and `applyScrollPercentage()`.
 - `src/lib/spark/scrollAnimation.ts` — Pure keyframe model, canonicalization (with dedup), upsert/delete, bracketing, and interpolation (position lerp + quaternion slerp).
 - `src/lib/studio/scroll-animator/ScrollAnimatorExtension.svelte` — Studio extension: fixed toolbar pane with percentage display/input, keyframe list, jump, delete, and insert/save actions. Uses public `@threlte/studio/extensions` imports. Toolbar icon: `mdiAnimationOutline`.
-- `src/lib/studio/scroll-animator/CameraFrustumHelper.svelte` — Shows a Three.js `CameraHelper` for the descendant `PerspectiveCamera` of a selected `ScrollAnimator` with `showChildCameraFrustumWhenSelected = true`. Also shows for directly selected cameras. Updates helper every frame via `useTask`. Cleaned up on selection change/destroy.
+- `src/lib/studio/scroll-animator/CameraFrustumHelper.svelte` — Shows a Three.js `CameraHelper` for the descendant `PerspectiveCamera` of a selected `ScrollAnimator` with `showChildCameraFrustumWhenSelected = true`. Helper is added to the Three.js scene root (not the animator) for correct world transform. Direct camera selection is NOT handled (Studio's built-in Helpers extension already provides that). Updates helper every frame via `useTask`. Disposes geometry/materials on removal. Cleaned up on selection change/destroy.
 - `src/lib/studio/scroll-animator/FixedToolbarPane.svelte` — Local replacement for Studio's `DropDownPane`. Uses public `ToolbarButton` + `ToolbarItem` from `@threlte/studio/extend`, `@floating-ui/dom` (direct dependency) for `computePosition` with `strategy: 'fixed'`, and a simple portal to `document.body`. See "Studio Extension Pane" section below.
 - `src/lib/studio/scroll-animator/scrollAnimatorRuntime.ts` — Shared runtime bridge: reactive percentage from ScrollTrigger, `jumpToPercentage` via trigger's measured range, attach/detach lifecycle.
 - `src/lib/studio/scroll-animator/transactionGuard.ts` — Suppresses source sync for ScrollAnimator transforms (only `keyframes` and `showChildCameraFrustumWhenSelected` persist) and SparkControls transforms (only `settings` root and individual field names persist). Uses narrow structural types (no private imports).
@@ -69,9 +69,9 @@ The `scrollAnimatorRuntime` singleton bridges the scene and extension:
 - Real `PerspectiveCamera` is a child of `Camera ScrollAnimator`.
 - The camera is registered as the default Threlte camera declaratively via `<T is={camera} makeDefault />`. No imperative `threlte.camera.set()` or `makeDefaultCameras.add()` calls.
 - Named `CameraTarget` (`Object3D`) is a child of `Camera Target ScrollAnimator`.
-- The real camera **always looks at CameraTarget's world position**, updated every frame via a Threlte `useTask` (not a renderer.render wrapper).
+- The real camera **always looks at CameraTarget's world position**, updated every frame via a Threlte `useTask` (not a renderer.render wrapper). The `SceneRuntime` receives `appCamera` and `cameraTarget` as typed props — it never uses `threlte.camera.current` for look-at, so the Studio editor camera remains freely controllable.
 - Camera animator rotation does not fight the target constraint — look-at wins for the camera's final viewing direction.
-- **Editor camera toggle**: Studio's built-in editor-camera extension can override the active camera. When disabled, Threlte restores the default camera (the nested `PerspectiveCamera`). When enabled, Studio's editor camera takes over. The `data-active` attribute on the camera debug element indicates whether the app camera is currently active.
+- **Editor camera toggle**: Studio's built-in editor-camera extension can override the active camera. When disabled, Threlte restores the default camera (the nested `PerspectiveCamera`). When enabled, Studio's editor camera takes over. The `data-active` attribute on the camera debug element indicates whether the app camera is currently active. Debug `data-x/y/z` always reports the app camera's world position.
 
 ## Scene Routing and Registry
 
@@ -82,22 +82,36 @@ Route namespace: `/scene/{sceneName}`. Source files: `src/lib/scenes/{sceneName}
 **Router** (`src/lib/router.ts`): Lightweight pathname router using `window.location.pathname` and `history.pushState` + `popstate`. `parseRoute()` returns `{ kind: 'scene', scene }`, `{ kind: 'not-found', attemptedName }`, or `{ kind: 'landing' }`.
 
 **Scene contract**: Each scene file is a Svelte component that:
-1. Imports `createSceneObjects()` from `./sceneObjects` to create camera, target, animators, and SparkControls
-2. Renders `<SceneRuntime>` with scene-specific props (RAD URL, profile, sparkControls)
-3. Declares literal `<T>` nodes inside `SceneRuntime` for Studio source sync
-4. Renders its own debug div outside `<Canvas>` (DOM elements inside `<Canvas>` are overlays)
+1. Imports `createSceneObjects()` from `./sceneObjects` to create camera, target, animators, SparkControls, and SplatWrapper
+2. Renders `<SceneRuntime>` with typed props: `url`, `profile`, `onReady`, `sparkControls`, `splatWrapper`, `appCamera`, `cameraTarget`
+3. Declares literal `<T>` nodes inside `SceneRuntime` for Studio source sync (keyframes, showChildCameraFrustumWhenSelected, settings, SplatWrapper transform)
+4. All debug/loading/lifecycle plumbing is in `SceneRuntime` — scene files contain only minimal imports, object construction, RAD URL, and literal `<T>` declarations
 
-**Scene authoring** (`src/lib/scenes/sceneObjects.ts`): `createSceneObjects(profile, { showFrustum?, sparkOverrides? })` creates all standard scene objects. Keyframes and settings are authored ONLY in `<T>` attributes — never duplicated in constructor assignments. The factory provides empty defaults overwritten by `<T>` source-sync values.
+**Scene authoring** (`src/lib/scenes/sceneObjects.ts`): `createSceneObjects(profile)` creates all standard scene objects with empty defaults. Keyframes, settings, and frustum opt-in are authored ONLY in `<T>` attributes — never duplicated in constructor assignments. The `splatWrapper` Object3D is created here and declared via `<T is={splatWrapper}>` in the scene file for Studio source sync.
 
 **Example**: `src/lib/scenes/baby_yoda.svelte` at `/scene/baby_yoda` with RAD URL `https://avner.us/baby_yoda-lod.rad`.
 
+**Object ownership table:**
+
+| Object | Created by | Declared via `<T>` in | Disposed by |
+|--------|-----------|----------------------|-------------|
+| `PerspectiveCamera` | `createSceneObjects()` | scene file | Threlte/Three |
+| `CameraTarget` | `createSceneObjects()` | scene file | Threlte/Three |
+| `ScrollAnimator` (camera + target) | `createSceneObjects()` | scene file | Threlte/Three |
+| `SparkControls` | `createSceneObjects()` | scene file | `SceneRuntime.onDestroy()` |
+| `SplatWrapper` | `createSceneObjects()` | scene file | Threlte/Three |
+| `SplatMesh` | `SparkSplats` | — (child of wrapper) | `SparkSplats.onDestroy()` |
+| `CameraHelper` | `CameraFrustumHelper` | — | `CameraFrustumHelper` on selection change/destroy |
+
 ## Camera Frustum Helper
 
-`CameraFrustumHelper.svelte` shows a Three.js `CameraHelper` when:
-- A `ScrollAnimator` with `showChildCameraFrustumWhenSelected = true` is selected (shows helper for its descendant `PerspectiveCamera`)
-- A `PerspectiveCamera` is selected directly (mirrors Studio's built-in Helpers behavior)
+`CameraFrustumHelper.svelte` shows a Three.js `CameraHelper` only when a `ScrollAnimator` with `showChildCameraFrustumWhenSelected = true` is selected. It finds the first descendant `PerspectiveCamera` and creates a helper added to the Three.js scene root (not the animator) for correct world transform.
 
-The helper tracks the animated camera's world transform every frame via `useTask`. It is added to the animator (or scene root for direct camera selection) and removed on selection change. Uses public APIs only (`useObjectSelection`, `useThrelte`, `useTask`).
+Direct `PerspectiveCamera` selection is NOT handled — Studio's built-in Helpers extension already provides that behavior. This avoids duplicate helpers.
+
+The helper tracks the animated camera's world transform every frame via `useTask`. On removal, geometry and materials are disposed. Uses public APIs only (`useObjectSelection`, `useThrelte`, `useTask`).
+
+Test diagnostic: `window.__camera_frustum_helper_diagnostic()` returns `{ helperExists, targetCameraType }` in stub builds for e2e assertions.
 
 ## Studio Extension Pane
 

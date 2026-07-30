@@ -19,6 +19,22 @@ async function getCameraState(page: import('@playwright/test').Page) {
   return result!
 }
 
+/** Helper: wait for the debug element to appear */
+async function waitForDebugElement(page: import('@playwright/test').Page) {
+  await page.waitForFunction(() => {
+    return document.querySelector('[data-testid="camera-state"]') !== null
+  }, { timeout: 10_000 })
+}
+
+/** Helper: get camera frustum helper diagnostic from stub build */
+async function getHelperDiagnostic(page: import('@playwright/test').Page) {
+  return page.evaluate(() => {
+    const fn = (window as unknown as Record<string, unknown>).__camera_frustum_helper_diagnostic
+    if (typeof fn !== 'function') return null
+    return (fn as () => { helperExists: boolean; targetCameraType: string | null })()
+  })
+}
+
 test.describe('Scene routing', () => {
   test('direct visit to /scene/baby_yoda loads the scene', async ({ page }) => {
     await page.goto('/scene/baby_yoda')
@@ -48,6 +64,17 @@ test.describe('Scene routing', () => {
     await expect(page.getByRole('button', { name: 'Go home' })).toBeVisible()
   })
 
+  test('empty scene name (/scene/) shows not-found', async ({ page }) => {
+    await page.goto('/scene/')
+    await expect(page.getByRole('heading', { name: 'Scene not found' })).toBeVisible({ timeout: 10_000 })
+    await expect(page.getByRole('button', { name: 'Go home' })).toBeVisible()
+  })
+
+  test('uppercase scene name shows not-found', async ({ page }) => {
+    await page.goto('/scene/Baby_Yoda')
+    await expect(page.getByRole('heading', { name: 'Scene not found' })).toBeVisible({ timeout: 10_000 })
+  })
+
   test('not-found "Go home" navigates to landing', async ({ page }) => {
     await page.goto('/scene/nonexistent_scene')
     await expect(page.getByRole('heading', { name: 'Scene not found' })).toBeVisible()
@@ -65,22 +92,9 @@ test.describe('Scene routing', () => {
   })
 
   test('baby_yoda scene scroll 0% camera position', async ({ page }) => {
-    const consoleErrors: string[] = []
-    page.on('console', (msg) => {
-      if (msg.type() === 'error') consoleErrors.push(msg.text())
-    })
-
     await page.goto('/scene/baby_yoda')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
-
-    // Wait for the debug element to appear (SceneRuntime mounts after canvas)
-    await page.waitForFunction(() => {
-      return document.querySelector('[data-testid="camera-state"]') !== null
-    }, { timeout: 10_000 })
-
-    if (consoleErrors.length > 0) {
-      console.log('Console errors:', consoleErrors)
-    }
+    await waitForDebugElement(page)
 
     const state = await getCameraState(page)
     expect(state.progress).toBeCloseTo(0, 1)
@@ -92,10 +106,7 @@ test.describe('Scene routing', () => {
   test('baby_yoda scene scroll 100% camera position', async ({ page }) => {
     await page.goto('/scene/baby_yoda')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
-
-    await page.waitForFunction(() => {
-      return document.querySelector('[data-testid="camera-state"]') !== null
-    }, { timeout: 10_000 })
+    await waitForDebugElement(page)
 
     await page.evaluate(() => { window.scrollTo(0, document.body.scrollHeight) })
     await page.waitForTimeout(800)
@@ -130,10 +141,7 @@ test.describe('Scene routing', () => {
     // Navigate back to scene
     await page.goto('/scene/baby_yoda')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
-
-    await page.waitForFunction(() => {
-      return document.querySelector('[data-testid="camera-state"]') !== null
-    }, { timeout: 10_000 })
+    await waitForDebugElement(page)
 
     // Camera should be at initial position (no stacking)
     const state = await getCameraState(page)
@@ -158,7 +166,7 @@ test.describe('Scene routing', () => {
 })
 
 test.describe('Camera frustum helper', () => {
-  test('selecting opted-in camera animator shows helper', async ({ page }) => {
+  test('selecting opted-in animator creates helper for descendant camera', async ({ page }) => {
     await page.goto('/scene/baby_yoda')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
@@ -168,43 +176,54 @@ test.describe('Camera frustum helper', () => {
     await animatorItem.click()
     await page.waitForTimeout(500)
 
-    // Selection succeeded — no crash means the helper integration works
-    // (CameraHelper is a Three.js object, not easily inspectable from DOM)
-    const selected = await page.evaluate(() => {
-      // Check the debug state is still functional after selection
-      return document.querySelector('[data-testid="camera-state"]') !== null
-    })
-    expect(selected).toBe(true)
+    // Assert helper was created and targets the correct camera
+    const diag = await getHelperDiagnostic(page)
+    expect(diag, 'helper diagnostic available').not.toBeNull()
+    expect(diag!.helperExists, 'helper created for opted-in animator').toBe(true)
+    expect(diag!.targetCameraType, 'helper targets PerspectiveCamera').toBe('PerspectiveCamera')
   })
 
-  test('selecting unrelated object hides helper', async ({ page }) => {
+  test('selecting unrelated object removes helper', async ({ page }) => {
     await page.goto('/scene/baby_yoda')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
-    // Wait for Studio hierarchy to load
+    // First select the animator to create the helper
+    await page.getByText('Camera ScrollAnimator').click()
+    await page.waitForTimeout(500)
+
+    const diagBefore = await getHelperDiagnostic(page)
+    expect(diagBefore!.helperExists).toBe(true)
+
+    // Now select Spark (unrelated)
     const sparkItem = page.getByText('Spark')
     await expect(sparkItem.first()).toBeVisible({ timeout: 15_000 })
     await sparkItem.first().click()
     await page.waitForTimeout(500)
 
-    // No error should occur — helper should be cleaned up
-    const noErrors = await page.evaluate(() => true)
-    expect(noErrors).toBe(true)
+    // Helper should be removed
+    const diagAfter = await getHelperDiagnostic(page)
+    expect(diagAfter!.helperExists, 'helper removed for unrelated selection').toBe(false)
   })
 
-  test('selecting PerspectiveCamera directly shows helper', async ({ page }) => {
+  test('selecting PerspectiveCamera directly creates no custom helper', async ({ page }) => {
     await page.goto('/scene/baby_yoda')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
-    // Wait for Studio hierarchy to load
-    const animatorItem = page.getByText('Camera ScrollAnimator')
-    await expect(animatorItem).toBeVisible({ timeout: 15_000 })
+    // First create a helper by selecting the animator
+    await page.getByText('Camera ScrollAnimator').click()
+    await page.waitForTimeout(500)
+    const diagBefore = await getHelperDiagnostic(page)
+    expect(diagBefore!.helperExists).toBe(true)
 
-    // Expand the Camera ScrollAnimator to reveal PerspectiveCamera child
-    await animatorItem.click()
+    // Now deselect by clicking on SplatWrapper (not a camera or animator)
+    await page.getByText('SplatWrapper').first().click()
     await page.waitForTimeout(500)
 
-    // Camera may be hidden if parent is collapsed; use evaluate for reliability
+    // Custom helper should be removed (SplatWrapper is not an opted-in animator)
+    const diagAfter = await getHelperDiagnostic(page)
+    expect(diagAfter!.helperExists, 'helper removed when selecting non-animator').toBe(false)
+
+    // Now select the PerspectiveCamera directly
     await page.evaluate(() => {
       const items = document.querySelectorAll('.tv-item-text')
       for (const item of items) {
@@ -217,8 +236,48 @@ test.describe('Camera frustum helper', () => {
     })
     await page.waitForTimeout(500)
 
-    // No error — helper should be shown for the camera itself
-    const noErrors = await page.evaluate(() => true)
-    expect(noErrors).toBe(true)
+    // Custom helper should NOT exist (Studio's built-in Helpers handles this)
+    const diagFinal = await getHelperDiagnostic(page)
+    expect(diagFinal!.helperExists, 'no custom helper for direct camera selection').toBe(false)
+  })
+
+  test('repeated selection/deselection does not accumulate helpers', async ({ page }) => {
+    await page.goto('/scene/baby_yoda')
+    await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
+
+    for (let i = 0; i < 3; i++) {
+      // Select animator → helper created
+      await page.getByText('Camera ScrollAnimator').click()
+      await page.waitForTimeout(300)
+      const diagOn = await getHelperDiagnostic(page)
+      expect(diagOn!.helperExists, `iteration ${i}: helper created`).toBe(true)
+
+      // Select unrelated → helper removed
+      await page.getByText('Spark').first().click()
+      await page.waitForTimeout(300)
+      const diagOff = await getHelperDiagnostic(page)
+      expect(diagOff!.helperExists, `iteration ${i}: helper removed`).toBe(false)
+    }
+  })
+
+  test('scene remount cleans up helper', async ({ page }) => {
+    await page.goto('/scene/baby_yoda')
+    await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
+
+    // Create helper by selecting animator
+    await page.getByText('Camera ScrollAnimator').click()
+    await page.waitForTimeout(500)
+    const diagBefore = await getHelperDiagnostic(page)
+    expect(diagBefore!.helperExists).toBe(true)
+
+    // Navigate away and back
+    await page.goto('/')
+    await expect(page.getByRole('heading', { name: 'RAD Story' })).toBeVisible()
+    await page.goto('/scene/baby_yoda')
+    await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
+
+    // After remount, no helper should exist (nothing selected)
+    const diagAfter = await getHelperDiagnostic(page)
+    expect(diagAfter!.helperExists, 'helper cleaned up after remount').toBe(false)
   })
 })

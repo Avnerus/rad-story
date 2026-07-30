@@ -96,9 +96,12 @@
           // Reconfigure renderers with complete settings
           studioHandle.reconfigureMaxPagedSplats(newSettings)
 
-          // Trigger SplatMesh reload so new PagedSplats gets fresh pager
-          if (radUrl && onMeshReload) {
-            onMeshReload(radUrl).catch(() => {
+          // Trigger SplatMesh reload so new PagedSplats gets fresh pager.
+          // Use the reactive onMeshReload prop (may become available after mount
+          // when SparkSplats bind:this fires).
+          const reloadFn = onMeshReload
+          if (radUrl && reloadFn) {
+            reloadFn(radUrl).catch(() => {
               // Reload failure is non-fatal
             })
           }

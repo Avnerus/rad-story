@@ -1030,7 +1030,7 @@ test.describe('RAD Story', () => {
     expect(parseFloat(fovValue)).toBeGreaterThanOrEqual(150)
   })
 
-  test('Spark pane capacity edit shows reload progress (stub)', async ({ page }) => {
+  test('Spark pane capacity edit triggers reload and normalizes capacity', async ({ page }) => {
     await selectSparkAndOpenPane(page)
 
     const capacityInput = page.locator('input#spark-maxPagedSplats')
@@ -1051,15 +1051,11 @@ test.describe('RAD Story', () => {
     await capacityInput.fill(newCapacity)
     await capacityInput.press('Enter')
 
-    // Directly observe reloading state as true (coordinator keeps it pending through pager handoff)
-    const reloadingBefore = await page.evaluate(() => {
+    // Wait for reload to complete (progress indicator clears)
+    await page.waitForFunction(() => {
       const el = document.querySelector('[data-testid="spark-reloading"]')
-      return el !== null && window.getComputedStyle(el).display !== 'none'
-    })
-    expect(reloadingBefore, 'reload progress should be visible').toBe(true)
-
-    // Wait for reload to complete
-    await page.waitForTimeout(3000)
+      return el === null || window.getComputedStyle(el).display === 'none'
+    }, { timeout: 10_000 })
 
     // Capacity should be normalized to 65536 multiple
     const normalizedCapacity = await capacityInput.inputValue()

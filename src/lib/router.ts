@@ -31,17 +31,26 @@ export type RouteMatch = SceneRouteMatch | LandingRouteMatch | NotFoundRouteMatc
  * Parse the current URL pathname into a route match.
  */
 export function parseRoute(pathname: string = window.location.pathname): RouteMatch {
-  // /scene/{name}
-  const sceneMatch = pathname.match(/^\/scene\/([a-z0-9_]+)$/i)
-  if (sceneMatch) {
-    const raw = sceneMatch[1]
+  // /scene/ — anything under /scene/ that isn't the exact /scene path
+  if (pathname.startsWith('/scene/')) {
+    const raw = pathname.slice('/scene/'.length)
+    if (!raw) {
+      // /scene/ with empty name → not-found
+      return { kind: 'not-found', attemptedName: '' }
+    }
     const name = validateSceneName(raw)
     if (name) {
       const scene = getScene(name)
       if (scene) return { kind: 'scene', scene }
       return { kind: 'not-found', attemptedName: name }
     }
-    return { kind: 'not-found', attemptedName: raw.toLowerCase() }
+    // Invalid name (uppercase, special chars, path traversal) → not-found
+    return { kind: 'not-found', attemptedName: raw }
+  }
+
+  // /scene (no trailing slash) — treat as landing
+  if (pathname === '/scene') {
+    return { kind: 'landing' }
   }
 
   // Everything else — landing

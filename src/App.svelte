@@ -23,7 +23,7 @@
 
   // Scene route state
   let sceneMatch = $state<RouteMatch | null>(null)
-  let sceneComponent = $state<ComponentType | null>(null)
+  let SceneComponent = $state<ComponentType | null>(null)
   let attemptedSceneName = $state('')
 
   // Check for URL in query string on mount
@@ -50,7 +50,7 @@
 
     switch (match.kind) {
       case 'scene':
-        sceneComponent = match.scene.component
+        SceneComponent = match.scene.component
         appState = 'scene'
         loading = true
         break
@@ -59,7 +59,7 @@
         appState = 'not-found'
         break
       case 'landing':
-        sceneComponent = null
+        SceneComponent = null
         // Navigate to landing from scene/not-found
         if (appState === 'scene' || appState === 'not-found') {
           appState = 'landing'
@@ -140,7 +140,7 @@
     </p>
     <button class="start-btn" onclick={handleGoHome}>Go home</button>
   </div>
-{:else if appState === 'scene' && sceneComponent}
+{:else if appState === 'scene' && SceneComponent}
   <!-- Scene route: render the scene component inside Canvas/Studio -->
   <div class="viewer-header">
     <button class="back-btn" onclick={handleGoHome} aria-label="Go back">← Home</button>
@@ -161,7 +161,7 @@
       }
     >
       <Studio extensions={[ScrollAnimatorExtension, SparkControlsExtension]}>
-        <svelte:component this={sceneComponent} {profile} onReady={handleSceneReady} />
+        <SceneComponent {profile} onReady={handleSceneReady} />
       </Studio>
     </Canvas>
 
