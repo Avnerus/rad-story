@@ -10,7 +10,6 @@
   import type { SparkControls } from '$lib/spark/SparkControls'
   import SparkStudioBridge from './SparkStudioBridge.svelte'
   import SparkSplats from './SparkSplats.svelte'
-  
 
   interface Props {
     url: string

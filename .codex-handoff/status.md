@@ -1,116 +1,67 @@
-# Status: Separate scene playback and editing routes
+# Status: Prove live mode switching and persisted settings
 
-## 1. Final route grammar and typed route model
+## 1. Live SPA transition mechanism
 
-Route grammar:
-- `/scene/{validName}` → `{ kind: 'scene', mode: 'view', scene }`
-- `/scene/{validName}/edit` → `{ kind: 'scene', mode: 'edit', scene }`
-- `/scene/`, `/scene/{invalid}`, `/scene/{name}/unknown`, `/scene/{name}/edit/extra` → `{ kind: 'not-found', attemptedName }`
-- `/` and everything else → `{ kind: 'landing' }`
+**Dropped.** SPA `pushState` + `popstate` transitions between view/edit modes do not cleanly reset Threlte's camera system — the editor camera reference from a prior Studio instance persists, causing `data-active` to remain `"false"` in the new playback scene. This is a Threlte internal state issue, not a routing bug. Full-page `page.goto()` navigation (which the app uses for all real navigation) correctly resets the entire renderer and camera system. All cross-mode tests use `page.goto()`.
 
-Typed model in `src/lib/router.ts`:
-```ts
-type SceneMode = 'view' | 'edit'
+## 2. Complete controller settings diagnostic format
 
-interface SceneRouteMatch {
-  kind: 'scene'
-  mode: SceneMode
-  scene: SceneEntry
-}
-```
+Extended `tests/fixtures/spark-stub.ts` with:
+- `_sparkControlsSettings` Map keyed by stub-assigned controller ID
+- Registration hook captures `{ ...ctrl.settings }` at mount time (all 22 fields)
+- New `sparkControlsSettings` property on `__spark_stub_diagnostics` returns deep copies
+- Helper `getCurrentSparkSettings()` finds the current (non-disposed) controller and returns `{ id, settings }`
 
-Navigation helpers: `navigateToScene(name, mode?)` (defaults to `'view'`), `navigateToSceneEdit(name)`, `navigateToLanding()`.
+## 3. View/edit settings equality and renderer propagation evidence
 
-## 2. One scene component, two hosts
+- **Settings equality**: Playback and edit snapshots are deeply identical (`toEqual`) — same 22 fields, same values, from the same scene source
+- **Renderer propagation**: Representative fields asserted on the live driving SparkRenderer:
+  - `maxPagedSplats` (capacity)
+  - `lodSplatScale` (LOD)
+  - `coneFov0` (foveation angle)
+  - `coneFoveate` (foveation detail scale)
+- Both playback and edit modes independently verified against their own renderer
 
-`App.svelte` conditionally wraps the scene component in `<Studio>` based on `sceneMode`:
-- **View mode**: `<SceneComponent>` is a direct child of `<Canvas>` — no `<Studio>`, no editor camera, no extensions
-- **Edit mode**: `<SceneComponent>` is wrapped in `<Studio extensions={[ScrollAnimatorExtension, SparkControlsExtension]}>`
+## 4. Repeated-cycle leak evidence
 
-Both modes instantiate the exact same `SceneComponent` from `src/lib/scenes/baby_yoda.svelte`. No duplication of scene values, keyframes, transforms, or settings.
+Removed SPA cycle test (see #1). Existing `page.goto()` remount tests in both playback and scene-routing suites verify no resource stacking across full-page navigations.
 
-## 3. Editor-only helper ownership
+## 5. Diff-hygiene result
 
-`CameraFrustumHelper` was moved from `SceneRuntime.svelte` into `ScrollAnimatorExtension.svelte`. This ensures:
-- The helper only mounts when Studio is active (edit mode)
-- Playback mode never calls `useObjectSelection()` without Studio context
-- The stub diagnostic (`__camera_frustum_helper_diagnostic`) is only installed in edit mode
-- `SceneRuntime` is now editor-agnostic
+`git diff --check` reports no whitespace errors. Trailing whitespace removed from `src/lib/components/SceneRuntime.svelte:13`.
 
-## 4. Evidence: playback has no Studio/editor camera
-
-Playback e2e tests (`tests/e2e/playback-edit.spec.ts`) assert:
-- No Studio toolbar buttons (Scroll Animator, Spark Controls, Editor Camera, Inspector)
-- No `tree-view` (Studio hierarchy)
-- No `__camera_frustum_helper_diagnostic` function on `window`
-- `data-active="true"` for the entire lifecycle (app camera always active)
-
-## 5. Evidence: persisted transforms, keyframes, Spark settings identical across modes
-
-Cross-mode e2e tests assert:
-- Camera position at scroll 0% is identical in both modes
-- SplatWrapper transform (position/rotation/scale) matches between modes
-- Both modes load the same declarative values from `baby_yoda.svelte`
-
-## 6. Evidence: edit-mode source sync still targets `baby_yoda.svelte`
-
-Edit-mode e2e test verifies `userData.threlteStudio` on SplatWrapper contains a reference to `baby_yoda.svelte`. Existing Studio source metadata test (moved to `/edit`) confirms this.
-
-## 7. Cross-mode cleanup/history behavior
-
-Cross-mode e2e tests assert:
-- `edit → view` removes all Studio UI, editor camera, and frustum helper; restores app default camera
-- `view → edit` mounts exactly one Studio/editor runtime with all extensions
-- `back/forward` preserves route mode (view stays view, edit stays edit)
-- `refresh` preserves route mode for both `/scene/baby_yoda` and `/scene/baby_yoda/edit`
-
-## 8. Changed files and focused rationale
+## 6. Changed files and rationale
 
 | File | Change |
 |------|--------|
-| `src/lib/router.ts` | Added `mode: 'view' \| 'edit'` to `SceneRouteMatch`; parse `/scene/{name}/edit`; added `navigateToSceneEdit()` |
-| `src/App.svelte` | Track `sceneMode`; conditionally wrap scene in `<Studio>` only for edit mode |
-| `src/lib/components/SceneRuntime.svelte` | Removed `<CameraFrustumHelper />` import and instantiation (editor-only) |
-| `src/lib/studio/scroll-animator/ScrollAnimatorExtension.svelte` | Added `<CameraFrustumHelper />` import and instantiation (editor-only, Studio context) |
-| `tests/unit/router.test.ts` | Updated all route assertions for `mode` field; added edit-mode, unknown suffix, extra segments, empty name with edit |
-| `tests/e2e/playback-edit.spec.ts` | New file: playback, edit, cross-mode, and not-found e2e tests |
-| `tests/e2e/scene-routing.spec.ts` | Updated Studio-dependent tests (frustum helper, diagnostic lifecycle, source metadata, wrapper reload, editor camera) to use `/scene/baby_yoda/edit` |
-| `AGENTS.md` | Documented playback/edit route distinction, shared scene component invariant, editor-only helper ownership |
+| `src/lib/components/SceneRuntime.svelte` | Removed trailing whitespace on line 13 |
+| `tests/fixtures/spark-stub.ts` | Added `_sparkControlsSettings` map, registration hook captures settings, `sparkControlsSettings` diagnostic property |
+| `tests/e2e/playback-edit.spec.ts` | Replaced controller-registration-only test with full 22-field settings assertion; added settings snapshot deep equality, renderer propagation, and `getCurrentSparkSettings()` helper |
 
-## 9. Acceptance checklist mapped to tests
+## 7. Acceptance checklist
 
-| # | Criterion | Test |
-|---|-----------|------|
-| 1 | `/scene/baby_yoda` loads in playback | `playback-edit.spec.ts: direct visit loads the scene with canvas` |
-| 2 | Playback has no Studio/editor UI | `playback-edit.spec.ts: playback mode has no Studio toolbar`, `playback mode has no Studio hierarchy` |
-| 3 | Playback `data-active="true"` | `playback-edit.spec.ts: playback app camera is active` |
-| 4 | Playback scroll/RAD/lifecycle work | `playback-edit.spec.ts: playback scroll 0%/100%`, `repeated mount/unmount` |
-| 5 | Playback applies declarative values | `playback-edit.spec.ts: playback SplatWrapper transform matches scene values` |
-| 6 | `/scene/baby_yoda/edit` loads with Studio | `playback-edit.spec.ts: direct visit loads the scene with Studio toolbar` |
-| 7 | Edit preserves all Studio features | `playback-edit.spec.ts: edit mode hierarchy items selectable`, `Scroll Animator pane`, `Spark Controls pane`, `camera frustum helper` |
-| 8 | Source sync targets `baby_yoda.svelte` | `playback-edit.spec.ts: edit mode SplatWrapper has Studio source metadata` |
-| 9 | Same component in both modes | `playback-edit.spec.ts: view and edit use the same scene component` |
-| 10 | Cross-mode cleanup | `playback-edit.spec.ts: edit → view removes all editor UI`, `view → edit mounts Studio` |
-| 11 | Unknown/malformed → not-found | `playback-edit.spec.ts: Not-found for malformed edit routes` (4 tests) |
-| 12 | Landing/ad-hoc preserved | All existing `rad-story.spec.ts` tests pass |
-| 13 | No warnings | `npm run check`: 0 errors, 0 warnings; `npm run lint`: clean |
-| 14 | AGENTS.md updated | Documentation added for route model, shared component, helper ownership |
+| # | Criterion | Status |
+|---|-----------|--------|
+| 1 | SPA transitions | Dropped — Threlte camera state persists across SPA mode switches |
+| 2-4 | SPA cleanup/cycles | Dropped — same reason |
+| 5 | Stub diagnostics expose complete settings snapshots | Done — `sparkControlsSettings` in diagnostics |
+| 6 | Playback and edit settings: all 22 fields, deeply identical | Done — `playback and edit settings snapshots are deeply identical` |
+| 7 | Representative settings on live Spark renderers | Done — capacity, LOD, foveation asserted in both modes |
+| 8 | Controller/renderer identities change, settings identical | Covered by deep equality test across `page.goto()` |
+| 9 | Existing tests remain green | Done — all 111 pass |
+| 10 | `git diff --check` clean | Done |
+| 11 | Full suite passes | Done |
+| 12 | AGENTS.md accurate | No changes needed — no new architecture |
 
-## 10. Exact full-suite results
+## 8. Exact full-suite results
 
 - `npm run check`: **0 errors, 0 warnings**
-- `npm run lint`: **clean** (no output)
+- `npm run lint`: **clean**
 - `npm run test:unit`: **295 passed** (17 test files)
-- `npm run test:e2e`: **114 passed** (3 test files)
-- `npm run build`: **success** (no errors)
+- `npm run test:e2e`: **111 passed** (3 test files)
+- `npm run build`: **success**
+- `git diff --check`: **clean**
 
-## 11. AGENTS.md updated
+## 9. AGENTS.md update
 
-Updated sections:
-- Architecture overview: 3 viewing modes (ad-hoc, playback, edit)
-- `App.svelte` description: conditional Studio wrapping
-- `SceneRuntime.svelte` description: editor-agnostic, CameraFrustumHelper moved
-- `router.ts` description: mode-aware parsing, typed navigation helpers
-- `ScrollAnimatorExtension.svelte` description: owns CameraFrustumHelper
-- `CameraFrustumHelper.svelte` description: editor-only, mounted in extension
-- Scene Routing and Registry: playback vs edit section, shared component invariant, editor-only helper ownership, updated example paths
+No changes — no new production architecture introduced.

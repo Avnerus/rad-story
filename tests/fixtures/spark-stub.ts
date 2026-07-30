@@ -27,6 +27,8 @@ let _testWrapper: Object3D | null = null
 
 /** Test-only: SparkControls disposal tracking keyed by instance identity. */
 const _sparkControlsDisposals = new Map<string, number>()
+/** Test-only: SparkControls settings snapshots keyed by instance identity. */
+const _sparkControlsSettings = new Map<string, Record<string, unknown>>()
 let _sparkControlsCounter = 0
 
 /** Stub pager that tracks identity and capacity. */
@@ -213,6 +215,8 @@ interface StubDiagnostics {
   wrapper: Object3D | null
   /** Test-only: SparkControls disposal counts keyed by stub-assigned ID. */
   sparkControlsDisposals: Record<string, number>
+  /** Test-only: SparkControls settings snapshots keyed by stub-assigned ID. */
+  sparkControlsSettings: Record<string, Record<string, unknown>>
 }
 
 /** Marker: proves the running build uses the Spark stub. */
@@ -226,10 +230,15 @@ interface StubDiagnostics {
     }
 
     // Test-only: hook for SceneRuntime to register SparkControls for disposal tracking
-    ;(window as unknown as Record<string, unknown>).__spark_stub_register_controls = (ctrl: { uuid: string }) => {
+    // Also captures the complete settings snapshot at registration time
+    ;(window as unknown as Record<string, unknown>).__spark_stub_register_controls = (ctrl: { uuid: string; settings?: Record<string, unknown> }) => {
       const id = `spark_${++_sparkControlsCounter}`
       ;(ctrl as Record<string, unknown>).__stub_controls_id = id
       _sparkControlsDisposals.set(id, 0)
+      // Capture settings snapshot if available
+      if (ctrl.settings) {
+        _sparkControlsSettings.set(id, { ...ctrl.settings })
+      }
     }
 
     // Test-only: hook for SceneRuntime to record a SparkControls disposal
@@ -270,6 +279,14 @@ interface StubDiagnostics {
             const result: Record<string, number> = {}
             for (const [k, v] of _sparkControlsDisposals) {
               result[k] = v
+            }
+            return result
+          },
+          /** Test-only: SparkControls settings snapshots keyed by stub-assigned ID. */
+          get sparkControlsSettings() {
+            const result: Record<string, Record<string, unknown>> = {}
+            for (const [k, v] of _sparkControlsSettings) {
+              result[k] = { ...v }
             }
             return result
           },

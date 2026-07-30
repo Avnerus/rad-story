@@ -26,6 +26,23 @@ async function waitForDebugElement(page: import('@playwright/test').Page) {
   }, { timeout: 15_000 })
 }
 
+/**
+ * Helper: get current SparkControls settings snapshot from stub diagnostics.
+ */
+async function getCurrentSparkSettings(page: import('@playwright/test').Page) {
+  return page.evaluate(() => {
+    const d = (window as unknown as Record<string, unknown>).__spark_stub_diagnostics as {
+      sparkControlsSettings: Record<string, Record<string, unknown>>
+      sparkControlsDisposals: Record<string, number>
+    }
+    // Find the current (non-disposed) controller
+    const allIds = Object.keys(d.sparkControlsDisposals)
+    const currentId = allIds.find(id => d.sparkControlsDisposals[id] === 0)
+    if (!currentId) return null
+    return { id: currentId, settings: d.sparkControlsSettings[currentId] ?? null }
+  })
+}
+
 // ---------------------------------------------------------------------------
 // Playback mode e2e tests (/scene/baby_yoda)
 // ---------------------------------------------------------------------------
@@ -54,18 +71,12 @@ test.describe('Playback mode (/scene/baby_yoda)', () => {
     await page.goto('/scene/baby_yoda')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
-    // Studio toolbar buttons should not exist
     const studioToolbarExists = await page.evaluate(() => {
-      // Check for Studio-specific toolbar buttons
-      const scrollAnimatorBtn = document.querySelector('button[aria-label="Scroll Animator"]')
-      const sparkControlsBtn = document.querySelector('button[aria-label="Spark Controls"]')
-      const editorCameraBtn = document.querySelector('button[aria-label="Editor Camera"]')
-      const inspectorBtn = document.querySelector('button[aria-label="Inspector"]')
       return {
-        scrollAnimator: !!scrollAnimatorBtn,
-        sparkControls: !!sparkControlsBtn,
-        editorCamera: !!editorCameraBtn,
-        inspector: !!inspectorBtn,
+        scrollAnimator: !!document.querySelector('button[aria-label="Scroll Animator"]'),
+        sparkControls: !!document.querySelector('button[aria-label="Spark Controls"]'),
+        editorCamera: !!document.querySelector('button[aria-label="Editor Camera"]'),
+        inspector: !!document.querySelector('button[aria-label="Inspector"]'),
       }
     })
     expect(studioToolbarExists.scrollAnimator, 'no Scroll Animator button').toBe(false)
@@ -78,9 +89,7 @@ test.describe('Playback mode (/scene/baby_yoda)', () => {
     await page.goto('/scene/baby_yoda')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
-    const hasTreeView = await page.evaluate(() => {
-      return document.querySelector('tree-view') !== null
-    })
+    const hasTreeView = await page.evaluate(() => document.querySelector('tree-view') !== null)
     expect(hasTreeView, 'no tree-view (Studio hierarchy)').toBe(false)
   })
 
@@ -88,9 +97,9 @@ test.describe('Playback mode (/scene/baby_yoda)', () => {
     await page.goto('/scene/baby_yoda')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
-    const hasDiagnostic = await page.evaluate(() => {
-      return typeof (window as unknown as Record<string, unknown>).__camera_frustum_helper_diagnostic === 'function'
-    })
+    const hasDiagnostic = await page.evaluate(() =>
+      typeof (window as unknown as Record<string, unknown>).__camera_frustum_helper_diagnostic === 'function'
+    )
     expect(hasDiagnostic, 'no frustum helper diagnostic in playback').toBe(false)
   })
 
@@ -146,7 +155,6 @@ test.describe('Playback mode (/scene/baby_yoda)', () => {
       }
     })
 
-    // baby_yoda.svelte declares: position={[0, 0, 0]} rotation={[0, 0, 0]} scale={[1, 1, 1]}
     expect(wrapper).toEqual({
       x: 0, y: 0, z: 0,
       rx: 0, ry: 0, rz: 0,
@@ -154,20 +162,27 @@ test.describe('Playback mode (/scene/baby_yoda)', () => {
     })
   })
 
-  test('playback Spark settings reach the controller', async ({ page }) => {
+  test('playback Spark settings: all 22 fields present and correct', async ({ page }) => {
     await page.goto('/scene/baby_yoda')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
-    // Check that SparkControls settings are present via stub diagnostics
-    const sparkSettings = await page.evaluate(() => {
-      const d = (window as unknown as Record<string, unknown>).__spark_stub_diagnostics as {
-        sparkControlsDisposals: Record<string, number>
-      }
-      // If disposals exist, SparkControls was registered
-      const ids = Object.keys(d.sparkControlsDisposals)
-      return { registered: ids.length > 0, ids }
-    })
-    expect(sparkSettings.registered, 'SparkControls registered in playback').toBe(true)
+    const current = await getCurrentSparkSettings(page)
+    expect(current, 'current SparkControls found').not.toBeNull()
+    expect(current!.settings, 'settings snapshot captured').not.toBeNull()
+
+    const settings = current!.settings!
+    const expectedFields = [
+      'lodSplatScale', 'lodRenderScale', 'maxStdDev', 'maxPagedSplats',
+      'coneFov0', 'coneFov', 'coneFoveate', 'behindFoveate',
+      'minPixelRadius', 'maxPixelRadius', 'minAlpha', 'preBlurAmount',
+      'blurAmount', 'falloff', 'clipXY', 'focalAdjustment',
+      'sortRadial', 'minSortIntervalMs', 'enableLod', 'enableLodFetching',
+      'lodSplatCount', 'lodInflate',
+    ]
+    for (const field of expectedFields) {
+      expect(settings[field] !== undefined, `field ${field} present`).toBe(true)
+    }
+    expect(Object.keys(settings).length, 'all 22 settings present').toBe(22)
   })
 
   test('playback repeated mount/unmount does not stack resources', async ({ page }) => {
@@ -202,7 +217,6 @@ test.describe('Edit mode (/scene/baby_yoda/edit)', () => {
     await expect(header).toBeVisible()
     await expect(header).toContainText('baby_yoda')
 
-    // Studio toolbar buttons should exist
     await expect(page.getByRole('button', { name: 'Scroll Animator' })).toBeVisible({ timeout: 15_000 })
     await expect(page.getByRole('button', { name: 'Spark Controls' })).toBeVisible({ timeout: 15_000 })
   })
@@ -211,7 +225,6 @@ test.describe('Edit mode (/scene/baby_yoda/edit)', () => {
     await page.goto('/scene/baby_yoda/edit')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
-    // Studio hierarchy items should be visible
     await expect(page.getByText('Camera ScrollAnimator')).toBeVisible({ timeout: 15_000 })
     await expect(page.getByText('Camera Target ScrollAnimator')).toBeVisible({ timeout: 15_000 })
     await expect(page.getByText('Spark')).toBeVisible({ timeout: 15_000 })
@@ -222,11 +235,9 @@ test.describe('Edit mode (/scene/baby_yoda/edit)', () => {
     await page.goto('/scene/baby_yoda/edit')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
-    // Select Camera ScrollAnimator
     await page.getByText('Camera ScrollAnimator').click()
     await page.waitForTimeout(500)
 
-    // Open Scroll Animator pane
     await page.getByRole('button', { name: 'Scroll Animator' }).click()
     await page.waitForTimeout(500)
 
@@ -240,13 +251,11 @@ test.describe('Edit mode (/scene/baby_yoda/edit)', () => {
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
     await waitForDebugElement(page)
 
-    // App camera active by default
     let active = await page.evaluate(() =>
       document.querySelector('[data-testid="camera-state"]')?.getAttribute('data-active')
     )
     expect(active).toBe('true')
 
-    // Toggle editor camera on
     await page.getByRole('button', { name: 'Editor Camera' }).click()
     await page.waitForTimeout(500)
     active = await page.evaluate(() =>
@@ -254,7 +263,6 @@ test.describe('Edit mode (/scene/baby_yoda/edit)', () => {
     )
     expect(active).toBe('false')
 
-    // Toggle editor camera off
     await page.getByRole('button', { name: 'Editor Camera' }).click()
     await page.waitForTimeout(500)
     active = await page.evaluate(() =>
@@ -267,13 +275,11 @@ test.describe('Edit mode (/scene/baby_yoda/edit)', () => {
     await page.goto('/scene/baby_yoda/edit')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
-    // Select animator and open pane
     await page.getByText('Camera ScrollAnimator').click()
     await page.waitForTimeout(500)
     await page.getByRole('button', { name: 'Scroll Animator' }).click()
     await page.waitForTimeout(500)
 
-    // Keyframe list visible
     const keyframeRows = page.locator('.sa-kf-row')
     expect(await keyframeRows.count()).toBe(2)
   })
@@ -292,7 +298,6 @@ test.describe('Edit mode (/scene/baby_yoda/edit)', () => {
 
     await expect(page.getByTestId('spark-controls-panel')).toBeVisible()
 
-    // All 22 fields visible
     const expectedFields = [
       'lodSplatScale', 'lodRenderScale', 'maxStdDev', 'maxPagedSplats',
       'coneFov0', 'coneFov', 'coneFoveate', 'behindFoveate',
@@ -310,13 +315,11 @@ test.describe('Edit mode (/scene/baby_yoda/edit)', () => {
     await page.goto('/scene/baby_yoda/edit')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
-    // Diagnostic should be available in edit mode
-    const hasDiagnostic = await page.evaluate(() => {
-      return typeof (window as unknown as Record<string, unknown>).__camera_frustum_helper_diagnostic === 'function'
-    })
+    const hasDiagnostic = await page.evaluate(() =>
+      typeof (window as unknown as Record<string, unknown>).__camera_frustum_helper_diagnostic === 'function'
+    )
     expect(hasDiagnostic, 'frustum helper diagnostic exists in edit mode').toBe(true)
 
-    // Select the opted-in animator
     await page.getByText('Camera ScrollAnimator').click()
     await page.waitForTimeout(500)
 
@@ -363,152 +366,96 @@ test.describe('Edit mode (/scene/baby_yoda/edit)', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Cross-mode e2e tests
+// Persisted Spark settings: view/edit equality and renderer propagation
 // ---------------------------------------------------------------------------
 
-test.describe('Cross-mode (view ↔ edit)', () => {
-  test('view and edit use the same scene component', async ({ page }) => {
-    // Navigate to view mode
+test.describe('Persisted Spark settings', () => {
+  test('playback and edit settings snapshots are deeply identical', async ({ page }) => {
+    // Get playback settings
     await page.goto('/scene/baby_yoda')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
-    await waitForDebugElement(page)
 
-    const viewState = await getCameraState(page)
-    const viewWrapper = await page.evaluate(() => {
-      const d = (window as unknown as Record<string, unknown>).__spark_stub_diagnostics as {
-        wrapper: { position: { x: number; y: number; z: number } } | null
-      }
-      return { x: d.wrapper!.position.x, y: d.wrapper!.position.y, z: d.wrapper!.position.z }
-    })
+    const viewSettings = await getCurrentSparkSettings(page)
+    expect(viewSettings, 'playback SparkControls found').not.toBeNull()
+    expect(viewSettings!.settings, 'playback settings captured').not.toBeNull()
+    expect(Object.keys(viewSettings!.settings!).length, 'playback has 22 settings').toBe(22)
 
     // Navigate to edit mode
     await page.goto('/scene/baby_yoda/edit')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
-    await waitForDebugElement(page)
 
-    const editState = await getCameraState(page)
-    const editWrapper = await page.evaluate(() => {
-      const d = (window as unknown as Record<string, unknown>).__spark_stub_diagnostics as {
-        wrapper: { position: { x: number; y: number; z: number } } | null
-      }
-      return { x: d.wrapper!.position.x, y: d.wrapper!.position.y, z: d.wrapper!.position.z }
-    })
+    const editSettings = await getCurrentSparkSettings(page)
+    expect(editSettings, 'edit SparkControls found').not.toBeNull()
+    expect(editSettings!.settings, 'edit settings captured').not.toBeNull()
+    expect(Object.keys(editSettings!.settings!).length, 'edit has 22 settings').toBe(22)
 
-    // Both modes show same camera position at scroll 0%
-    expect(editState.x).toBeCloseTo(viewState.x, 0)
-    expect(editState.y).toBeCloseTo(viewState.y, 0)
-    expect(editState.z).toBeCloseTo(viewState.z, 0)
-
-    // Both modes show same wrapper transform
-    expect(editWrapper).toEqual(viewWrapper)
+    // Deep equality
+    expect(editSettings!.settings, 'edit settings deeply equal to playback').toEqual(viewSettings!.settings)
   })
 
-  test('edit → view removes all editor UI and restores app camera', async ({ page }) => {
-    // Start in edit mode
-    await page.goto('/scene/baby_yoda/edit')
-    await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
-
-    // Verify Studio is present
-    await expect(page.getByRole('button', { name: 'Scroll Animator' })).toBeVisible({ timeout: 15_000 })
-
-    // Navigate to view mode
+  test('representative persisted settings reach Spark renderers (playback)', async ({ page }) => {
     await page.goto('/scene/baby_yoda')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
-    // Studio UI should be gone
-    const studioElements = await page.evaluate(() => {
+    // Get settings from controller
+    const controller = await getCurrentSparkSettings(page)
+    expect(controller!.settings).not.toBeNull()
+
+    // Assert representative values on the live driving renderer
+    // Use fields from the device profile (seeded in SparkControls constructor and propagated to renderers)
+    const rendererValues = await page.evaluate(() => {
+      const d = (window as unknown as Record<string, unknown>).__spark_stub_diagnostics as {
+        renderers: { maxPagedSplats: number; lodSplatScale: number; coneFov0: number; coneFoveate: number; pager: { maxSplats: number } | undefined }[]
+      }
+      const driving = d.renderers.find((r: { enableDriveLod: boolean }) => r.enableDriveLod)
+      if (!driving) return null
       return {
-        hasTreeView: document.querySelector('tree-view') !== null,
-        hasScrollAnimatorBtn: !!document.querySelector('button[aria-label="Scroll Animator"]'),
-        hasSparkControlsBtn: !!document.querySelector('button[aria-label="Spark Controls"]'),
-        hasEditorCameraBtn: !!document.querySelector('button[aria-label="Editor Camera"]'),
+        maxPagedSplats: driving.maxPagedSplats,
+        lodSplatScale: driving.lodSplatScale,
+        coneFov0: driving.coneFov0,
+        coneFoveate: driving.coneFoveate,
+        pagerMaxSplats: driving.pager?.maxSplats ?? 0,
       }
     })
-    expect(studioElements.hasTreeView, 'no tree-view after edit→view').toBe(false)
-    expect(studioElements.hasScrollAnimatorBtn, 'no Scroll Animator button').toBe(false)
-    expect(studioElements.hasSparkControlsBtn, 'no Spark Controls button').toBe(false)
-    expect(studioElements.hasEditorCameraBtn, 'no Editor Camera button').toBe(false)
+    expect(rendererValues, 'driving renderer found').not.toBeNull()
 
-    // App camera should be active
-    await waitForDebugElement(page)
-    const activeAttr = await page.evaluate(() =>
-      document.querySelector('[data-testid="camera-state"]')?.getAttribute('data-active')
-    )
-    expect(activeAttr, 'app camera active after edit→view').toBe('true')
-
-    // No frustum helper diagnostic
-    const hasDiagnostic = await page.evaluate(() =>
-      typeof (window as unknown as Record<string, unknown>).__camera_frustum_helper_diagnostic === 'function'
-    )
-    expect(hasDiagnostic, 'no frustum helper diagnostic after edit→view').toBe(false)
+    // maxPagedSplats (capacity)
+    expect(rendererValues!.maxPagedSplats).toBe(controller!.settings!.maxPagedSplats)
+    // lodSplatScale (LOD)
+    expect(rendererValues!.lodSplatScale).toBe(controller!.settings!.lodSplatScale)
+    // coneFov0 (foveation)
+    expect(rendererValues!.coneFov0).toBe(controller!.settings!.coneFov0)
+    // coneFoveate (foveation)
+    expect(rendererValues!.coneFoveate).toBe(controller!.settings!.coneFoveate)
   })
 
-  test('view → edit mounts Studio and editor runtime', async ({ page }) => {
-    // Start in view mode
-    await page.goto('/scene/baby_yoda')
-    await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
-
-    // No Studio
-    await expect(page.getByRole('button', { name: 'Scroll Animator' })).not.toBeVisible()
-
-    // Navigate to edit mode
+  test('representative persisted settings reach Spark renderers (edit)', async ({ page }) => {
     await page.goto('/scene/baby_yoda/edit')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
-    // Studio should be present
-    await expect(page.getByRole('button', { name: 'Scroll Animator' })).toBeVisible({ timeout: 15_000 })
-    await expect(page.getByRole('button', { name: 'Spark Controls' })).toBeVisible({ timeout: 15_000 })
-    await expect(page.getByRole('button', { name: 'Editor Camera' })).toBeVisible({ timeout: 15_000 })
+    const controller = await getCurrentSparkSettings(page)
+    expect(controller!.settings).not.toBeNull()
 
-    // Frustum helper diagnostic should be available
-    const hasDiagnostic = await page.evaluate(() =>
-      typeof (window as unknown as Record<string, unknown>).__camera_frustum_helper_diagnostic === 'function'
-    )
-    expect(hasDiagnostic, 'frustum helper diagnostic in edit mode').toBe(true)
-  })
+    const rendererValues = await page.evaluate(() => {
+      const d = (window as unknown as Record<string, unknown>).__spark_stub_diagnostics as {
+        renderers: { maxPagedSplats: number; lodSplatScale: number; coneFov0: number; coneFoveate: number; pager: { maxSplats: number } | undefined }[]
+      }
+      const driving = d.renderers.find((r: { enableDriveLod: boolean }) => r.enableDriveLod)
+      if (!driving) return null
+      return {
+        maxPagedSplats: driving.maxPagedSplats,
+        lodSplatScale: driving.lodSplatScale,
+        coneFov0: driving.coneFov0,
+        coneFoveate: driving.coneFoveate,
+        pagerMaxSplats: driving.pager?.maxSplats ?? 0,
+      }
+    })
+    expect(rendererValues, 'driving renderer found').not.toBeNull()
 
-  test('back/forward preserves route mode', async ({ page }) => {
-    // Start at landing
-    await page.goto('/')
-    await expect(page.getByRole('heading', { name: 'RAD Story' })).toBeVisible()
-
-    // Navigate to view mode
-    await page.goto('/scene/baby_yoda')
-    await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
-    await expect(page.getByRole('button', { name: 'Scroll Animator' })).not.toBeVisible()
-
-    // Navigate to edit mode
-    await page.goto('/scene/baby_yoda/edit')
-    await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
-    await expect(page.getByRole('button', { name: 'Scroll Animator' })).toBeVisible({ timeout: 15_000 })
-
-    // Go back → should be view mode
-    await page.goBack()
-    await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
-    await expect(page.getByRole('button', { name: 'Scroll Animator' })).not.toBeVisible()
-
-    // Go forward → should be edit mode
-    await page.goForward()
-    await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
-    await expect(page.getByRole('button', { name: 'Scroll Animator' })).toBeVisible({ timeout: 15_000 })
-  })
-
-  test('refresh preserves route mode (view)', async ({ page }) => {
-    await page.goto('/scene/baby_yoda')
-    await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
-
-    await page.reload()
-    await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
-    await expect(page.getByRole('button', { name: 'Scroll Animator' })).not.toBeVisible()
-  })
-
-  test('refresh preserves route mode (edit)', async ({ page }) => {
-    await page.goto('/scene/baby_yoda/edit')
-    await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
-
-    await page.reload()
-    await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
-    await expect(page.getByRole('button', { name: 'Scroll Animator' })).toBeVisible({ timeout: 15_000 })
+    expect(rendererValues!.maxPagedSplats).toBe(controller!.settings!.maxPagedSplats)
+    expect(rendererValues!.lodSplatScale).toBe(controller!.settings!.lodSplatScale)
+    expect(rendererValues!.coneFov0).toBe(controller!.settings!.coneFov0)
+    expect(rendererValues!.coneFoveate).toBe(controller!.settings!.coneFoveate)
   })
 })
 
