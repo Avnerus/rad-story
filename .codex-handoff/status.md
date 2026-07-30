@@ -122,12 +122,10 @@ npm run build    → success
 
 ## 11. Remaining non-core limitations
 
-- Full e2e automation with real Spark not feasible (GPU stalls block native pointer commands and `playwright-cli screenshot`)
-- `canvas.toDataURL()` returns black in headless Chromium (known `readPixels` limitation)
-- `dispatchEvent` on shadow DOM hierarchy items does not trigger Studio's internal selection
+- `dispatchEvent` on shadow DOM hierarchy items does not trigger Studio's internal selection (must use native `mousemove/mousedown/mouseup` at measured coordinates)
 - Real Spark `SparkRenderer.pager` is created lazily by LOD worker; in headless mode the worker may not initialize within the 5s timeout for some configurations
 - The `splatsRef` non-reactive warning is pre-existing and unrelated to this change
-- Source-sync/undo via actual dev-server source editing not automated (GPU stalls prevent native pointer actions in real Spark builds)
+- Source-sync/undo via actual dev-server source editing not automated
 
 ## 12. Commit hash
 
