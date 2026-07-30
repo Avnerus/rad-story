@@ -1,20 +1,20 @@
 <script lang="ts">
   import { T } from '@threlte/core'
-  import { onDestroy } from 'svelte'
   import type { DeviceProfile } from '$lib/types'
-  import { createSceneObjects } from '$lib/scenes/sceneObjects'
-  import SceneRuntime from './SceneRuntime.svelte'
+  import { createSceneObjects } from './sceneObjects'
+  import SceneRuntime from '$lib/components/SceneRuntime.svelte'
 
   interface Props {
-    url: string
     profile: DeviceProfile
     onReady?: () => void
   }
 
-  let { url, profile, onReady }: Props = $props()
+  let { profile, onReady }: Props = $props()
+
+  const RAD_URL = 'https://avner.us/baby_yoda-lod.rad'
 
   const { camera, cameraTarget, cameraAnimator, targetAnimator, sparkControls } =
-    createSceneObjects(profile)
+    createSceneObjects(profile, { showFrustum: true })
 
   // Debug state pushed from SceneRuntime via callback
   let debugState = $state({
@@ -32,13 +32,9 @@
   function handleReady(): void {
     onReady?.()
   }
-
-  onDestroy(() => {
-    sparkControls.dispose()
-  })
 </script>
 
-<SceneRuntime {url} {profile} onReady={handleReady} {sparkControls} onDebugState={handleDebugState}>
+<SceneRuntime url={RAD_URL} {profile} onReady={handleReady} {sparkControls} onDebugState={handleDebugState}>
   <T
     is={cameraAnimator}
     name="Camera ScrollAnimator"
@@ -46,6 +42,7 @@
       { scroll: 0, position: [0, 0, -1], rotation: [0, 0, 0] },
       { scroll: 100, position: [0, 30, -1], rotation: [0, 0, 0] },
     ]}
+    showChildCameraFrustumWhenSelected
   >
     <T is={camera} name="PerspectiveCamera" makeDefault />
   </T>

@@ -59,7 +59,7 @@ export class SparkRenderer extends Object3D {
   static sparkOverride: SparkRenderer | undefined
 
   pager: SplatPager | undefined
-  pagerId: number
+  pagerId: number = 0
 
   lodInstances = new Map<unknown, { lodId: number; numSplats: number; indices: Uint32Array; texture: unknown }>()
 

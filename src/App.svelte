@@ -5,19 +5,26 @@
   import { WebGLRenderer } from 'three'
   import { validateRadUrl } from '$lib/spark/radUrl'
   import { getDeviceProfile } from '$lib/spark/deviceProfile'
-  import RadStoryScene from '$lib/components/RadStoryScene.svelte'
   import ScrollAnimatorExtension from '$lib/studio/scroll-animator/ScrollAnimatorExtension.svelte'
   import SparkControlsExtension from '$lib/studio/spark-controls/SparkControlsExtension.svelte'
   import type { DeviceProfile } from '$lib/types'
+  import { parseRoute, navigateToLanding, type RouteMatch } from '$lib/router'
+  import RadStoryScene from '$lib/components/RadStoryScene.svelte'
+  import type { ComponentType } from 'svelte'
 
   const SAMPLE_URL = 'https://storage.googleapis.com/forge-dev-public/asundqui/rad/260217/cozy-spaceship_2-lod.rad'
 
-  let appState: 'landing' | 'viewer' = $state('landing')
+  let appState: 'landing' | 'viewer' | 'scene' | 'not-found' = $state('landing')
   let urlInput = $state(SAMPLE_URL)
   let activeUrl = $state('')
   let errorMsg = $state('')
   let loading = $state(false)
   let profile: DeviceProfile = getDeviceProfile()
+
+  // Scene route state
+  let sceneMatch = $state<RouteMatch | null>(null)
+  let sceneComponent = $state<ComponentType | null>(null)
+  let attemptedSceneName = $state('')
 
   // Check for URL in query string on mount
   onMount(() => {
@@ -29,7 +36,37 @@
         urlInput = result.url
       }
     }
+
+    // Parse initial route
+    handleRouteChange()
+
+    // Listen for navigation events
+    window.addEventListener('popstate', handleRouteChange)
   })
+
+  function handleRouteChange(): void {
+    const match = parseRoute()
+    sceneMatch = match
+
+    switch (match.kind) {
+      case 'scene':
+        sceneComponent = match.scene.component
+        appState = 'scene'
+        loading = true
+        break
+      case 'not-found':
+        attemptedSceneName = match.attemptedName
+        appState = 'not-found'
+        break
+      case 'landing':
+        sceneComponent = null
+        // Navigate to landing from scene/not-found
+        if (appState === 'scene' || appState === 'not-found') {
+          appState = 'landing'
+        }
+        break
+    }
+  }
 
   function handleSubmit(e: Event) {
     e.preventDefault()
@@ -63,6 +100,14 @@
   function handleReady() {
     loading = false
   }
+
+  function handleSceneReady() {
+    loading = false
+  }
+
+  function handleGoHome() {
+    navigateToLanding()
+  }
 </script>
 
 {#if appState === 'landing'}
@@ -87,14 +132,55 @@
       {/if}
     </form>
   </div>
+{:else if appState === 'not-found'}
+  <div class="landing">
+    <h1>Scene not found</h1>
+    <p>
+      No scene named "<code>{attemptedSceneName}</code>" exists.
+    </p>
+    <button class="start-btn" onclick={handleGoHome}>Go home</button>
+  </div>
+{:else if appState === 'scene' && sceneComponent}
+  <!-- Scene route: render the scene component inside Canvas/Studio -->
+  <div class="viewer-header">
+    <button class="back-btn" onclick={handleGoHome} aria-label="Go back">← Home</button>
+    <span class="url-label">Scene: {sceneMatch?.kind === 'scene' ? sceneMatch.scene.name : ''}</span>
+  </div>
+
+  <div class="viewer-stage">
+    <Canvas
+      renderMode="always"
+      dpr={profile.dpr}
+      createRenderer={(canvas) =>
+        new WebGLRenderer({
+          canvas,
+          antialias: false,
+          alpha: false,
+          powerPreference: 'default',
+        })
+      }
+    >
+      <Studio extensions={[ScrollAnimatorExtension, SparkControlsExtension]}>
+        <svelte:component this={sceneComponent} {profile} onReady={handleSceneReady} />
+      </Studio>
+    </Canvas>
+
+    {#if loading}
+      <div class="loading-overlay">
+        <div class="spinner"></div>
+        <span>Loading splats…</span>
+      </div>
+    {/if}
+  </div>
+
+  <div class="scroll-spacer"></div>
 {:else}
-  <!-- Fixed UI overlay -->
+  <!-- Ad-hoc URL viewer (existing landing form workflow) -->
   <div class="viewer-header">
     <button class="back-btn" onclick={handleBack} aria-label="Go back">← Back</button>
     <span class="url-label" title={activeUrl}>{activeUrl}</span>
   </div>
 
-  <!-- Fixed canvas stage -->
   <div class="viewer-stage">
     <Canvas
       renderMode="always"
@@ -125,6 +211,5 @@
     {/if}
   </div>
 
-  <!-- Scroll spacer — in document flow, provides scroll height -->
   <div class="scroll-spacer"></div>
 {/if}

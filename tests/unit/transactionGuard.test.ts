@@ -71,6 +71,14 @@ describe('guardScrollAnimatorTransactions', () => {
     expect(txs[0].sync!.attributeName).toBe('keyframes')
   })
 
+  it('allows sync for showChildCameraFrustumWhenSelected on ScrollAnimator', () => {
+    const animator = new ScrollAnimator()
+    const txs: GuardTransaction[] = [makeTransaction(animator, 'showChildCameraFrustumWhenSelected')]
+    guardScrollAnimatorTransactions(txs)
+    expect(txs[0].sync).toBeDefined()
+    expect(txs[0].sync!.attributeName).toBe('showChildCameraFrustumWhenSelected')
+  })
+
   it('allows sync for path-prefixed keyframes (e.g. scene.camera.keyframes)', () => {
     const animator = new ScrollAnimator()
     const txs: GuardTransaction[] = [makeTransaction(animator, 'scene.camera.keyframes')]

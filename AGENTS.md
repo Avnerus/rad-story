@@ -4,18 +4,28 @@
 
 A client-side Threlte/Svelte 5/TypeScript web app for designing scroll-based stories over Spark 2.x streaming LOD Gaussian splats from user-provided RAD URLs. Camera animation is driven by scroll-keyframed `ScrollAnimator` objects authored via a Threlte Studio extension.
 
+Supports two viewing modes:
+1. **Ad-hoc URL viewing** — paste any `.rad` URL on the landing page
+2. **File-backed scenes** — navigate to `/scene/{name}` to load a scene from `src/lib/scenes/{name}.svelte`
+
 **Key files:**
-- `src/App.svelte` — Root component. Landing screen ↔ viewer state machine. `<Canvas>` with `<Studio extensions={[ScrollAnimatorExtension]}>` wrapping `RadStoryScene`.
-- `src/lib/components/RadStoryScene.svelte` — Camera setup, ScrollTrigger, `ScrollAnimator` instances (camera + target), `CameraTarget`, `SparkControls`, SparkRenderer bridge, and SplatMesh. Uses `useTask` for per-frame camera look-at. Scene-wide `ScrollAnimator` playback via `scene.traverse`.
+- `src/App.svelte` — Root component. Landing screen ↔ viewer/scene/not-found state machine. Pathname router for `/scene/{sceneName}`. `<Canvas>` with `<Studio>` wrapping either `RadStoryScene` (ad-hoc) or a dynamic scene component (file-backed).
+- `src/lib/components/SceneRuntime.svelte` — Reusable scene runtime: ScrollTrigger creation/attachment, scene-wide `ScrollAnimator` playback via `scene.traverse`, per-frame camera look-at, debug state, Spark bridge, reload lifecycle, and `CameraFrustumHelper`. Receives scene-specific `<T>` declarations via a `children` snippet.
+- `src/lib/components/RadStoryScene.svelte` — Ad-hoc URL scene. Uses `createSceneObjects()` helper + `SceneRuntime`. Literal `<T>` nodes for camera/target animators, SparkControls. Debug element rendered outside `<Canvas>`.
 - `src/lib/components/SparkSplats.svelte` — SplatMesh lifecycle in a stable `Object3D` wrapper (`SplatWrapper`). The wrapper owns transform/name/visibility and persists across mesh reloads. Exports `reload(url)` for `SparkStudioBridge` to call. Uses `SparkReloadCoordinator` for race-safe reload coordination.
 - `src/lib/components/SparkStudioBridge.svelte` — Manages dual SparkRenderer lifecycle via `createSparkStudioRenderer`. Subscribes to `SparkControls` settings changes and propagates them to both renderers. On `maxPagedSplats` changes, calls `reconfigureMaxPagedSplats()` and triggers SplatMesh reload via `onMeshReload` callback.
+- `src/lib/router.ts` — Lightweight pathname router for `/scene/{sceneName}`. Uses `parseRoute()` and `navigateToScene()`/`navigateToLanding()` with `history.pushState` + `popstate`.
+- `src/lib/scenes/registry.ts` — Static scene discovery via `import.meta.glob('./[a-z0-9_]*.svelte', { eager: true })`. Validates names against `/^[a-z0-9_]+$/`. Maps normalized names to Svelte component default exports.
+- `src/lib/scenes/sceneObjects.ts` — `createSceneObjects(profile, opts)` factory: creates `PerspectiveCamera`, `CameraTarget`, `ScrollAnimator` (camera + target), and `SparkControls`. Keyframes/settings are authored ONLY in `<T>` attributes (single source of truth).
+- `src/lib/scenes/baby_yoda.svelte` — Example scene: `/scene/baby_yoda`, RAD URL `https://avner.us/baby_yoda-lod.rad`, frustum helper enabled.
 - `src/lib/spark/SparkControls.ts` — Three.js `Object3D` subclass holding all editable Spark 2.1 quality/LOD/foveation settings. Appears as "Spark" in Studio outline. Has a writable `settings` getter/setter for Threlte `<T>` source sync, plus individual top-level property getters/setters for each field. All values validated against field-specific bounds; constructor input and single-field edits both pass through the same validation path.
-- `src/lib/spark/ScrollAnimator.ts` — Three.js `Object3D` subclass with `keyframes` property and `applyScrollPercentage()`.
+- `src/lib/spark/ScrollAnimator.ts` — Three.js `Object3D` subclass with `keyframes` property, `showChildCameraFrustumWhenSelected` boolean, and `applyScrollPercentage()`.
 - `src/lib/spark/scrollAnimation.ts` — Pure keyframe model, canonicalization (with dedup), upsert/delete, bracketing, and interpolation (position lerp + quaternion slerp).
 - `src/lib/studio/scroll-animator/ScrollAnimatorExtension.svelte` — Studio extension: fixed toolbar pane with percentage display/input, keyframe list, jump, delete, and insert/save actions. Uses public `@threlte/studio/extensions` imports. Toolbar icon: `mdiAnimationOutline`.
+- `src/lib/studio/scroll-animator/CameraFrustumHelper.svelte` — Shows a Three.js `CameraHelper` for the descendant `PerspectiveCamera` of a selected `ScrollAnimator` with `showChildCameraFrustumWhenSelected = true`. Also shows for directly selected cameras. Updates helper every frame via `useTask`. Cleaned up on selection change/destroy.
 - `src/lib/studio/scroll-animator/FixedToolbarPane.svelte` — Local replacement for Studio's `DropDownPane`. Uses public `ToolbarButton` + `ToolbarItem` from `@threlte/studio/extend`, `@floating-ui/dom` (direct dependency) for `computePosition` with `strategy: 'fixed'`, and a simple portal to `document.body`. See "Studio Extension Pane" section below.
 - `src/lib/studio/scroll-animator/scrollAnimatorRuntime.ts` — Shared runtime bridge: reactive percentage from ScrollTrigger, `jumpToPercentage` via trigger's measured range, attach/detach lifecycle.
-- `src/lib/studio/scroll-animator/transactionGuard.ts` — Suppresses source sync for ScrollAnimator transforms (only `keyframes` persists) and SparkControls transforms (only `settings` root and individual field names persist). Uses narrow structural types (no private imports).
+- `src/lib/studio/scroll-animator/transactionGuard.ts` — Suppresses source sync for ScrollAnimator transforms (only `keyframes` and `showChildCameraFrustumWhenSelected` persist) and SparkControls transforms (only `settings` root and individual field names persist). Uses narrow structural types (no private imports).
 - `src/lib/studio/spark-controls/SparkControlsExtension.svelte` — Studio extension: fixed toolbar pane with individual numeric/boolean/nullable inputs for all 22 Spark settings. Uses `buildSparkSettingsTransaction()` helper from `sparkSettingsTransaction.ts` to build transaction objects. Uses `mdiTune` icon.
 - `src/lib/studio/spark-controls/sparkSettingsTransaction.ts` — Production helper for building Spark settings transactions (`buildSparkSettingsTransaction()`). Used by the extension and tested independently.
 - `src/lib/studio/spark-controls/SparkFixedToolbarPane.svelte` — Fixed toolbar pane for Spark controls (separate from ScrollAnimator's pane).
@@ -43,6 +53,7 @@ interface ScrollKeyframe {
 - Zero keyframes: no mutation. One keyframe: used at all percentages.
 - Brand: `isScrollAnimator = true`, `type = 'ScrollAnimator'`, plus callable `applyScrollPercentage`.
 - Canonicalization deduplicates entries that normalize to the same percentage (last-write-wins).
+- `showChildCameraFrustumWhenSelected` — boolean property (default `false`). When `true` and the animator is selected in Studio, a `CameraHelper` is shown for its descendant `PerspectiveCamera`. Source-syncable via the transaction guard.
 
 ## ScrollTrigger Runtime
 
@@ -61,6 +72,32 @@ The `scrollAnimatorRuntime` singleton bridges the scene and extension:
 - The real camera **always looks at CameraTarget's world position**, updated every frame via a Threlte `useTask` (not a renderer.render wrapper).
 - Camera animator rotation does not fight the target constraint — look-at wins for the camera's final viewing direction.
 - **Editor camera toggle**: Studio's built-in editor-camera extension can override the active camera. When disabled, Threlte restores the default camera (the nested `PerspectiveCamera`). When enabled, Studio's editor camera takes over. The `data-active` attribute on the camera debug element indicates whether the app camera is currently active.
+
+## Scene Routing and Registry
+
+Route namespace: `/scene/{sceneName}`. Source files: `src/lib/scenes/{sceneName}.svelte`.
+
+**Registry** (`src/lib/scenes/registry.ts`): Uses `import.meta.glob('./[a-z0-9_]*.svelte', { eager: true })` to discover scene modules. Validates names against `/^[a-z0-9_]+$/`. Only files directly in `src/lib/scenes/` are discoverable — no path traversal or arbitrary imports.
+
+**Router** (`src/lib/router.ts`): Lightweight pathname router using `window.location.pathname` and `history.pushState` + `popstate`. `parseRoute()` returns `{ kind: 'scene', scene }`, `{ kind: 'not-found', attemptedName }`, or `{ kind: 'landing' }`.
+
+**Scene contract**: Each scene file is a Svelte component that:
+1. Imports `createSceneObjects()` from `./sceneObjects` to create camera, target, animators, and SparkControls
+2. Renders `<SceneRuntime>` with scene-specific props (RAD URL, profile, sparkControls)
+3. Declares literal `<T>` nodes inside `SceneRuntime` for Studio source sync
+4. Renders its own debug div outside `<Canvas>` (DOM elements inside `<Canvas>` are overlays)
+
+**Scene authoring** (`src/lib/scenes/sceneObjects.ts`): `createSceneObjects(profile, { showFrustum?, sparkOverrides? })` creates all standard scene objects. Keyframes and settings are authored ONLY in `<T>` attributes — never duplicated in constructor assignments. The factory provides empty defaults overwritten by `<T>` source-sync values.
+
+**Example**: `src/lib/scenes/baby_yoda.svelte` at `/scene/baby_yoda` with RAD URL `https://avner.us/baby_yoda-lod.rad`.
+
+## Camera Frustum Helper
+
+`CameraFrustumHelper.svelte` shows a Three.js `CameraHelper` when:
+- A `ScrollAnimator` with `showChildCameraFrustumWhenSelected = true` is selected (shows helper for its descendant `PerspectiveCamera`)
+- A `PerspectiveCamera` is selected directly (mirrors Studio's built-in Helpers behavior)
+
+The helper tracks the animated camera's world transform every frame via `useTask`. It is added to the animator (or scene root for direct camera selection) and removed on selection change. Uses public APIs only (`useObjectSelection`, `useThrelte`, `useTask`).
 
 ## Studio Extension Pane
 
@@ -83,7 +120,7 @@ Active only for exactly one selected `ScrollAnimator`; otherwise shows "Select o
 
 ## Source-Sync Guard Invariant
 
-The `guardScrollAnimatorTransactions` helper runs via `useTransactions().onTransaction()`. For any transaction whose object is a branded `ScrollAnimator`, it clears `transaction.sync` unless `attributeName` is exactly `keyframes` or ends with `.keyframes` (path-prefixed). For `SparkControls`, it clears sync unless `attributeName` is `settings` or ends with `.settings`. Descendant attributes like `keyframes.0`, `settings.lodSplatScale`, or `scene.keyframes.position` are blocked. This prevents Studio's transform controls from writing `position`, `rotation`, or `scale` into Svelte source, while allowing the intended persisted attributes through.
+The `guardScrollAnimatorTransactions` helper runs via `useTransactions().onTransaction()`. For any transaction whose object is a branded `ScrollAnimator`, it clears `transaction.sync` unless the final path segment is exactly `keyframes` or `showChildCameraFrustumWhenSelected`. For `SparkControls`, it clears sync unless `attributeName` is `settings` (root) or an individual whitelisted field name. Descendant attributes like `keyframes.0`, `settings.lodSplatScale`, or `scene.keyframes.position` are blocked. This prevents Studio's transform controls from writing `position`, `rotation`, or `scale` into Svelte source, while allowing the intended persisted attributes through.
 
 Keyframe mutations use `transactions.buildTransaction()` which derives source metadata from the object's `userData.threlteStudio` automatically. No private metadata imports needed.
 
@@ -196,8 +233,7 @@ Free navigation (checkbox, keyboard/mouse/wheel listeners, RAF loop, pure helper
 
 - `<Studio extensions={[ScrollAnimatorExtension, SparkControlsExtension]}>` wraps the viewer scene. The `threlteStudio()` Vite plugin is registered before `svelte()` in `vite.config.ts`.
 - Studio editor cameras are marked with `camera.userData.editorCamera = true`.
-- Three literal `<T>` nodes in `RadStoryScene.svelte` host the `ScrollAnimator` instances and the `SparkControls` — not wrapped in reusable components — so Studio's source sync metadata targets independent `keyframes` and `settings` attributes respectively. The `SparkSplats` component uses `bind:this` to expose its `reload()` function to the bridge.
-- `splatsRef` and `bridgeRef` in `RadStoryScene` are typed `$state(...)` so that `onMeshReload={splatsRef?.reload}` and `pagerIdentity={getPagerIdentity}` update reactively when the referenced components mount.
+- Literal `<T>` nodes in each scene file (`RadStoryScene.svelte`, `src/lib/scenes/*.svelte`) host the `ScrollAnimator` instances and the `SparkControls` — not wrapped in reusable components — so Studio's source sync metadata targets independent `keyframes`, `showChildCameraFrustumWhenSelected`, and `settings` attributes respectively.
 - Extension uses **only public** `@threlte/studio/extensions` imports (`useObjectSelection`, `useTransactions`). No private module imports or Vite aliases.
 
 ## Scroll Layout
@@ -206,7 +242,9 @@ Fixed canvas + scrollable document: `<Canvas>` in `.viewer-stage` (`position: fi
 
 ## Camera Debug State
 
-Visually hidden `<div class="camera-debug" data-testid="camera-state">` with:
+Visually hidden `<div class="camera-debug" data-testid="camera-state">` rendered **outside** `<Canvas>` in each scene file (DOM elements inside `<Canvas>` are Three.js overlays). Debug state is pushed from `SceneRuntime` to the scene file via an `onDebugState` callback.
+
+Attributes:
 - `data-progress` — ScrollTrigger percentage
 - `data-x`, `data-y`, `data-z` — Camera **world** position
 - `data-target-x`, `data-target-y`, `data-target-z` — CameraTarget **world** position
@@ -225,6 +263,8 @@ Tweakpane's `.tp-dfwv` class (used by Studio's toolbar and other fixed panes) de
 ```
 https://avner.us/baby_yoda-lod.rad
 ```
+
+This is also the hard-coded RAD URL for the Baby Yoda scene at `/scene/baby_yoda` (`src/lib/scenes/baby_yoda.svelte`).
 
 Preferred for manual Studio authoring verification. Loads quickly, renders a small Baby Yoda splat at the origin, and avoids GPU stalls that make automation unreliable with larger files. Scroll 0% shows a close-up view; scroll 100% shows a top-down grid view from y=30.
 

@@ -1074,8 +1074,8 @@ test.describe('RAD Story', () => {
       }
       return { meshCount: d.meshes.length, disposedPagers: d.pagers.filter((p: { disposed: boolean }) => p.disposed).length }
     })
-    expect(afterReload.meshCount).toBeGreaterThan(beforeReload.meshCount, 'new mesh created')
-    expect(afterReload.disposedPagers).toBeGreaterThan(beforeReload.disposedPagers, 'old pager disposed')
+    expect(afterReload.meshCount).toBeGreaterThan(beforeReload.meshCount)
+    expect(afterReload.disposedPagers).toBeGreaterThan(beforeReload.disposedPagers)
 
     // Reload status: should not show an error (stub reload succeeds)
     const hasError = await page.evaluate(() => {
@@ -1324,7 +1324,7 @@ test.describe('RAD Story', () => {
     // Set an unmistakable non-default wrapper transform and capture it
     const wrapperTransform = await page.evaluate(() => {
       const d = (window as unknown as Record<string, unknown>).__spark_stub_diagnostics as {
-        wrapper: { position: { x: number; y: number; z: number }; rotation: { x: number; y: number; z: number }; scale: { x: number; y: number; z: number } } | null
+        wrapper: { position: { set: (x: number, y: number, z: number) => void; x: number; y: number; z: number }; rotation: { set: (x: number, y: number, z: number) => void; x: number; y: number; z: number }; scale: { set: (x: number, y: number, z: number) => void; x: number; y: number; z: number } } | null
       }
       const wrapper = d.wrapper
       if (!wrapper) throw new Error('SplatWrapper not exposed in stub diagnostics')

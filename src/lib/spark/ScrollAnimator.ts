@@ -16,6 +16,13 @@ export class ScrollAnimator extends Object3D {
 
   private _keyframes: ScrollKeyframe[]
 
+  /**
+   * When true, selecting this ScrollAnimator in Studio shows a CameraHelper
+   * for the first descendant PerspectiveCamera. This is a source-syncable
+   * property so Studio can persist it into the scene file.
+   */
+  showChildCameraFrustumWhenSelected: boolean = false
+
   constructor() {
     super()
     this.isScrollAnimator = true

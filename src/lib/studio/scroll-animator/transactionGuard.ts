@@ -45,13 +45,17 @@ export function isSparkControls(obj: unknown): boolean {
 }
 
 /**
- * Check whether a transaction's attribute name targets `keyframes`.
+ * Check whether a transaction's attribute name targets `keyframes` or
+ * `showChildCameraFrustumWhenSelected`.
  * Studio builds nested attribute names as `[...pathItems, propertyPath].join('.')`,
- * so a path-prefixed keyframe attribute is `some.path.keyframes`.
- * Only allow the final path segment to be exactly `keyframes`.
+ * so a path-prefixed attribute is `some.path.keyframes`.
+ * Only allow the final path segment to be exactly `keyframes` or
+ * `showChildCameraFrustumWhenSelected`.
  */
-function isKeyframesAttribute(attributeName: string): boolean {
-  return attributeName === 'keyframes' || attributeName.endsWith('.keyframes')
+function isScrollAnimatorPersistedAttribute(attributeName: string): boolean {
+  const segments = attributeName.split('.')
+  const last = segments[segments.length - 1]
+  return last === 'keyframes' || last === 'showChildCameraFrustumWhenSelected'
 }
 
 /**
@@ -106,7 +110,7 @@ export function guardScrollAnimatorTransactions(
   for (const tx of transactions) {
     if (isScrollAnimator(tx.object)) {
       const sync = tx.sync
-      if (sync && !isKeyframesAttribute(sync.attributeName)) {
+      if (sync && !isScrollAnimatorPersistedAttribute(sync.attributeName)) {
         tx.sync = undefined
       }
       continue

@@ -251,14 +251,14 @@ export class SparkControls extends Object3D {
 
     // Validate and merge initial values
     if (initial) {
-      const validated: Partial<SparkSettings> = {}
+      const validated: Record<string, unknown> = {}
       for (const key of SETTINGS_KEYS) {
         const raw = initial[key]
         if (raw === undefined) continue
         validated[key] = validateField(key, raw)
       }
-      applyInvariants(validated, defaults)
-      this._settings = { ...defaults, ...validated }
+      applyInvariants(validated as Partial<SparkSettings>, defaults)
+      this._settings = { ...defaults, ...validated } as SparkSettings
     } else {
       this._settings = defaults
     }
@@ -288,7 +288,7 @@ export class SparkControls extends Object3D {
    */
   set settings(value: Partial<SparkSettings>) {
     const previous = { ...this._settings }
-    const validated: Partial<SparkSettings> = {}
+    const validated: Record<string, unknown> = {}
 
     for (const key of SETTINGS_KEYS) {
       const raw = value[key]

@@ -76,4 +76,15 @@ describe('ScrollAnimator', () => {
     expect(result[0].scroll).toBe(0)
     expect(result[1].scroll).toBe(100)
   })
+
+  it('showChildCameraFrustumWhenSelected defaults to false', () => {
+    const animator = new ScrollAnimator()
+    expect(animator.showChildCameraFrustumWhenSelected).toBe(false)
+  })
+
+  it('showChildCameraFrustumWhenSelected can be set to true', () => {
+    const animator = new ScrollAnimator()
+    animator.showChildCameraFrustumWhenSelected = true
+    expect(animator.showChildCameraFrustumWhenSelected).toBe(true)
+  })
 })
