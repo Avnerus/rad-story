@@ -10,7 +10,7 @@
   import type { SparkControls } from '$lib/spark/SparkControls'
   import SparkStudioBridge from './SparkStudioBridge.svelte'
   import SparkSplats from './SparkSplats.svelte'
-  import CameraFrustumHelper from '$lib/studio/scroll-animator/CameraFrustumHelper.svelte'
+  
 
   interface Props {
     url: string
@@ -181,9 +181,6 @@
 {#if children}
   {@render children()}
 {/if}
-
-<!-- Camera frustum helper: shows CameraHelper for opted-in ScrollAnimators -->
-<CameraFrustumHelper />
 
 <!-- Visually hidden debug element for e2e tests -->
 <div

@@ -179,11 +179,12 @@ test.describe('Scene routing', () => {
 
 // ---------------------------------------------------------------------------
 // Camera frustum helper tests — exact-one contract, identity, lifecycle
+// All run in edit mode where Studio and the helper extension are active
 // ---------------------------------------------------------------------------
 
 test.describe('Camera frustum helper', () => {
   test('selecting opted-in animator creates helper for descendant camera', async ({ page }) => {
-    await page.goto('/scene/baby_yoda')
+    await page.goto('/scene/baby_yoda/edit')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
     const animatorItem = page.getByText('Camera ScrollAnimator')
@@ -214,7 +215,7 @@ test.describe('Camera frustum helper', () => {
   })
 
   test('selecting unrelated object removes helper', async ({ page }) => {
-    await page.goto('/scene/baby_yoda')
+    await page.goto('/scene/baby_yoda/edit')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
     await page.getByText('Camera ScrollAnimator').click()
@@ -237,7 +238,7 @@ test.describe('Camera frustum helper', () => {
   })
 
   test('selecting PerspectiveCamera directly creates no custom helper', async ({ page }) => {
-    await page.goto('/scene/baby_yoda')
+    await page.goto('/scene/baby_yoda/edit')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
     await page.getByText('Camera ScrollAnimator').click()
@@ -270,7 +271,7 @@ test.describe('Camera frustum helper', () => {
   })
 
   test('repeated selection/deselection does not accumulate helpers', async ({ page }) => {
-    await page.goto('/scene/baby_yoda')
+    await page.goto('/scene/baby_yoda/edit')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
     for (let i = 0; i < 3; i++) {
@@ -293,7 +294,7 @@ test.describe('Camera frustum helper', () => {
   })
 
   test('scene remount cleans up helper', async ({ page }) => {
-    await page.goto('/scene/baby_yoda')
+    await page.goto('/scene/baby_yoda/edit')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
     await page.getByText('Camera ScrollAnimator').click()
@@ -303,7 +304,7 @@ test.describe('Camera frustum helper', () => {
 
     await page.goto('/')
     await expect(page.getByRole('heading', { name: 'RAD Story' })).toBeVisible()
-    await page.goto('/scene/baby_yoda')
+    await page.goto('/scene/baby_yoda/edit')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
     const diagAfter = await getHelperDiagnostic(page)
@@ -314,7 +315,7 @@ test.describe('Camera frustum helper', () => {
   })
 
   test('helper targets exact app-camera identity', async ({ page }) => {
-    await page.goto('/scene/baby_yoda')
+    await page.goto('/scene/baby_yoda/edit')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
     await page.getByText('Camera ScrollAnimator').click()
@@ -336,7 +337,7 @@ test.describe('Camera frustum helper', () => {
   })
 
   test('helper parent is exact scene root', async ({ page }) => {
-    await page.goto('/scene/baby_yoda')
+    await page.goto('/scene/baby_yoda/edit')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
     await page.getByText('Camera ScrollAnimator').click()
@@ -352,19 +353,20 @@ test.describe('Camera frustum helper', () => {
 
 // ---------------------------------------------------------------------------
 // Diagnostic lifecycle: stub-only gating, safe teardown
+// Runs in edit mode where the CameraFrustumHelper (and its diagnostic) mounts
 // ---------------------------------------------------------------------------
 
 test.describe('Helper diagnostic lifecycle', () => {
-  test('diagnostic is available in stub build', async ({ page }) => {
-    await page.goto('/scene/baby_yoda')
+  test('diagnostic is available in stub build (edit mode)', async ({ page }) => {
+    await page.goto('/scene/baby_yoda/edit')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
     const diag = await getHelperDiagnostic(page)
     expect(diag, 'diagnostic function exists in stub build').not.toBeNull()
   })
 
-  test('diagnostic fields have correct types', async ({ page }) => {
-    await page.goto('/scene/baby_yoda')
+  test('diagnostic fields have correct types (edit mode)', async ({ page }) => {
+    await page.goto('/scene/baby_yoda/edit')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
     const diag = await getHelperDiagnostic(page)
@@ -378,8 +380,8 @@ test.describe('Helper diagnostic lifecycle', () => {
     expect(typeof diag!.helpersDisposed).toBe('number')
   })
 
-  test('diagnostic cleaned up after scene remount', async ({ page }) => {
-    await page.goto('/scene/baby_yoda')
+  test('diagnostic cleaned up after scene remount (edit mode)', async ({ page }) => {
+    await page.goto('/scene/baby_yoda/edit')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
     const diagBefore = await getHelperDiagnostic(page)
@@ -387,7 +389,7 @@ test.describe('Helper diagnostic lifecycle', () => {
 
     await page.goto('/')
     await expect(page.getByRole('heading', { name: 'RAD Story' })).toBeVisible()
-    await page.goto('/scene/baby_yoda')
+    await page.goto('/scene/baby_yoda/edit')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
     const diagAfter = await getHelperDiagnostic(page)
@@ -399,11 +401,12 @@ test.describe('Helper diagnostic lifecycle', () => {
 
 // ---------------------------------------------------------------------------
 // Baby Yoda wrapper: Studio source metadata and transform persistence
+// Studio source metadata test requires edit mode (Studio must be mounted)
 // ---------------------------------------------------------------------------
 
 test.describe('Baby Yoda SplatWrapper', () => {
-  test('SplatWrapper has Studio source metadata targeting baby_yoda.svelte', async ({ page }) => {
-    await page.goto('/scene/baby_yoda')
+  test('SplatWrapper has Studio source metadata targeting baby_yoda.svelte (edit mode)', async ({ page }) => {
+    await page.goto('/scene/baby_yoda/edit')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
     const sourceInfo = await page.evaluate(() => {
@@ -436,13 +439,13 @@ test.describe('Baby Yoda SplatWrapper', () => {
     expect(normalized, 'SplatWrapper targets baby_yoda.svelte').toContain('baby_yoda.svelte')
   })
 
-  test('wrapper transform persists across capacity reload', async ({ page }) => {
-    await page.goto('/scene/baby_yoda')
+  test('wrapper transform persists across capacity reload (edit mode)', async ({ page }) => {
+    await page.goto('/scene/baby_yoda/edit')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
     const sparkItem = page.getByText('Spark')
-    await expect(sparkItem.first()).toBeVisible({ timeout: 15_000 })
-    await sparkItem.first().click()
+    await expect(sparkItem).toBeVisible({ timeout: 15_000 })
+    await sparkItem.click()
     await page.waitForTimeout(500)
     await page.getByRole('button', { name: 'Spark Controls' }).click()
     await page.waitForTimeout(500)
@@ -584,11 +587,12 @@ test.describe('SparkControls disposal', () => {
 
 // ---------------------------------------------------------------------------
 // Editor camera / app camera regression
+// Requires edit mode (Studio editor camera must be present)
 // ---------------------------------------------------------------------------
 
 test.describe('Editor camera / app camera regression', () => {
-  test('app-camera debug coordinates and active ownership remain correct while editor camera is active', async ({ page }) => {
-    await page.goto('/scene/baby_yoda')
+  test('app-camera debug coordinates and active ownership remain correct while editor camera is active (edit mode)', async ({ page }) => {
+    await page.goto('/scene/baby_yoda/edit')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
     await waitForDebugElement(page)
 

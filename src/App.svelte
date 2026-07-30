@@ -26,6 +26,7 @@
   // Scene route state
   let sceneMatch = $state<RouteMatch | null>(null)
   let SceneComponent = $state<ComponentType | null>(null)
+  let sceneMode = $state<'view' | 'edit' | null>(null)
   let attemptedSceneName = $state('')
 
   // Check for URL in query string on mount
@@ -53,6 +54,7 @@
     switch (match.kind) {
       case 'scene':
         SceneComponent = match.scene.component
+        sceneMode = match.mode
         appState = 'scene'
         loading = true
         break
@@ -143,7 +145,7 @@
     <button class="start-btn" onclick={handleGoHome}>Go home</button>
   </div>
 {:else if appState === 'scene' && SceneComponent}
-  <!-- Scene route: render the scene component inside Canvas/Studio -->
+  <!-- Scene route: render the scene component inside Canvas. Studio only in edit mode. -->
   <div class="viewer-header">
     <button class="back-btn" onclick={handleGoHome} aria-label="Go back">← Home</button>
     <span class="url-label">Scene: {sceneMatch?.kind === 'scene' ? sceneMatch.scene.name : ''}</span>
@@ -162,9 +164,13 @@
         })
       }
     >
-      <Studio extensions={[ScrollAnimatorExtension, SparkControlsExtension]}>
+      {#if sceneMode === 'edit'}
+        <Studio extensions={[ScrollAnimatorExtension, SparkControlsExtension]}>
+          <SceneComponent {profile} onReady={handleSceneReady} />
+        </Studio>
+      {:else}
         <SceneComponent {profile} onReady={handleSceneReady} />
-      </Studio>
+      {/if}
     </Canvas>
 
     {#if loading}

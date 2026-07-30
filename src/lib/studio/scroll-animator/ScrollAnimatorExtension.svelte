@@ -21,6 +21,7 @@
   import { guardScrollAnimatorTransactions, isScrollAnimator, type GuardTransaction } from './transactionGuard'
   import { scrollAnimatorRuntime } from './scrollAnimatorRuntime'
   import FixedToolbarPane from './FixedToolbarPane.svelte'
+  import CameraFrustumHelper from './CameraFrustumHelper.svelte'
 
   const { createExtension } = useStudio()
   const objectSelection = useObjectSelection()
@@ -270,6 +271,9 @@
     </div>
   {/if}
 </FixedToolbarPane>
+
+<!-- Camera frustum helper: editor-only, mounted inside Studio context -->
+<CameraFrustumHelper />
 
 {@render children?.()}
 

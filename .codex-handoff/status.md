@@ -1,124 +1,116 @@
-# Status: Final verification correction — masked assertions removed
+# Status: Separate scene playback and editing routes
 
-## 1. Corrected brand lookup and independent scene count
+## 1. Final route grammar and typed route model
 
-`CameraFrustumHelper.svelte` now counts branded helpers by reading `child.userData[HELPER_BRAND]` from `scene.children` directly. The previous code checked `child[HELPER_BRAND]` on the Object3D itself (not `userData`), which never matched. The component-state fallback (`if (ownedCount === 0 && helper && helper.parent) ownedCount = 1`) has been removed entirely. The diagnostic now independently inspects scene state.
+Route grammar:
+- `/scene/{validName}` → `{ kind: 'scene', mode: 'view', scene }`
+- `/scene/{validName}/edit` → `{ kind: 'scene', mode: 'edit', scene }`
+- `/scene/`, `/scene/{invalid}`, `/scene/{name}/unknown`, `/scene/{name}/edit/extra` → `{ kind: 'not-found', attemptedName }`
+- `/` and everything else → `{ kind: 'landing' }`
 
-**Evidence:**
-- Source: `for (const child of scene.children) { if (child.userData[HELPER_BRAND] === true) ownedCount++ }`
-- No fallback branch remains
-- E2e: `ownedHelperCount === 1` on select, `0` on deselect, `3/3` after 3 cycles
+Typed model in `src/lib/router.ts`:
+```ts
+type SceneMode = 'view' | 'edit'
 
-## 2. Exact parent/target identity evidence
+interface SceneRouteMatch {
+  kind: 'scene'
+  mode: SceneMode
+  scene: SceneEntry
+}
+```
 
-The diagnostic now exposes `sceneUuid` (the Three.js scene root UUID). SceneRuntime exposes `__stub_scene_uuid` and `__stub_app_camera_uuid` in stub builds. Tests assert:
-- `helperParentUuid === sceneUuid` (exact scene root identity)
-- `targetCameraUuid === appCameraUuid` (exact app camera identity)
+Navigation helpers: `navigateToScene(name, mode?)` (defaults to `'view'`), `navigateToSceneEdit(name)`, `navigateToLanding()`.
 
-**Evidence:**
-- E2e: `helper parent is exact scene root` — `diag.helperParentUuid === sceneUuid`
-- E2e: `helper targets exact app-camera identity` — `diag.targetCameraUuid === appCameraUuid`
+## 2. One scene component, two hosts
 
-## 3. Production resolver extraction and direct unit coverage
+`App.svelte` conditionally wraps the scene component in `<Studio>` based on `sceneMode`:
+- **View mode**: `<SceneComponent>` is a direct child of `<Canvas>` — no `<Studio>`, no editor camera, no extensions
+- **Edit mode**: `<SceneComponent>` is wrapped in `<Studio extensions={[ScrollAnimatorExtension, SparkControlsExtension]}>`
 
-`findAllDescendantCameras()` extracted into `src/lib/studio/scroll-animator/descendantCameraResolver.ts`. Both `CameraFrustumHelper.svelte` and `tests/unit/cameraFrustumHelper.test.ts` import from the production module. No copied logic remains in tests.
+Both modes instantiate the exact same `SceneComponent` from `src/lib/scenes/baby_yoda.svelte`. No duplication of scene values, keyframes, transforms, or settings.
 
-**Evidence:**
-- Source: `import { findAllDescendantCameras } from './descendantCameraResolver'` in CameraFrustumHelper
-- Source: `import { findAllDescendantCameras } from '$lib/studio/scroll-animator/descendantCameraResolver'` in test
-- Unit: 8 tests covering zero/one/multiple/deeply nested cases against the production function
+## 3. Editor-only helper ownership
 
-## 4. Strict Baby Yoda source-target assertion
+`CameraFrustumHelper` was moved from `SceneRuntime.svelte` into `ScrollAnimatorExtension.svelte`. This ensures:
+- The helper only mounts when Studio is active (edit mode)
+- Playback mode never calls `useObjectSelection()` without Studio context
+- The stub diagnostic (`__camera_frustum_helper_diagnostic`) is only installed in edit mode
+- `SceneRuntime` is now editor-agnostic
 
-The `userData.threlteStudio` test now throws if the wrapper is missing, if `threlteStudio` metadata is absent, or if no string containing `baby_yoda` is found in the metadata tree. No fallback to generic key checks.
+## 4. Evidence: playback has no Studio/editor camera
 
-**Evidence:**
-- E2e: `SplatWrapper has Studio source metadata targeting baby_yoda.svelte` — unconditional `expect(normalized).toContain('baby_yoda.svelte')`
+Playback e2e tests (`tests/e2e/playback-edit.spec.ts`) assert:
+- No Studio toolbar buttons (Scroll Animator, Spark Controls, Editor Camera, Inspector)
+- No `tree-view` (Studio hierarchy)
+- No `__camera_frustum_helper_diagnostic` function on `window`
+- `data-active="true"` for the entire lifecycle (app camera always active)
 
-## 5. Declarative wrapper transform values and reload/remount assertions
+## 5. Evidence: persisted transforms, keyframes, Spark settings identical across modes
 
-`baby_yoda.svelte` declares explicit identity transform on the SplatWrapper: `<T is={splatWrapper} name="SplatWrapper" position={[0,0,0]} rotation={[0,0,0]} scale={[1,1,1]} />`.
+Cross-mode e2e tests assert:
+- Camera position at scroll 0% is identical in both modes
+- SplatWrapper transform (position/rotation/scale) matches between modes
+- Both modes load the same declarative values from `baby_yoda.svelte`
 
-Two tests verify persistence:
-- **Capacity reload:** Sets unmistakable non-default transform `(7,13,21)/(0.3,0.5,0.7)/(1.5,1.5,1.5)`, triggers reload, asserts all 9 values preserved exactly
-- **Scene remount:** Asserts full position/rotation/scale before and after SPA navigation — declarative values persist from scene source
+## 6. Evidence: edit-mode source sync still targets `baby_yoda.svelte`
 
-**Evidence:**
-- E2e: `wrapper transform persists across capacity reload` — `expect(wrapperAfter).toEqual(wrapperTransform)`
-- E2e: `wrapper declarative transform persists across scene remount` — `expect(wrapperAfter).toEqual(wrapperBefore)`
+Edit-mode e2e test verifies `userData.threlteStudio` on SplatWrapper contains a reference to `baby_yoda.svelte`. Existing Studio source metadata test (moved to `/edit`) confirms this.
 
-## 6. Exactly-once SparkControls lifecycle evidence
+## 7. Cross-mode cleanup/history behavior
 
-Stub module (`spark-stub.ts`) now tracks SparkControls disposal via `__spark_stub_register_controls` (called in SceneRuntime `onMount`) and `__spark_stub_record_controls_disposal` (called in SceneRuntime `onDestroy` before `dispose()`). The `sparkControlsDisposals` map is exposed in `__spark_stub_diagnostics`.
+Cross-mode e2e tests assert:
+- `edit → view` removes all Studio UI, editor camera, and frustum helper; restores app default camera
+- `view → edit` mounts exactly one Studio/editor runtime with all extensions
+- `back/forward` preserves route mode (view stays view, edit stays edit)
+- `refresh` preserves route mode for both `/scene/baby_yoda` and `/scene/baby_yoda/edit`
 
-Test uses SPA navigation (Go Home button + `pushState`/`popstate`) to preserve stub module state across the lifecycle check.
-
-**Evidence:**
-- E2e: `old SparkControls disposed exactly once, new instance distinct` — old ID has count 1 after unmount, new ID has count 0 after remount
-
-## 7. Precisely scoped editor-camera evidence
-
-Test asserts app-camera debug coordinates (X/Y/Z) and `data-active` attribute remain correct when editor camera is toggled on/off. The test name and status wording now precisely describe what is proven: app-camera position and active ownership, not editor-camera orientation.
-
-**Evidence:**
-- E2e: `app-camera debug coordinates and active ownership remain correct while editor camera is active` — X/Y/Z stable, `data-active` toggles `true → false → true`
-- Source: `SceneRuntime` always calls `appCamera.lookAt(_targetWorld)` — never touches editor camera
-
-## 8. Changed files and rationale
+## 8. Changed files and focused rationale
 
 | File | Change |
 |------|--------|
-| `src/lib/studio/scroll-animator/descendantCameraResolver.ts` | **New** — extracted `findAllDescendantCameras()` as pure production module |
-| `src/lib/studio/scroll-animator/CameraFrustumHelper.svelte` | Import resolver from module; fix brand check to `child.userData[HELPER_BRAND]`; remove fallback; add `sceneUuid` to diagnostic |
-| `src/lib/components/SceneRuntime.svelte` | Expose `__stub_scene_uuid` and `__stub_app_camera_uuid` in stub builds; wire SparkControls registration/disposal hooks |
-| `src/lib/scenes/baby_yoda.svelte` | Add declarative identity transform `position={[0,0,0]} rotation={[0,0,0]} scale={[1,1,1]}` to SplatWrapper `<T>` |
-| `tests/fixtures/spark-stub.ts` | Add `_sparkControlsDisposals` map, `__spark_stub_register_controls`, `__spark_stub_record_controls_disposal`, `sparkControlsDisposals` in diagnostics |
-| `tests/unit/cameraFrustumHelper.test.ts` | Import from production module instead of copying logic |
-| `tests/e2e/scene-routing.spec.ts` | Add `sceneUuid`/`appCameraUuid` identity assertions; remove conditional source-target fallback; add declarative transform remount test; add SparkControls lifecycle test with SPA navigation; narrow editor-camera test scope |
-| `AGENTS.md` | Document resolver module, corrected brand lookup, `sceneUuid` field, SparkControls disposal tracking |
+| `src/lib/router.ts` | Added `mode: 'view' \| 'edit'` to `SceneRouteMatch`; parse `/scene/{name}/edit`; added `navigateToSceneEdit()` |
+| `src/App.svelte` | Track `sceneMode`; conditionally wrap scene in `<Studio>` only for edit mode |
+| `src/lib/components/SceneRuntime.svelte` | Removed `<CameraFrustumHelper />` import and instantiation (editor-only) |
+| `src/lib/studio/scroll-animator/ScrollAnimatorExtension.svelte` | Added `<CameraFrustumHelper />` import and instantiation (editor-only, Studio context) |
+| `tests/unit/router.test.ts` | Updated all route assertions for `mode` field; added edit-mode, unknown suffix, extra segments, empty name with edit |
+| `tests/e2e/playback-edit.spec.ts` | New file: playback, edit, cross-mode, and not-found e2e tests |
+| `tests/e2e/scene-routing.spec.ts` | Updated Studio-dependent tests (frustum helper, diagnostic lifecycle, source metadata, wrapper reload, editor camera) to use `/scene/baby_yoda/edit` |
+| `AGENTS.md` | Documented playback/edit route distinction, shared scene component invariant, editor-only helper ownership |
 
-## 9. Acceptance checklist mapped to unconditional assertions
+## 9. Acceptance checklist mapped to tests
 
-| # | Criterion | Evidence |
-|---|-----------|----------|
-| 1 | Owned-helper count reads `userData`, no fallback, detects stale | Source: `child.userData[HELPER_BRAND]`; no fallback branch; E2e: `ownedHelperCount` across cycles |
-| 2 | Exact scene-root parent UUID and app-camera target UUID | E2e: `helperParentUuid === sceneUuid`, `targetCameraUuid === appCameraUuid` |
-| 3 | Zero/one/multiple tests import production resolver | Source: `import { findAllDescendantCameras }` from production module in both component and test |
-| 4 | Diagnostic stub-only, safe teardown | Source: `__spark_stub === true` gate; `if (current === exposeHelperDiagnostic) delete`; E2e: remount cleanup |
-| 5 | Baby Yoda metadata test fails without exact source | Source: `throw` on missing wrapper/studio/no match; E2e: unconditional `toContain('baby_yoda.svelte')` |
-| 6 | Declarative transform on wrapper, asserted before/after remount | Source: `position={[0,0,0]} rotation={[0,0,0]} scale={[1,1,1]}`; E2e: `wrapperBefore === wrapperAfter` |
-| 7 | Capacity reload preserves 9 runtime transform values | E2e: `wrapperAfter === wrapperTransform` (all 9 values) |
-| 8 | Old SparkControls disposed exactly once, new distinct/not disposed | E2e: old count=1, new count=0, distinct IDs |
-| 9 | Editor-camera evidence precisely scoped | E2e: app-camera X/Y/Z + data-active only; no editor orientation claim |
-| 10 | `npm run check` zero errors, zero warnings | `svelte-check found 0 errors and 0 warnings` |
-| 11 | Lint, unit, e2e, build all pass | See below |
-| 12 | `AGENTS.md` documents final accurate contracts | Resolver module, brand fix, `sceneUuid`, disposal tracking |
+| # | Criterion | Test |
+|---|-----------|------|
+| 1 | `/scene/baby_yoda` loads in playback | `playback-edit.spec.ts: direct visit loads the scene with canvas` |
+| 2 | Playback has no Studio/editor UI | `playback-edit.spec.ts: playback mode has no Studio toolbar`, `playback mode has no Studio hierarchy` |
+| 3 | Playback `data-active="true"` | `playback-edit.spec.ts: playback app camera is active` |
+| 4 | Playback scroll/RAD/lifecycle work | `playback-edit.spec.ts: playback scroll 0%/100%`, `repeated mount/unmount` |
+| 5 | Playback applies declarative values | `playback-edit.spec.ts: playback SplatWrapper transform matches scene values` |
+| 6 | `/scene/baby_yoda/edit` loads with Studio | `playback-edit.spec.ts: direct visit loads the scene with Studio toolbar` |
+| 7 | Edit preserves all Studio features | `playback-edit.spec.ts: edit mode hierarchy items selectable`, `Scroll Animator pane`, `Spark Controls pane`, `camera frustum helper` |
+| 8 | Source sync targets `baby_yoda.svelte` | `playback-edit.spec.ts: edit mode SplatWrapper has Studio source metadata` |
+| 9 | Same component in both modes | `playback-edit.spec.ts: view and edit use the same scene component` |
+| 10 | Cross-mode cleanup | `playback-edit.spec.ts: edit → view removes all editor UI`, `view → edit mounts Studio` |
+| 11 | Unknown/malformed → not-found | `playback-edit.spec.ts: Not-found for malformed edit routes` (4 tests) |
+| 12 | Landing/ad-hoc preserved | All existing `rad-story.spec.ts` tests pass |
+| 13 | No warnings | `npm run check`: 0 errors, 0 warnings; `npm run lint`: clean |
+| 14 | AGENTS.md updated | Documentation added for route model, shared component, helper ownership |
 
 ## 10. Exact full-suite results
 
-```
-$ npm run check
-svelte-check found 0 errors and 0 warnings
+- `npm run check`: **0 errors, 0 warnings**
+- `npm run lint`: **clean** (no output)
+- `npm run test:unit`: **295 passed** (17 test files)
+- `npm run test:e2e`: **114 passed** (3 test files)
+- `npm run build`: **success** (no errors)
 
-$ npm run lint
-(no output — clean)
+## 11. AGENTS.md updated
 
-$ npm run test:unit
-Test Files  17 passed (17)
-Tests       286 passed (286)
-
-$ npm run test:e2e
-85 passed (25.1s)
-
-$ npm run build
-✓ built in 4.73s
-```
-
-## 11. AGENTS.md update confirmation
-
-Concise corrections applied:
-- Added `descendantCameraResolver.ts` to key files with description
-- Corrected CameraFrustumHelper entry: imports resolver, `userData` brand check, no fallback
-- Corrected Camera Frustum Helper section: `findAllDescendantCameras()` import, `child.userData[HELPER_BRAND]` counting, no component-state fallback
-- Updated test diagnostic fields: added `sceneUuid`, clarified independent scene inspection
-- Updated Stub diagnostics: added `sparkControlsDisposals`, `__stub_scene_uuid`, `__stub_app_camera_uuid`, registration/disposal hooks
+Updated sections:
+- Architecture overview: 3 viewing modes (ad-hoc, playback, edit)
+- `App.svelte` description: conditional Studio wrapping
+- `SceneRuntime.svelte` description: editor-agnostic, CameraFrustumHelper moved
+- `router.ts` description: mode-aware parsing, typed navigation helpers
+- `ScrollAnimatorExtension.svelte` description: owns CameraFrustumHelper
+- `CameraFrustumHelper.svelte` description: editor-only, mounted in extension
+- Scene Routing and Registry: playback vs edit section, shared component invariant, editor-only helper ownership, updated example paths
