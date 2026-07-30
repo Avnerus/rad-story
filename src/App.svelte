@@ -146,10 +146,12 @@
   </div>
 {:else if appState === 'scene' && SceneComponent}
   <!-- Scene route: render the scene component inside Canvas. Studio only in edit mode. -->
-  <div class="viewer-header">
-    <button class="back-btn" onclick={handleGoHome} aria-label="Go back">← Home</button>
-    <span class="url-label">Scene: {sceneMatch?.kind === 'scene' ? sceneMatch.scene.name : ''}</span>
-  </div>
+  {#if sceneMode === 'view'}
+    <div class="viewer-header">
+      <button class="back-btn" onclick={handleGoHome} aria-label="Go back">← Home</button>
+      <span class="url-label">Scene: {sceneMatch?.kind === 'scene' ? sceneMatch.scene.name : ''}</span>
+    </div>
+  {/if}
 
   <div class="viewer-stage">
     <Canvas

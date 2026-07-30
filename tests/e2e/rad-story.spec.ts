@@ -886,11 +886,7 @@ test.describe('RAD Story', () => {
     await startViewer(page)
     await page.waitForTimeout(2000)
 
-    const sparkItem = page.getByText('Spark')
-    await expect(sparkItem.first()).toBeVisible({ timeout: 10_000 })
-    await sparkItem.first().click()
-    await page.waitForTimeout(500)
-
+    // Spark Controls pane auto-binds to the active scene's controller
     await page.getByRole('button', { name: 'Spark Controls' }).click()
     await page.waitForTimeout(500)
 
@@ -916,16 +912,18 @@ test.describe('RAD Story', () => {
     await expect(sparkItem.first()).toBeVisible()
   })
 
-  test('Spark pane shows "Select the Spark object" when nothing selected', async ({ page }) => {
+  test('Spark pane shows controls automatically without selecting Spark', async ({ page }) => {
     await startViewer(page)
     await page.waitForTimeout(2000)
 
     await page.getByRole('button', { name: 'Spark Controls' }).click()
     await page.waitForTimeout(500)
-    await expect(page.getByTestId('spark-no-selection')).toBeVisible()
+    // Should show the panel with controls (not "No scene loaded")
+    await expect(page.getByTestId('spark-controls-panel')).toBeVisible()
+    await expect(page.getByTestId('spark-field-lodSplatScale')).toBeVisible()
   })
 
-  test('Spark pane shows all 22 field controls when Spark is selected', async ({ page }) => {
+  test('Spark pane shows all 22 field controls automatically', async ({ page }) => {
     await selectSparkAndOpenPane(page)
 
     await expect(page.getByTestId('spark-no-selection')).not.toBeVisible()
@@ -1407,15 +1405,13 @@ test.describe('RAD Story', () => {
     await page.getByText('Camera ScrollAnimator').click()
     await page.waitForTimeout(500)
 
-    // Pane should show no-selection state (Spark deselected)
-    await expect(page.getByTestId('spark-no-selection')).toBeVisible()
-
-    // Re-select Spark (use specific text to avoid ambiguity with pane heading)
-    await page.getByText('Spark (SparkControls)').click()
-    await page.waitForTimeout(500)
-
-    // Pane should show Spark content again with reload still in progress
-    expect(await page.getByTestId('spark-no-selection').isVisible()).toBe(false)
+    // Pane should still show Spark controls (not deselected by hierarchy change)
+    await expect(page.getByTestId('spark-controls-panel')).toBeVisible()
+    const stillReloadingAfterDeselect = await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="spark-reloading"]')
+      return el !== null && window.getComputedStyle(el).display !== 'none'
+    })
+    expect(stillReloadingAfterDeselect, 'reload still visible after deselection').toBe(true)
     const stillReloading = await page.evaluate(() => {
       const el = document.querySelector('[data-testid="spark-reloading"]')
       return el !== null && window.getComputedStyle(el).display !== 'none'
@@ -1455,16 +1451,16 @@ test.describe('RAD Story', () => {
     await page.keyboard.press('Escape')
     await page.waitForTimeout(500)
 
-    // Select a different object to trigger selection change
+    // Select a different object — pane should still auto-bind on reopen
     await page.getByText('Camera ScrollAnimator').click()
     await page.waitForTimeout(500)
 
-    // Reopen Spark Controls pane — should show no-selection state
+    // Reopen Spark Controls pane — should show controls (auto-bound)
     await page.getByRole('button', { name: 'Spark Controls' }).click()
     await page.waitForTimeout(500)
-    await expect(page.getByTestId('spark-no-selection')).toBeVisible()
+    await expect(page.getByTestId('spark-controls-panel')).toBeVisible()
 
-    // Reloading indicator should not be visible (subscription cleaned up)
+    // Reloading indicator should not be visible (reload already completed)
     expect(await page.getByTestId('spark-reloading').isVisible()).toBe(false)
   })
 })

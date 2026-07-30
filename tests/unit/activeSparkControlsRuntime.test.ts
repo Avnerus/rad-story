@@ -1,0 +1,184 @@
+import { describe, test, expect, beforeEach } from 'vitest'
+import { ActiveSparkControlsRuntime } from '$lib/studio/spark-controls/activeSparkControlsRuntime'
+
+/** Create a fake SparkControls for testing. */
+function makeFakeControls(id: string): Record<string, unknown> {
+  return { __testId: id, isSparkControls: true }
+}
+
+describe('ActiveSparkControlsRuntime', () => {
+  let runtime: ActiveSparkControlsRuntime
+
+  beforeEach(() => {
+    runtime = new ActiveSparkControlsRuntime()
+  })
+
+  test('initial state: no active controller', () => {
+    expect(runtime.activeController).toBeNull()
+  })
+
+  test('attach publishes the controller', () => {
+    const ctrl = makeFakeControls('a')
+    const detach = runtime.attach(ctrl as never)
+
+    expect(runtime.activeController).toBe(ctrl)
+    expect(typeof detach).toBe('function')
+  })
+
+  test('current detach clears the controller', () => {
+    const ctrl = makeFakeControls('a')
+    const detach = runtime.attach(ctrl as never)
+
+    detach()
+    expect(runtime.activeController).toBeNull()
+  })
+
+  test('stale detach cannot clear a newer controller', () => {
+    const ctrlA = makeFakeControls('a')
+    const ctrlB = makeFakeControls('b')
+
+    const detachA = runtime.attach(ctrlA as never)
+    expect(runtime.activeController).toBe(ctrlA)
+
+    const detachB = runtime.attach(ctrlB as never)
+    expect(runtime.activeController).toBe(ctrlB)
+
+    // Detaching the old registration should NOT clear the new one
+    detachA()
+    expect(runtime.activeController).toBe(ctrlB)
+
+    // Only the current detach should clear
+    detachB()
+    expect(runtime.activeController).toBeNull()
+  })
+
+  test('subscriber is notified on attach', () => {
+    const ctrl = makeFakeControls('a')
+    const changes: (typeof ctrl)[] = []
+
+    const unsub = runtime.onChange((c) => changes.push(c as never))
+    runtime.attach(ctrl as never)
+
+    expect(changes).toHaveLength(1)
+    expect(changes[0]).toBe(ctrl)
+
+    unsub()
+  })
+
+  test('subscriber is notified on detach', () => {
+    const ctrl = makeFakeControls('a')
+    const changes: (typeof ctrl | null)[] = []
+
+    const unsub = runtime.onChange((c) => changes.push(c))
+    const detach = runtime.attach(ctrl as never)
+    changes.length = 0 // clear initial notification
+
+    detach()
+
+    expect(changes).toHaveLength(1)
+    expect(changes[0]).toBeNull()
+
+    unsub()
+  })
+
+  test('subscriber is notified on replacement', () => {
+    const ctrlA = makeFakeControls('a')
+    const ctrlB = makeFakeControls('b')
+    const changes: (typeof ctrlA | null)[] = []
+
+    const unsub = runtime.onChange((c) => changes.push(c))
+    runtime.attach(ctrlA as never)
+    runtime.attach(ctrlB as never)
+
+    expect(changes).toHaveLength(2)
+    expect(changes[0]).toBe(ctrlA)
+    expect(changes[1]).toBe(ctrlB)
+
+    unsub()
+  })
+
+  test('subscriber cleanup prevents further notifications', () => {
+    const ctrlA = makeFakeControls('a')
+    const ctrlB = makeFakeControls('b')
+    const changes: (typeof ctrlA | null)[] = []
+
+    const unsub = runtime.onChange((c) => changes.push(c))
+    runtime.attach(ctrlA as never)
+    unsub()
+    runtime.attach(ctrlB as never)
+
+    expect(changes).toHaveLength(1)
+    expect(changes[0]).toBe(ctrlA)
+  })
+
+  test('multiple subscribers each receive notifications', () => {
+    const ctrl = makeFakeControls('a')
+    const changesA: (typeof ctrl | null)[] = []
+    const changesB: (typeof ctrl | null)[] = []
+
+    const unsubA = runtime.onChange((c) => changesA.push(c))
+    const unsubB = runtime.onChange((c) => changesB.push(c))
+
+    runtime.attach(ctrl as never)
+
+    expect(changesA).toHaveLength(1)
+    expect(changesB).toHaveLength(1)
+    expect(changesA[0]).toBe(ctrl)
+    expect(changesB[0]).toBe(ctrl)
+
+    unsubA()
+    unsubB()
+  })
+
+  test('destroy clears active controller and all listeners', () => {
+    const ctrl = makeFakeControls('a')
+    const changes: (typeof ctrl | null)[] = []
+
+    const unsub = runtime.onChange((c) => changes.push(c))
+    runtime.attach(ctrl as never)
+
+    runtime.destroy()
+
+    expect(runtime.activeController).toBeNull()
+
+    // Attaching after destroy should still work (new generation)
+    const ctrl2 = makeFakeControls('b')
+    runtime.attach(ctrl2 as never)
+    expect(runtime.activeController).toBe(ctrl2)
+
+    unsub()
+  })
+
+  test('remount: old detach does not clear new controller', () => {
+    // Simulate scene remount: old scene destroys, new scene mounts
+    const oldCtrl = makeFakeControls('old')
+    const newCtrl = makeFakeControls('new')
+
+    const detachOld = runtime.attach(oldCtrl as never)
+
+    // New scene mounts
+    const detachNew = runtime.attach(newCtrl as never)
+    expect(runtime.activeController).toBe(newCtrl)
+
+    // Old scene destroys
+    detachOld()
+    expect(runtime.activeController, 'old detach did not clear new controller').toBe(newCtrl)
+
+    // New scene eventually destroys
+    detachNew()
+    expect(runtime.activeController).toBeNull()
+  })
+
+  test('no-controller state is safe', () => {
+    expect(runtime.activeController).toBeNull()
+
+    // Detaching when nothing is attached is a no-op (no crash)
+    const detach = runtime.attach(makeFakeControls('a') as never)
+    detach()
+    expect(runtime.activeController).toBeNull()
+
+    // Calling detach again is safe (no crash)
+    detach()
+    expect(runtime.activeController).toBeNull()
+  })
+})

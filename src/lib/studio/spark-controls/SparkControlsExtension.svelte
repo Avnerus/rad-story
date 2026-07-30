@@ -1,13 +1,12 @@
 <script lang="ts">
   import { onMount, onDestroy, type Snippet } from 'svelte'
   import { useStudio } from '@threlte/studio/extend'
-  import { useObjectSelection, useTransactions } from '@threlte/studio/extensions'
-  import type { Object3D } from 'three'
-  import { isSparkControls, type GuardTransaction } from '$lib/studio/scroll-animator/transactionGuard'
-  import { guardScrollAnimatorTransactions } from '$lib/studio/scroll-animator/transactionGuard'
+  import { useTransactions } from '@threlte/studio/extensions'
   import type { SparkSettings, SparkControls } from '$lib/spark/SparkControls'
   import { SPARK_PAGE_SIZE } from '$lib/spark/SparkControls'
   import { buildSparkSettingsTransaction } from './sparkSettingsTransaction'
+  import { activeSparkControlsRuntime } from './activeSparkControlsRuntime'
+  import { guardScrollAnimatorTransactions, type GuardTransaction } from '$lib/studio/scroll-animator/transactionGuard'
   import SparkFixedToolbarPane from './SparkFixedToolbarPane.svelte'
 
   interface FieldMeta {
@@ -46,7 +45,6 @@
   let { children }: { children?: Snippet } = $props()
 
   const { createExtension } = useStudio()
-  const objectSelection = useObjectSelection()
   const transactions = useTransactions()
 
   createExtension({
@@ -60,15 +58,7 @@
   // Transaction guard: suppress source sync for SparkControls transforms
   let unsubscribeGuard: (() => void) | undefined
 
-  // Reactive derived values from selection
-  const selectedObjects = $derived(objectSelection.selectedObjects ?? [])
-  const singleSpark = $derived<Object3D | null>(
-    selectedObjects.length === 1 && isSparkControls(selectedObjects[0])
-      ? selectedObjects[0]
-      : null,
-  )
-
-  // UI state
+  // Reactive state driven by the active Spark Controls runtime
   let uiState = $state({
     controls: null as SparkControls | null,
     settings: {} as SparkSettings,
@@ -79,13 +69,13 @@
   // Local draft values for editing
   let drafts = $state<Record<string, string>>({})
 
-  // Reload status subscription — clean up on selection change / destroy
+  // Reload status subscription — clean up when active controller changes or extension is destroyed
   let unsubscribeReloadStatus: (() => void) | null = null
 
-  /** Subscribe to reload status from the selected SparkControls. */
+  /** Subscribe to reload status from the given SparkControls. */
   function subscribeToReloadStatus(controls: SparkControls): void {
     unsubscribeReloadStatus?.()
-    // Initialize from current values immediately (catches mid-reload selection)
+    // Initialize from current values immediately (catches mid-reload transitions)
     uiState.reloading = controls.reloadStatus.isReloading
     uiState.reloadError = controls.reloadStatus.error
     // Then subscribe for future changes
@@ -103,42 +93,62 @@
     uiState.reloadError = ''
   }
 
-  // Keep settings in sync with selection
-  let revision = $state(0)
-  $effect(() => {
-    const ctrl = singleSpark
-    const rev = revision
-    void rev
-    if (ctrl && isSparkControls(ctrl)) {
-      const sc = ctrl as unknown as SparkControls
-      uiState.controls = sc
-      uiState.settings = sc.settings
-      // Subscribe to reload status reactively
-      subscribeToReloadStatus(sc)
-      // Initialize drafts from current settings
-      const newDrafts: Record<string, string> = {}
-      for (const meta of FIELD_META) {
-        const val = sc.settings[meta.key]
-        newDrafts[meta.key] = val === null ? '' : String(val)
-      }
-      drafts = newDrafts
+  /** Initialize drafts from the current settings. */
+  function initDrafts(settings: SparkSettings): void {
+    const newDrafts: Record<string, string> = {}
+    for (const meta of FIELD_META) {
+      const val = settings[meta.key]
+      newDrafts[meta.key] = val === null ? '' : String(val)
+    }
+    drafts = newDrafts
+  }
+
+  /** Refresh all drafts from current settings (after an edit that may trigger invariants). */
+  function refreshDrafts(controls: SparkControls): void {
+    for (const m of FIELD_META) {
+      const val = controls.settings[m.key]
+      drafts[m.key] = val === null ? '' : String(val)
+    }
+  }
+
+  // Subscribe to active controller changes from the runtime
+  let unsubscribeActive: (() => void) | null = null
+
+  onMount(() => {
+    // Transaction guard for source sync
+    unsubscribeGuard = transactions.onTransaction((txs) => {
+      guardScrollAnimatorTransactions(txs as GuardTransaction[])
+    })
+
+    // Subscribe to active SparkControls changes
+    const current = activeSparkControlsRuntime.activeController
+    if (current) {
+      uiState.controls = current
+      uiState.settings = current.settings
+      subscribeToReloadStatus(current)
+      initDrafts(current.settings)
     } else {
       uiState.controls = null
       uiState.settings = {} as SparkSettings
-      // Unsubscribe from reload status when no Spark is selected
-      unsubscribeFromReloadStatus()
     }
-  })
 
-  onMount(() => {
-    unsubscribeGuard = transactions.onTransaction((txs) => {
-      guardScrollAnimatorTransactions(txs as GuardTransaction[])
-      revision += 1
+    unsubscribeActive = activeSparkControlsRuntime.onChange((controls) => {
+      if (controls) {
+        uiState.controls = controls
+        uiState.settings = controls.settings
+        subscribeToReloadStatus(controls)
+        initDrafts(controls.settings)
+      } else {
+        uiState.controls = null
+        uiState.settings = {} as SparkSettings
+        unsubscribeFromReloadStatus()
+      }
     })
   })
 
   onDestroy(() => {
     unsubscribeGuard?.()
+    unsubscribeActive?.()
     unsubscribeFromReloadStatus()
   })
 
@@ -176,11 +186,7 @@
         transactions.commit([tx])
       }
       uiState.settings = controls.settings
-      // Refresh all drafts from new settings (invariant may have changed other fields)
-      for (const m of FIELD_META) {
-        const val = controls.settings[m.key]
-        drafts[m.key] = val === null ? '' : String(val)
-      }
+      refreshDrafts(controls)
     }
   }
 
@@ -203,11 +209,7 @@
         transactions.commit([tx])
       }
       uiState.settings = controls.settings
-      // Refresh all drafts (invariant may have changed other fields)
-      for (const m of FIELD_META) {
-        const val = controls.settings[m.key]
-        drafts[m.key] = val === null ? '' : String(val)
-      }
+      refreshDrafts(controls)
     }
   }
 
@@ -234,7 +236,7 @@
 
 <SparkFixedToolbarPane>
   {#if !uiState.controls}
-    <div class="sc-no-selection" data-testid="spark-no-selection">Select the Spark object</div>
+    <div class="sc-no-selection" data-testid="spark-no-selection">No scene loaded</div>
   {:else}
     <div class="sc-panel" data-testid="spark-controls-panel">
       <div class="sc-title">Spark Controls</div>

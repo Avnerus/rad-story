@@ -6,6 +6,7 @@
   import { gsap } from 'gsap'
   import { isScrollAnimator } from '$lib/studio/scroll-animator/transactionGuard'
   import { scrollAnimatorRuntime } from '$lib/studio/scroll-animator/scrollAnimatorRuntime'
+  import { activeSparkControlsRuntime } from '$lib/studio/spark-controls/activeSparkControlsRuntime'
   import type { DeviceProfile } from '$lib/types'
   import type { SparkControls } from '$lib/spark/SparkControls'
   import SparkStudioBridge from './SparkStudioBridge.svelte'
@@ -107,8 +108,16 @@
     cameraIsActive = threlte.camera.current === appCamera
   }, { autoInvalidate: false })
 
+  // Register SparkControls with the active-controller runtime
+  let detachSparkControls: (() => void) | null = null
+
   onMount(() => {
     if (typeof window === 'undefined') return
+
+    // Register SparkControls with the active-controller runtime
+    if (sparkControls) {
+      detachSparkControls = activeSparkControlsRuntime.attach(sparkControls)
+    }
 
     // Stub-only: expose scene UUID, app camera UUID, and register SparkControls
     // for disposal tracking — all for e2e identity assertions
@@ -158,6 +167,9 @@
       scrollTrigger.kill()
       scrollTrigger = null
     }
+    // Detach from active-controller runtime (identity-safe)
+    detachSparkControls?.()
+    detachSparkControls = null
     // Dispose SparkControls on scene unmount (single owner)
     if (sparkControls) {
       // Stub-only: record disposal for e2e lifecycle assertions

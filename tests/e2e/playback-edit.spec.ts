@@ -213,10 +213,6 @@ test.describe('Edit mode (/scene/baby_yoda/edit)', () => {
     await page.goto('/scene/baby_yoda/edit')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
-    const header = page.locator('.viewer-header .url-label')
-    await expect(header).toBeVisible()
-    await expect(header).toContainText('baby_yoda')
-
     await expect(page.getByRole('button', { name: 'Scroll Animator' })).toBeVisible({ timeout: 15_000 })
     await expect(page.getByRole('button', { name: 'Spark Controls' })).toBeVisible({ timeout: 15_000 })
   })
@@ -284,15 +280,11 @@ test.describe('Edit mode (/scene/baby_yoda/edit)', () => {
     expect(await keyframeRows.count()).toBe(2)
   })
 
-  test('edit mode Spark Controls pane works', async ({ page }) => {
+  test('edit mode Spark Controls pane works without selecting Spark', async ({ page }) => {
     await page.goto('/scene/baby_yoda/edit')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
-    const sparkItem = page.getByText('Spark')
-    await expect(sparkItem.first()).toBeVisible({ timeout: 15_000 })
-    await sparkItem.first().click()
-    await page.waitForTimeout(500)
-
+    // Do NOT select Spark — the pane should auto-bind to the active scene's controller
     await page.getByRole('button', { name: 'Spark Controls' }).click()
     await page.waitForTimeout(500)
 
@@ -482,5 +474,188 @@ test.describe('Not-found for malformed edit routes', () => {
   test('uppercase scene name /edit shows not-found', async ({ page }) => {
     await page.goto('/scene/Baby_Yoda/edit')
     await expect(page.getByRole('heading', { name: 'Scene not found' })).toBeVisible({ timeout: 10_000 })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Edit route: no viewer header
+// ---------------------------------------------------------------------------
+
+test.describe('Edit route header visibility', () => {
+  test('/scene/baby_yoda/edit has no viewer header', async ({ page }) => {
+    await page.goto('/scene/baby_yoda/edit')
+    await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
+
+    // No viewer-header should be present
+    const headerExists = await page.evaluate(() =>
+      document.querySelector('.viewer-header') !== null
+    )
+    expect(headerExists, 'no viewer-header in edit mode').toBe(false)
+
+    // No Home button
+    const homeBtnExists = await page.evaluate(() =>
+      document.querySelector('button[aria-label="Go back"]') !== null
+    )
+    expect(homeBtnExists, 'no Home button in edit mode').toBe(false)
+
+    // No scene-name indicator
+    const urlLabelExists = await page.evaluate(() =>
+      document.querySelector('.url-label') !== null
+    )
+    expect(urlLabelExists, 'no scene-name indicator in edit mode').toBe(false)
+  })
+
+  test('/scene/baby_yoda retains playback header', async ({ page }) => {
+    await page.goto('/scene/baby_yoda')
+    await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
+
+    const header = page.locator('.viewer-header .url-label')
+    await expect(header).toBeVisible()
+    await expect(header).toContainText('baby_yoda')
+
+    const homeBtn = page.locator('button[aria-label="Go back"]')
+    await expect(homeBtn).toBeVisible()
+  })
+
+  test('/scene/baby_yoda/edit Studio toolbar is unobstructed', async ({ page }) => {
+    await page.goto('/scene/baby_yoda/edit')
+    await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
+
+    // Studio toolbar buttons should be visible
+    await expect(page.getByRole('button', { name: 'Scroll Animator' })).toBeVisible({ timeout: 15_000 })
+    await expect(page.getByRole('button', { name: 'Spark Controls' })).toBeVisible({ timeout: 15_000 })
+
+    // Verify no header element is overlapping the top of the viewport
+    const headerRect = await page.evaluate(() => {
+      const header = document.querySelector('.viewer-header')
+      if (!header) return null
+      const rect = header.getBoundingClientRect()
+      return { top: rect.top, bottom: rect.bottom, height: rect.height }
+    })
+    expect(headerRect, 'no viewer-header element exists').toBeNull()
+  })
+
+  test('refresh at /scene/baby_yoda/edit still has no header', async ({ page }) => {
+    await page.goto('/scene/baby_yoda/edit')
+    await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
+
+    await page.reload()
+    await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
+
+    const headerExists = await page.evaluate(() =>
+      document.querySelector('.viewer-header') !== null
+    )
+    expect(headerExists, 'no viewer-header after refresh in edit mode').toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Spark Controls pane: selection independence
+// ---------------------------------------------------------------------------
+
+test.describe('Spark Controls pane selection independence', () => {
+  test('pane stays bound when selecting a non-Spark object', async ({ page }) => {
+    await page.goto('/scene/baby_yoda/edit')
+    await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
+
+    // Open Spark Controls without selecting Spark
+    await page.getByRole('button', { name: 'Spark Controls' }).click()
+    await page.waitForTimeout(500)
+    await expect(page.getByTestId('spark-controls-panel')).toBeVisible()
+
+    // Select a different hierarchy object
+    await page.getByText('Camera ScrollAnimator').click()
+    await page.waitForTimeout(500)
+
+    // Pane should still show the controls (not "No scene loaded")
+    await expect(page.getByTestId('spark-controls-panel')).toBeVisible()
+    await expect(page.getByTestId('spark-field-lodSplatScale')).toBeVisible()
+  })
+
+  test('pane stays bound when selecting multiple objects', async ({ page }) => {
+    await page.goto('/scene/baby_yoda/edit')
+    await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
+
+    await page.getByRole('button', { name: 'Spark Controls' }).click()
+    await page.waitForTimeout(500)
+    await expect(page.getByTestId('spark-controls-panel')).toBeVisible()
+
+    // Select Spark, then Ctrl+click another to get multi-select
+    await page.getByText('Spark').first().click()
+    await page.waitForTimeout(300)
+    await page.keyboard.down('Control')
+    await page.getByText('SplatWrapper').first().click()
+    await page.keyboard.up('Control')
+    await page.waitForTimeout(500)
+
+    // Pane should still show the controls
+    await expect(page.getByTestId('spark-controls-panel')).toBeVisible()
+    await expect(page.getByTestId('spark-field-lodSplatScale')).toBeVisible()
+  })
+
+  test('pane stays bound when clearing selection', async ({ page }) => {
+    await page.goto('/scene/baby_yoda/edit')
+    await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
+
+    await page.getByRole('button', { name: 'Spark Controls' }).click()
+    await page.waitForTimeout(500)
+    await expect(page.getByTestId('spark-controls-panel')).toBeVisible()
+
+    // Click on empty canvas area to clear selection
+    await page.evaluate(() => {
+      const canvas = document.querySelector('#app canvas')
+      if (canvas) {
+        canvas.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 100, clientY: 100 }))
+      }
+    })
+    await page.waitForTimeout(500)
+
+    // Pane should still show the controls
+    await expect(page.getByTestId('spark-controls-panel')).toBeVisible()
+    await expect(page.getByTestId('spark-field-lodSplatScale')).toBeVisible()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Spark Controls pane: remount and stale-controller safety
+// ---------------------------------------------------------------------------
+
+test.describe('Spark Controls pane remount safety', () => {
+  test('pane works after scene remount (no stale controller)', async ({ page }) => {
+    await page.goto('/scene/baby_yoda/edit')
+    await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
+
+    await page.getByRole('button', { name: 'Spark Controls' }).click()
+    await page.waitForTimeout(500)
+    await expect(page.getByTestId('spark-controls-panel')).toBeVisible()
+
+    // Navigate away and back
+    await page.goto('/')
+    await expect(page.getByRole('heading', { name: 'RAD Story' })).toBeVisible()
+    await page.goto('/scene/baby_yoda/edit')
+    await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
+
+    // Pane should work again after remount
+    await page.getByRole('button', { name: 'Spark Controls' }).click()
+    await page.waitForTimeout(500)
+    await expect(page.getByTestId('spark-controls-panel')).toBeVisible()
+    await expect(page.getByTestId('spark-field-lodSplatScale')).toBeVisible()
+  })
+
+  test('Spark object still appears in hierarchy and is selectable', async ({ page }) => {
+    await page.goto('/scene/baby_yoda/edit')
+    await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
+
+    // Spark should still be in the hierarchy
+    await expect(page.getByText('Spark')).toBeVisible({ timeout: 15_000 })
+
+    // It should still be selectable (for Inspector, etc.)
+    await page.getByText('Spark').first().click()
+    await page.waitForTimeout(500)
+
+    // Spark Controls pane should still work
+    await page.getByRole('button', { name: 'Spark Controls' }).click()
+    await page.waitForTimeout(500)
+    await expect(page.getByTestId('spark-controls-panel')).toBeVisible()
   })
 })

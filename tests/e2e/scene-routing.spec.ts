@@ -443,10 +443,7 @@ test.describe('Baby Yoda SplatWrapper', () => {
     await page.goto('/scene/baby_yoda/edit')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
-    const sparkItem = page.getByText('Spark')
-    await expect(sparkItem).toBeVisible({ timeout: 15_000 })
-    await sparkItem.click()
-    await page.waitForTimeout(500)
+    // Spark Controls pane auto-binds — no need to select Spark first
     await page.getByRole('button', { name: 'Spark Controls' }).click()
     await page.waitForTimeout(500)
 
