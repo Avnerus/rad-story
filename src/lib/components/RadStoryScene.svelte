@@ -77,7 +77,7 @@
 
   // Mesh reload callback — wired from SparkSplats to SparkStudioBridge
   // $state ensures onMeshReload={splatsRef?.reload} updates reactively
-  let splatsRef = $state<{ reload: (url: string) => Promise<void> } | null>(null)
+  let splatsRef = $state<{ reload: (url: string) => Promise<void>; getWrapper: () => Object3D } | null>(null)
   // Bridge ref for pager identity and renderer update
   // $state ensures pagerIdentity/triggerUpdate callbacks update reactively
   let bridgeRef = $state<{ getPagerIdentity: () => unknown; triggerRendererUpdate: () => void } | null>(null)

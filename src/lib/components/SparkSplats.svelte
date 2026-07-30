@@ -36,6 +36,17 @@
   let destroyed = false
 
   /**
+   * Detach and dispose a mesh from the wrapper. Safe and idempotent —
+   * checks that the mesh is actually the current child before removing.
+   */
+  function detachMesh(m: SplatMesh): void {
+    if (wrapper.children.includes(m as unknown as Object3D)) {
+      wrapper.remove(m as unknown as Object3D)
+    }
+    m.dispose()
+  }
+
+  /**
    * Exposed reload function — called by SparkStudioBridge.
    * Waits for mesh initialization AND pager handoff before resolving.
    */
@@ -51,6 +62,11 @@
   /** Exposed reload status for the pane to subscribe to. */
   export function getStatus(): ReloadStatus | null {
     return coordinator?.status ?? null
+  }
+
+  /** Exposed for e2e diagnostics — returns the stable wrapper Object3D. */
+  export function getWrapper(): Object3D {
+    return wrapper
   }
 
   function createMesh(u: string): SplatMesh {
@@ -134,6 +150,12 @@
     mesh = createMesh(url)
     wrapper.add(mesh)
 
+    // Test-only: expose wrapper for e2e transform assertions
+    if (typeof window !== 'undefined') {
+      const hook = (window as unknown as Record<string, unknown>).__spark_stub_set_wrapper
+      if (typeof hook === 'function') hook(wrapper)
+    }
+
     coordinator = new SparkReloadCoordinator()
 
     // Wire status to external subscriber (e.g. Spark Controls pane)
@@ -144,22 +166,48 @@
     // Completion callback: attach mesh to wrapper, then await pager handoff.
     // The coordinator awaits this promise; requestReload and isReloading
     // remain pending until pager handoff resolves or rejects.
+    //
+    // Ownership: after attachment, the component owns the replacement mesh.
+    // If activation rejects or is superseded, rollback cleanup detaches and
+    // disposes the replacement. The previous mesh is NOT restored (it was
+    // already disposed), but the wrapper remains valid and recoverable.
     coordinator.onReloadComplete(async (newMeshObj: object, generation: number) => {
       if (destroyed) return
       const newMesh = newMeshObj as SplatMesh
 
       // Remove old mesh from wrapper
-      if (mesh) {
-        wrapper.remove(mesh)
-        mesh.dispose()
+      const oldMesh = mesh
+      if (oldMesh) {
+        wrapper.remove(oldMesh)
+        oldMesh.dispose()
       }
 
       // Add new mesh to wrapper (preserves wrapper transform)
       mesh = newMesh
       wrapper.add(mesh)
 
-      // Await pager handoff — rejection is caught by the coordinator
-      await waitForPagerHandoff(newMesh, generation)
+      try {
+        // Await pager handoff — rejection is caught by the coordinator
+        await waitForPagerHandoff(newMesh, generation)
+      } catch (handoffErr) {
+        // Rollback on failure: detach and dispose the failed replacement.
+        // Only if this generation is still current (a newer generation
+        // may have already taken over and owns the mesh).
+        if (!destroyed && coordinator?.generation === generation && mesh === newMesh) {
+          detachMesh(newMesh)
+          mesh = null
+        }
+        throw handoffErr
+      }
+
+      // Post-handoff: if superseded during the wait, detach this mesh.
+      // waitForPagerHandoff resolves (doesn't reject) on supersession,
+      // so we must check here. A newer generation may have already
+      // installed its own mesh.
+      if (coordinator?.generation !== generation && mesh === newMesh) {
+        detachMesh(newMesh)
+        mesh = null
+      }
     })
   })
 

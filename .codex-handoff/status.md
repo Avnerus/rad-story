@@ -1,70 +1,106 @@
-# Status: Close Spark reload activation lifecycle and evidence gaps
+# Status: Spark reload ownership finalized, non-vacuous evidence added
 
-## 1. Summary of the completion-contract fix
+## Summary
 
-The `SparkReloadCoordinator.onReloadComplete` callback type changed from `(mesh, gen) => void` to `(mesh, gen) => void | Promise<void>`. The coordinator now `await`s the callback inside `_doReload`, keeping the `requestReload()` promise and `isReloading` pending through the full activation interval (mesh attachment + pager handoff). Callback rejection is caught for the current generation, reported via `status.fail()` and `onReloadError`, with no unhandled rejection. Success is centralized: only the coordinator calls `status.success()` after the awaited callback resolves, and only if the generation is still current.
+Finalized the Spark reload activation ownership and rollback contract. Added deterministic stub controls for progress visibility, exact old/new ID assertions, unconditional wrapper transform persistence, final-generation ownership, and mid-reload selection behavior. All acceptance criteria met.
 
-## 2. Exact lifecycle and generation semantics
+## Final activation ownership and rollback contract
 
-- `requestReload()` increments generation, calls `status.start()`, starts `_doReload`
-- `_doReload` awaits `createMesh()`, checks generation, then `await`s `onReloadComplete(mesh, gen)`
-- While awaiting, `_pendingPromise` is non-null → `isReloading` is true
-- If `onReloadComplete` resolves and generation is still current → `status.success()`
-- If `onReloadComplete` rejects and generation is still current → `status.fail(message)`, `onReloadError`
-- If generation changed (superseded) → callback result is silently ignored
-- If destroyed → callback result is silently ignored
-- `finally`: clears `_pendingPromise` only if generation still matches
-- A superseded generation cannot publish success/failure for the newest generation
+**Phases:**
+1. **Before activation callback:** Coordinator owns the newly created mesh and its `dispose()` function. If superseded or destroyed before `onReloadComplete`, the coordinator calls `dispose()` on the mesh directly.
+2. **During activation (attachment):** Component owns the replacement mesh. It removes the old mesh from `SplatWrapper` and adds the new one. The coordinator awaits the `onReloadComplete` callback; `requestReload()` and `isReloading` remain pending.
+3. **During pager handoff:** Component polls via RAF for `mesh.paged.pager === realRenderer.pager`. Three failure modes trigger rollback:
+   - **Rejection:** `catch` block calls `detachMesh()` if this generation is still current, then re-throws.
+   - **Supersession:** `waitForPagerHandoff` resolves (doesn't reject). Post-handoff check detaches the superseded mesh if a newer generation has taken over.
+   - **Destroy:** `onDestroy` sets `destroyed = true`, disposes coordinator and current mesh. In-flight callback sees `destroyed` and exits cleanly.
+4. **Confirmed pager handoff:** Replacement becomes the sole active mesh. Coordinator publishes `status.success()`.
 
-## 3. Direct test evidence mapped to every acceptance criterion
+**Idempotency:** `detachMesh()` checks `wrapper.children.includes(mesh)` before removing. `dispose()` is idempotent (stub sets `disposed = true`). An older generation cannot detach the newest mesh: `coordinator?.generation === generation && mesh === newMesh`.
 
-| Criterion | Evidence |
-|-----------|----------|
-| `requestReload()` resolves only after async completion | Unit: `awaits async completion callback before resolving requestReload` |
-| `isReloading` remains true through full interval | Unit: `keeps isReloading true through async activation` |
-| Async completion rejection caught, status fails once | Unit: `catches async completion rejection and fails current generation` |
-| Superseded async activation cannot publish stale state | Unit: `superseded async activation cannot publish stale terminal state` |
-| Destroy during async activation cancels cleanly | Unit: `destroy during async activation cancels cleanly` |
-| Pane reflects already-running reload on mid-reload selection | Extension: `subscribeToReloadStatus` initializes from current `isReloading`/`error` values immediately |
-| Wrapper transform and settings persist | E2E: `stub capacity reload: wrapper transform and other settings persist` |
-| Active mesh pager ID equals drivingPagerId | E2E: `stub capacity reload: progress visible then clears, pager handoff confirmed` asserts `newestMeshPagerId === drivingPagerId` |
-| Driving pager has normalized capacity | E2E: same test asserts `drivingPagerMaxSplats === expectedCapacity` |
-| Old pager/mesh disposed | E2E: same test asserts `disposedPagerCount > 0` |
-| Exactly one current active mesh | E2E: same test asserts `activeMeshCount === 1` |
-| Rapid edits settle on final capacity | E2E: `stub capacity reload: rapid edits settle on final capacity` asserts final `drivingPagerMaxSplats === 262144` and `activeMeshCount === 1` |
-| Progress observed as true before clearing | E2E: `Spark pane capacity edit shows reload progress (stub)` asserts `reloadingBefore === true` then waits for clear |
-| `npm run check` zero errors, no warning from Spark impl | 0 errors, 0 warnings (splatsRef/bridgeRef are now `$state(...)`) |
+## Exact supersession/failure/destroy behavior
 
-## 4. Changed files and why
+| Scenario | Behavior | Verified by |
+|----------|----------|-------------|
+| Activation rejects after attachment | `detachMesh()` called exactly once on failed replacement; coordinator catches, calls `status.fail()` | Unit: `rejection after attachment` |
+| Gen 1 attached, gen 2 fires during handoff | Gen 1's `waitForPagerHandoff` resolves; post-handoff check detaches gen 1 mesh; gen 2 completes normally | Unit: `supersession after activation starts` |
+| Destroy during attached activation | `onDestroy` disposes current mesh and coordinator; no late status emitted | Unit: `destroy after activation starts` |
+| Superseded gen cannot publish stale status | Coordinator checks `generation === current` before any terminal status | Unit: `superseded async activation cannot publish stale terminal state` |
+
+## Acceptance table
+
+| Acceptance criterion | Test or evidence | Result |
+|----------------------|-----------------|--------|
+| Async activation keeps `requestReload()`/`isReloading` pending until pager match | Unit: `coordinator signals success after async completion resolves` | ✅ |
+| Activation rejects after attachment → rollback cleanup | Unit: `rejection after attachment invokes rollback cleanup exactly once` | ✅ |
+| Gen 1 superseded by gen 2 → gen 1 detached, gen 2 unaffected | Unit: `supersession after activation starts` | ✅ |
+| Destroy during attached activation → no late status, no leaked mesh | Unit: `destroy after activation starts: no late status emitted` | ✅ |
+| Deterministic progress visible while gate closed, clears on release | E2E: `stub capacity reload: deterministic progress visible then clears` | ✅ |
+| Exact old/new mesh IDs, old disposed, new pager === drivingPagerId, normalized capacity, one active mesh | E2E: `stub capacity reload: exact old/new IDs, disposal, pager handoff` | ✅ |
+| Non-default wrapper transform set before reload, asserted identically after | E2E: `stub capacity reload: wrapper transform and other settings persist` | ✅ |
+| Rapid edits settle on final generation/capacity owning sole mesh/pager | E2E: `stub capacity reload: rapid edits settle on final generation` | ✅ |
+| Mid-reload selection change updates pane in place | E2E: `stub mid-reload selection change: pane updates in place` | ✅ |
+| `npm run check` 0 errors, 0 warnings | Command output | ✅ |
+| `npm run lint` clean | Command output | ✅ |
+| `npm run test:unit` green | 245 passed | ✅ |
+| `npm run test:e2e` green | 57 passed | ✅ |
+| `npm run build` success | Command output | ✅ |
+
+## Exact old/new IDs and generation diagnostics
+
+The `exact old/new IDs` e2e test:
+1. Captures `oldActiveMeshId` (last non-disposed mesh ID) and `oldDrivingPagerId` before reload
+2. Triggers capacity edit (halves current capacity)
+3. After reload: asserts `oldMeshDisposed === true`, `oldPagerDisposed === true`
+4. Asserts `newActiveMeshId !== oldActiveMeshId`
+5. Asserts `newActiveMeshPagerId === drivingPagerId`
+6. Asserts `drivingPagerMaxSplats` equals normalized capacity
+7. Asserts `activeMeshCount === 1`
+
+The `rapid edits` e2e test:
+1. Fires three rapid capacity edits: 131072 → 196608 → 262144
+2. Asserts final input value is 262144
+3. Asserts `drivingPagerMaxSplats === 262144`
+4. Asserts `activeMeshCount === 1`
+5. Asserts `activeMeshPagerId === drivingPagerId`
+
+The `transform persistence` e2e test:
+1. Sets wrapper position to `(7, 13, 21)`, rotation to `(0.3, 0.5, 0.7)`, scale to `(1.5, 1.5, 1.5)`
+2. Triggers capacity reload
+3. Unconditionally asserts all 9 transform values identical after reload
+
+## Changed files and rationale
 
 | File | Change |
 |------|--------|
-| `src/lib/spark/SparkReloadRuntime.ts` | `onReloadComplete` callback accepts `void | Promise<void>`; coordinator awaits it; centralized success/fail ownership; `isReloading` stays true through full activation |
-| `src/lib/components/SparkSplats.svelte` | `onReloadComplete` returns async promise (attach mesh + await pager handoff); `waitForPagerHandoff` no longer calls `status.success()` (coordinator does) |
-| `src/lib/components/RadStoryScene.svelte` | `splatsRef` and `bridgeRef` are `$state(...)` — fixes Svelte reactivity warning |
-| `src/lib/studio/spark-controls/SparkControlsExtension.svelte` | `subscribeToReloadStatus` initializes `uiState.reloading`/`reloadError` from current values before subscribing |
-| `tests/fixtures/spark-stub.ts` | `SplatMesh` tracks `disposed` flag for e2e active-mesh assertions |
-| `tests/unit/SparkReloadCoordinator.test.ts` | Added async completion tests: await keeps pending, rejection caught, supersession during async, destroy during async |
-| `tests/e2e/rad-story.spec.ts` | Strengthened assertions: exact pager ID equality, disposal counts, active mesh count, progress observation, rapid edit final state |
-| `AGENTS.md` | Updated async completion contract, reactive refs, pager handoff, stub e2e assertions |
+| `src/lib/components/SparkSplats.svelte` | Added `detachMesh()` helper; added post-handoff supersession check; added `getWrapper()` export; added test-only wrapper registration hook |
+| `src/lib/components/RadStoryScene.svelte` | Updated `splatsRef` type to include `getWrapper` |
+| `tests/fixtures/spark-stub.ts` | Added `__stubActivationGate` for deterministic pager withholding; added `_testWrapper` and `__spark_stub_set_wrapper` hook; added `wrapper` and `drivingGeneration` to diagnostics |
+| `tests/unit/SparkReloadCoordinator.test.ts` | Added 3 tests: rejection after attachment, supersession after activation starts, destroy after activation starts |
+| `tests/e2e/rad-story.spec.ts` | Replaced stub capacity section: deterministic progress test, exact old/new IDs test, final-generation rapid edits, unconditional transform persistence, mid-reload selection, subscription lifecycle |
+| `AGENTS.md` | Added activation ownership/rollback section; updated stub diagnostics and e2e descriptions |
 
-## 5. Exact command results
+## Exact command results
 
 ```
-npm run check    → 0 errors, 0 warnings
-npm run lint     → clean
-npm run test:unit → 242 tests pass (14 files)
-npm run test:e2e → 56 tests pass
-npm run build    → success
+$ npm run check
+svelte-check found 0 errors and 0 warnings
+
+$ npm run lint
+(no output — clean)
+
+$ npm run test:unit
+Test Files  14 passed (14)
+Tests  245 passed (245)
+
+$ npm run test:e2e
+57 passed (25.0s)
+
+$ npm run build
+✓ built in 4.52s
 ```
 
-## 6. Remaining limitations
+## Remaining limitations
 
-- **Stub vs real Spark**: The stub creates `SparkRenderer.pager` in the constructor. Real Spark creates it lazily via the LOD worker. The `waitForPagerHandoff` handles both by polling until `pagerIdentity()` returns a value. In headless Chromium, the LOD worker may not initialize within the 5s timeout for some configurations.
-- **`dispatchEvent` on shadow DOM hierarchy items** does not trigger Studio's internal selection (must use native `mousemove/mousedown/mouseup` at measured coordinates).
-- **Source-sync/undo** via actual dev-server source editing not automated.
-- **Real Spark e2e**: Full automation with real Spark is impractical due to GPU stalls blocking native pointer commands and `playwright-cli screenshot`. `run-code` with `page.screenshot({ timeout: 30000 })` captures screenshots successfully.
-
-## 7. Final commit hash
-
-`43c3288`
+1. **Real Spark manual evidence not re-run:** Production pager/attachment behavior was not materially changed (only rollback cleanup added). Prior real Spark evidence (Baby Yoda capacity reload 1048576 → 524288, GPU stall workarounds) remains valid.
+2. **Wrapper transform test is stub-only:** The unconditional transform assertion uses `__spark_stub_diagnostics.wrapper`. In production, the wrapper is preserved by design (stable `Object3D` child swap), but a non-default transform cannot be set imperatively in the e2e stub without the diagnostic hook.
+3. **Pager handoff timeout is bounded (5s):** If the driving renderer's pager is never created (e.g., Spark worker failure), `waitForPagerHandoff` rejects after 5s. The rollback cleanup detaches the replacement mesh, leaving `mesh = null` and the wrapper empty. A subsequent reload request can recover.

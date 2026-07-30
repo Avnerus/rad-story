@@ -215,6 +215,88 @@ describe('SparkReloadCoordinator', () => {
       // No unhandled rejection, no stale status
       expect(coordinator.status.isReloading).toBe(false)
     })
+
+    it('rejection after attachment: coordinator catches error and signals fail', async () => {
+      const { factory } = makeMeshFactory()
+      const statuses: Array<{ isReloading: boolean; error: string }> = []
+      coordinator.status.subscribe((s) => statuses.push({ ...s }))
+      let attached = false
+
+      coordinator.onReloadComplete(async () => {
+        attached = true // simulate: mesh attached to wrapper
+        await new Promise((r) => setTimeout(r, 10))
+        throw new Error('pager handoff timeout')
+      })
+
+      await coordinator.requestReload('test.rad', factory)
+
+      // Mesh was attached before rejection
+      expect(attached).toBe(true)
+
+      // Coordinator caught the error and signaled fail
+      expect(statuses).toHaveLength(2)
+      expect(statuses[0]).toEqual({ isReloading: true, error: '' })
+      expect(statuses[1]).toEqual({ isReloading: false, error: 'pager handoff timeout' })
+    })
+
+    it('supersession after activation starts: gen 1 cleanup does not affect gen 2', async () => {
+      const { factory } = makeMeshFactory()
+      const statuses: Array<{ isReloading: boolean; error: string }> = []
+      coordinator.status.subscribe((s) => statuses.push({ ...s }))
+      const events: string[] = []
+
+      coordinator.onReloadComplete(async (_mesh, gen) => {
+        events.push(`gen${gen}-attached`)
+        await new Promise((r) => setTimeout(r, gen === 1 ? 50 : 10))
+        events.push(`gen${gen}-handoff-done`)
+      })
+
+      const p1 = coordinator.requestReload('a.rad', factory)
+      // Gen 1 attached, now waiting for handoff — fire gen 2
+      await new Promise((r) => setTimeout(r, 5))
+      const p2 = coordinator.requestReload('b.rad', factory)
+
+      await Promise.all([p1, p2])
+
+      // Gen 1 attached first, gen 2 attached second
+      expect(events[0]).toBe('gen1-attached')
+      expect(events[1]).toBe('gen2-attached')
+
+      // Gen 1's handoff resolves (superseded path — component detaches in SparkSplats)
+      // Gen 2's handoff resolves and publishes success
+      const successes = statuses.filter((s) => !s.isReloading && !s.error)
+      expect(successes).toHaveLength(1)
+
+      // Final generation is 2
+      expect(coordinator.generation).toBe(2)
+      expect(coordinator.isReloading).toBe(false)
+    })
+
+    it('destroy after activation starts: no late status emitted', async () => {
+      const { factory } = makeMeshFactory()
+      const statuses: Array<{ isReloading: boolean; error: string }> = []
+      coordinator.status.subscribe((s) => statuses.push({ ...s }))
+      let attached = false
+
+      coordinator.onReloadComplete(async () => {
+        attached = true
+        await new Promise((r) => setTimeout(r, 100))
+      })
+
+      const promise = coordinator.requestReload('test.rad', factory)
+      expect(coordinator.isReloading).toBe(true)
+
+      // Wait for attachment, then destroy
+      await new Promise((r) => setTimeout(r, 5))
+      expect(attached).toBe(true)
+      coordinator.dispose()
+
+      await promise
+
+      // No status emitted after destroy
+      const postDestroy = statuses.filter((s) => s.isReloading === false)
+      expect(postDestroy).toHaveLength(0)
+    })
   })
 
   describe('rapid edits / coalescing', () => {

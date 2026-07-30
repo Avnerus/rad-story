@@ -22,6 +22,8 @@ let _rendererIdCounter = 0
 const _allPagers: SplatPager[] = []
 const _allRenderers: SparkRenderer[] = []
 const _allMeshes: SplatMesh[] = []
+/** Test-only: reference to the current SplatWrapper for e2e transform assertions. */
+let _testWrapper: Object3D | null = null
 
 /** Stub pager that tracks identity and capacity. */
 export class SplatPager {
@@ -133,9 +135,14 @@ export class SparkRenderer extends Object3D {
    * to simulate the render-cycle pager assignment.
    * Uses global _allMeshes tracking since the driving renderer is
    * not added to the scene (unlike the editor renderer).
+   *
+   * Test-only gate: if `_stubActivationGate` is true, pager assignment
+   * is withheld to allow deterministic progress-visibility assertions.
    */
   update(): void {
     if (!this.enableDriveLod || !this.pager || this.pager.disposed) return
+    // Test-only gate: withhold pager assignment when gate is closed
+    if ((globalThis as unknown as Record<string, unknown>).__stubActivationGate) return
 
     for (const mesh of _allMeshes) {
       if (mesh.type === 'SplatMesh' && mesh.paged && !mesh.paged.pager) {
@@ -196,6 +203,10 @@ interface StubDiagnostics {
   meshes: SplatMesh[]
   /** Current driving renderer's pager ID (or 0 if none). */
   drivingPagerId: number
+  /** Current driving renderer's generation (matches request generation). */
+  drivingGeneration: number
+  /** Test-only: current SplatWrapper for e2e transform assertions. */
+  wrapper: Object3D | null
 }
 
 /** Marker: proves the running build uses the Spark stub. */
@@ -203,20 +214,35 @@ interface StubDiagnostics {
   if (typeof window !== 'undefined') {
     ;(window as unknown as Record<string, unknown>).__spark_stub = true
 
+    // Test-only: hook for SparkSplats to register its wrapper
+    ;(window as unknown as Record<string, unknown>).__spark_stub_set_wrapper = (w: Object3D) => {
+      _testWrapper = w
+    }
+
     Object.defineProperty(window, '__spark_stub_diagnostics', {
       configurable: true,
       get(): StubDiagnostics {
+        // Find the current driving renderer (latest non-disposed with enableDriveLod)
+        let drivingRenderer: SparkRenderer | null = null
+        for (const r of _allRenderers) {
+          if (r.enableDriveLod && r.pager && !r.pager.disposed) {
+            drivingRenderer = r
+          }
+        }
         return {
           pagers: _allPagers.slice(),
           renderers: _allRenderers.slice(),
           meshes: _allMeshes.slice(),
           get drivingPagerId() {
-            for (const r of _allRenderers) {
-              if (r.enableDriveLod && r.pager && !r.pager.disposed) {
-                return r.pager.id
-              }
-            }
-            return 0
+            return drivingRenderer?.pager?.id ?? 0
+          },
+          get drivingGeneration() {
+            // The driving renderer's pager ID serves as a generation proxy
+            return drivingRenderer?.pager?.id ?? 0
+          },
+          /** Test-only: current SplatWrapper for e2e transform assertions. */
+          get wrapper() {
+            return _testWrapper
           },
         }
       },
