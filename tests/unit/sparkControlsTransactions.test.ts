@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { SparkControls } from '$lib/spark/SparkControls'
+import { SparkControls, type SparkSettings } from '$lib/spark/SparkControls'
 import { buildProfileSettingsTransaction } from '$lib/studio/spark-controls/sparkSettingsTransaction'
 import type { ProfileSettings } from '$lib/spark/SparkControls'
+import { getGlobalBaseline } from '$lib/spark/deviceProfile'
 
 /**
  * Minimal mock of the public useTransactions() contract from @threlte/studio/extensions.
@@ -44,6 +45,20 @@ function createMockTransactions(): MockTransactionsAPI {
     },
     onTransaction: () => () => {}, // no-op
   }
+}
+
+/**
+ * Simulate Studio's actual transaction write callback.
+ * Studio's buildTransaction() wraps the raw transaction with a `write` method
+ * that assigns `value` to `object[propertyPath]` (or `historicValue` for undo).
+ */
+function simulateTransactionWrite(
+  controls: SparkControls,
+  propertyPath: string,
+  writeValue: unknown,
+): void {
+  // This is what Studio's transaction.write() does:
+  ;(controls as Record<string, unknown>)[propertyPath] = writeValue
 }
 
 describe('buildProfileSettingsTransaction (production helper)', () => {
@@ -185,5 +200,137 @@ describe('SparkControls transaction semantics', () => {
     expect(controls.settings.coneFov).toBeGreaterThanOrEqual(150)
 
     unsub()
+  })
+})
+
+describe('Actual transaction write path (commit/undo/redo)', () => {
+  const desktopBaseline = getGlobalBaseline('desktop')
+
+  it('forward write updates profileSettings, settings, and notifies', () => {
+    const controls = new SparkControls(undefined, 'desktop', { desktop: {}, mobile: {} }, desktopBaseline)
+    let notified: Set<keyof SparkSettings> | null = null
+    controls.onChange((keys) => { notified = keys })
+
+    const historicPS = controls.profileSettings
+    const newPS: ProfileSettings = { desktop: { blurAmount: 0.7 }, mobile: {} }
+
+    // Build transaction
+    const tx = buildProfileSettingsTransaction(controls, newPS, historicPS)
+
+    // Simulate Studio's transaction.write(value) — writes tx.value to controls.profileSettings
+    simulateTransactionWrite(controls, tx.propertyPath, tx.value)
+
+    // Verify profileSettings getter returns validated minimal overrides
+    const ps = controls.profileSettings
+    expect(ps.desktop.blurAmount).toBe(0.7)
+    expect(ps.mobile).toEqual({})
+
+    // Verify effective settings
+    expect(controls.settings.blurAmount).toBe(0.7)
+
+    // Verify notification
+    expect(notified).not.toBeNull()
+    expect(notified!.has('blurAmount')).toBe(true)
+    expect(notified!.size).toBe(1)
+  })
+
+  it('undo write (historicValue) restores original state', () => {
+    const controls = new SparkControls(undefined, 'desktop', { desktop: {}, mobile: {} }, desktopBaseline)
+    let notifyCount = 0
+    controls.onChange(() => { notifyCount++ })
+
+    const originalPS = controls.profileSettings
+
+    // Forward: write new value
+    const newPS: ProfileSettings = { desktop: { blurAmount: 0.9 }, mobile: {} }
+    const tx = buildProfileSettingsTransaction(controls, newPS, originalPS)
+    simulateTransactionWrite(controls, tx.propertyPath, tx.value)
+    expect(controls.settings.blurAmount).toBe(0.9)
+    expect(notifyCount).toBe(1)
+
+    // Undo: write historicValue
+    simulateTransactionWrite(controls, tx.propertyPath, tx.historicValue)
+
+    // Verify restored
+    expect(controls.settings.blurAmount).toBe(desktopBaseline.blurAmount)
+    const ps = controls.profileSettings
+    expect('blurAmount' in ps.desktop).toBe(false)
+    expect(notifyCount).toBe(2) // second notification for undo
+  })
+
+  it('redo write re-applies the new value', () => {
+    const controls = new SparkControls(undefined, 'desktop', { desktop: {}, mobile: {} }, desktopBaseline)
+
+    const originalPS = controls.profileSettings
+    const newPS: ProfileSettings = { desktop: { blurAmount: 0.9 }, mobile: {} }
+    const tx = buildProfileSettingsTransaction(controls, newPS, originalPS)
+
+    // Forward
+    simulateTransactionWrite(controls, tx.propertyPath, tx.value)
+    expect(controls.settings.blurAmount).toBe(0.9)
+
+    // Undo
+    simulateTransactionWrite(controls, tx.propertyPath, tx.historicValue)
+    expect(controls.settings.blurAmount).toBe(desktopBaseline.blurAmount)
+
+    // Redo
+    simulateTransactionWrite(controls, tx.propertyPath, tx.value)
+    expect(controls.settings.blurAmount).toBe(0.9)
+  })
+
+  it('write validates out-of-range persisted values', () => {
+    const controls = new SparkControls(undefined, 'desktop', { desktop: {}, mobile: {} }, desktopBaseline)
+
+    // Simulate a stale/hand-authored override with out-of-range value
+    const stalePS: ProfileSettings = { desktop: { lodSplatScale: 999, coneFov0: -50 }, mobile: {} }
+    simulateTransactionWrite(controls, 'profileSettings', stalePS)
+
+    // Values must be clamped through canonical validation
+    expect(controls.settings.lodSplatScale).toBe(10) // clamped to max
+    expect(controls.settings.coneFov0).toBe(0) // clamped to min
+  })
+
+  it('write preserves inactive profile across forward/undo/redo', () => {
+    const controls = new SparkControls(undefined, 'desktop', {
+      desktop: {},
+      mobile: { maxPagedSplats: 2 * 65536 },
+    }, desktopBaseline)
+
+    const originalPS = controls.profileSettings
+    const newPS: ProfileSettings = {
+      desktop: { blurAmount: 0.7 },
+      mobile: { maxPagedSplats: 2 * 65536 },
+    }
+    const tx = buildProfileSettingsTransaction(controls, newPS, originalPS)
+
+    // Forward
+    simulateTransactionWrite(controls, tx.propertyPath, tx.value)
+    expect(controls.profileSettings.mobile.maxPagedSplats).toBe(2 * 65536)
+
+    // Undo
+    simulateTransactionWrite(controls, tx.propertyPath, tx.historicValue)
+    expect(controls.profileSettings.mobile.maxPagedSplats).toBe(2 * 65536)
+
+    // Redo
+    simulateTransactionWrite(controls, tx.propertyPath, tx.value)
+    expect(controls.profileSettings.mobile.maxPagedSplats).toBe(2 * 65536)
+  })
+
+  it('write with coupled invariant: both fields in notification', () => {
+    const controls = new SparkControls(undefined, 'desktop', { desktop: {}, mobile: {} }, desktopBaseline)
+    let notified: Set<keyof SparkSettings> | null = null
+    controls.onChange((keys) => { notified = keys })
+
+    const originalPS = controls.profileSettings
+    const newPS: ProfileSettings = {
+      desktop: { coneFov0: 150, coneFov: 100 },
+      mobile: {},
+    }
+    const tx = buildProfileSettingsTransaction(controls, newPS, originalPS)
+    simulateTransactionWrite(controls, tx.propertyPath, tx.value)
+
+    expect(notified!.has('coneFov0')).toBe(true)
+    expect(notified!.has('coneFov')).toBe(true)
+    expect(controls.settings.coneFov).toBe(150) // invariant applied
   })
 })
