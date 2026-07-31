@@ -13,10 +13,16 @@
 
 import { PerspectiveCamera, Object3D } from 'three'
 import { ScrollAnimator } from '$lib/spark/ScrollAnimator'
-import { SparkControls } from '$lib/spark/SparkControls'
+import { SparkControls, DEFAULT_PROFILE_SETTINGS, type ProfileSettings } from '$lib/spark/SparkControls'
 import type { DeviceProfile, DeviceProfileName } from '$lib/types'
-import type { SparkSettings } from '$lib/spark/SparkControls'
-import { computeEffectiveSettings } from '$lib/spark/deviceProfile'
+import { getGlobalBaseline } from '$lib/spark/deviceProfile'
+
+/**
+ * Re-export ProfileSettings and DEFAULT_PROFILE_SETTINGS from SparkControls
+ * so scene files can import them from one place.
+ */
+export type { ProfileSettings }
+export { DEFAULT_PROFILE_SETTINGS }
 
 /**
  * Objects created for a scene. The scene file passes these to literal
@@ -39,34 +45,15 @@ export interface SceneObjects {
 }
 
 /**
- * Scene-local profile overrides as persisted in the `<T>` attribute.
- * Both `desktop` and `mobile` parent keys must be present, even if empty.
- * Child objects contain only fields that differ from the global baseline.
- * Uses own-property presence (not truthiness) to distinguish "no override"
- * from valid falsey values like `false`, `0`, or `null`.
- */
-export type ProfileSettings = {
-  desktop: Record<string, SparkSettings[keyof SparkSettings]>
-  mobile: Record<string, SparkSettings[keyof SparkSettings]>
-}
-
-/**
- * Default profile settings: empty overrides for both profiles.
- */
-export const DEFAULT_PROFILE_SETTINGS: ProfileSettings = {
-  desktop: {},
-  mobile: {},
-}
-
-/**
  * Create a standard set of scene objects for a scroll-based splat scene.
  *
- * Keyframes, settings, and frustum opt-in are authored exclusively in the
- * `<T>` attributes of the scene file. This function creates empty defaults.
+ * Keyframes and frustum opt-in are authored ONLY in `<T>` attributes.
+ * SparkControls is constructed with the detected profile name, scene
+ * overrides, and the device profile baseline.
  *
- * @param profile - Device profile for SparkControls seed values (legacy, used only for initial renderer construction).
- * @param profileName - Active device profile name for computing effective settings from overrides.
- * @param profileSettings - Scene-local profile overrides from the `<T>` attribute.
+ * @param profile - Device profile for initial renderer construction.
+ * @param profileName - Active device profile name (from App.svelte).
+ * @param profileSettings - Scene-local profile overrides (from scene literal).
  */
 export function createSceneObjects(
   profile: DeviceProfile,
@@ -84,10 +71,11 @@ export function createSceneObjects(
   const targetAnimator = new ScrollAnimator()
   targetAnimator.name = 'Camera Target ScrollAnimator'
 
-  // Compute effective settings: global baseline + scene overrides for active profile
-  const effectiveSettings = computeEffectiveSettings(profileName, profileSettings)
+  // Get the global baseline for the active profile
+  const baseline = getGlobalBaseline(profileName)
 
-  const sparkControls = new SparkControls(effectiveSettings)
+  // SparkControls with profile name, overrides, and baseline
+  const sparkControls = new SparkControls(undefined, profileName, profileSettings, baseline)
 
   const splatWrapper = new Object3D()
   splatWrapper.name = 'SplatWrapper'

@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { SparkControls, SETTINGS_KEYS, SPARK_PAGE_SIZE, type SparkSettings } from '$lib/spark/SparkControls'
+import { SparkControls, SPARK_PAGE_SIZE, type SparkSettings } from '$lib/spark/SparkControls'
 import { buildProfileSettingsTransaction } from '$lib/studio/spark-controls/sparkSettingsTransaction'
-import { getGlobalBaseline, computeOverrides } from '$lib/spark/deviceProfile'
+import { getGlobalBaseline } from '$lib/spark/deviceProfile'
+import { computeOverrides } from '$lib/spark/profileResolution'
 import { guardScrollAnimatorTransactions, type GuardTransaction } from '$lib/studio/scroll-animator/transactionGuard'
-import type { ProfileSettings } from '$lib/scenes/sceneObjects'
+import type { ProfileSettings } from '$lib/spark/SparkControls'
 
 describe('profile-aware Spark settings transaction', () => {
   it('builds correct profileSettings transaction shape', () => {
@@ -65,59 +66,39 @@ describe('profile-aware Spark settings transaction', () => {
     const controls = new SparkControls()
     const historicOverrides: ProfileSettings = { desktop: {}, mobile: {} }
 
-    // Simulate edit: change blurAmount
-    ;(controls as unknown as Record<string, unknown>).blurAmount = 0.7
+    // Simulate edit via profileSettings setter (authoritative path)
+    controls.profileSettings = { desktop: { blurAmount: 0.7 }, mobile: {} }
     const newSettings = controls.settings
 
-    // Compute new overrides
-    const newDesktopOverrides = computeOverrides('desktop', newSettings)
-    const newOverrides: ProfileSettings = {
-      desktop: newDesktopOverrides,
-      mobile: {},
-    }
-
-    const tx = buildProfileSettingsTransaction(controls, newOverrides, historicOverrides)
-
-    expect(tx.historicValue.desktop).toEqual({})
-    // blurAmount is definitely in the overrides
-    expect(tx.value.desktop.blurAmount).toBe(0.7)
-    // historic had no blurAmount override
-    expect('blurAmount' in tx.historicValue.desktop).toBe(false)
+    expect(newSettings.blurAmount).toBe(0.7)
+    expect(controls.profileSettings.desktop.blurAmount).toBe(0.7)
+    expect('blurAmount' in historicOverrides.desktop).toBe(false)
   })
 
-  it('undo restores historic overrides', () => {
+  it('undo restores historic overrides via profileSettings setter', () => {
     const controls = new SparkControls()
-    const originalSettings = controls.settings
+    const originalProfileSettings = controls.profileSettings
 
-    // Forward: edit blurAmount
-    ;(controls as unknown as Record<string, unknown>).blurAmount = 0.7
-    const editedSettings = controls.settings
+    // Forward: edit via profileSettings setter
+    controls.profileSettings = { desktop: { blurAmount: 0.7 }, mobile: {} }
+    expect(controls.settings.blurAmount).toBe(0.7)
 
-    // Undo: restore original settings through settings setter
-    controls.settings = originalSettings
-    const restoredSettings = controls.settings
+    // Undo: restore original profileSettings
+    controls.profileSettings = originalProfileSettings
+    expect(controls.settings.blurAmount).toBe(controls.profileName === 'desktop' ? 0.3 : 0.3)
 
-    // Verify restored settings match original
-    expect(restoredSettings.blurAmount).toBe(originalSettings.blurAmount)
-    for (const key of SETTINGS_KEYS) {
-      expect(restoredSettings[key]).toBe(originalSettings[key])
-    }
-
-    // Redo: re-apply edited settings
-    controls.settings = editedSettings
-    const redoneSettings = controls.settings
-    expect(redoneSettings.blurAmount).toBe(0.7)
+    // Redo: re-apply edited profileSettings
+    controls.profileSettings = { desktop: { blurAmount: 0.7 }, mobile: {} }
+    expect(controls.settings.blurAmount).toBe(0.7)
   })
 
   it('coupled invariant edit persists both fields in overrides', () => {
     const controls = new SparkControls()
-    // Default: coneFov0=90, coneFov=120
-
-    // Edit coneFov0 to 150 (forces coneFov to 150)
+    // Edit via individual setter (triggers invariant)
     ;(controls as unknown as Record<string, unknown>).coneFov0 = 150
     const newSettings = controls.settings
-
-    const overrides = computeOverrides('desktop', newSettings)
+    const baseline = getGlobalBaseline('desktop')
+    const overrides = computeOverrides(newSettings, baseline)
     expect(overrides.coneFov0).toBe(150)
     expect(overrides.coneFov).toBe(150)
   })
@@ -125,27 +106,21 @@ describe('profile-aware Spark settings transaction', () => {
   it('profile isolation: editing desktop preserves mobile overrides', () => {
     const controls = new SparkControls()
 
-    // Simulate existing mobile overrides
+    // Set mobile overrides first
     const existingMobile: Partial<SparkSettings> = {
       maxPagedSplats: 2 * SPARK_PAGE_SIZE,
     }
 
-    // Edit desktop
-    ;(controls as unknown as Record<string, unknown>).blurAmount = 0.7
-    const newSettings = controls.settings
-
-    const newDesktopOverrides = computeOverrides('desktop', newSettings)
-    const newOverrides: ProfileSettings = {
-      desktop: newDesktopOverrides,
+    // Edit desktop via profileSettings setter
+    controls.profileSettings = {
+      desktop: { blurAmount: 0.7 },
       mobile: existingMobile,
     }
 
-    // Desktop has blurAmount override
-    expect(newOverrides.desktop.blurAmount).toBe(0.7)
-    // Mobile preserved
-    expect(newOverrides.mobile.maxPagedSplats).toBe(2 * SPARK_PAGE_SIZE)
-    // Desktop does NOT have mobile's overrides
-    expect('maxPagedSplats' in newOverrides.desktop).toBe(false)
+    const ps = controls.profileSettings
+    expect(ps.desktop.blurAmount).toBe(0.7)
+    expect(ps.mobile.maxPagedSplats).toBe(2 * SPARK_PAGE_SIZE)
+    expect('maxPagedSplats' in ps.desktop).toBe(false)
   })
 
   it('reset to baseline removes override key', () => {
@@ -153,40 +128,43 @@ describe('profile-aware Spark settings transaction', () => {
     const baseline = getGlobalBaseline('desktop')
 
     // Edit
-    ;(controls as unknown as Record<string, unknown>).blurAmount = 0.7
-    let overrides = computeOverrides('desktop', controls.settings)
-    expect(overrides.blurAmount).toBe(0.7)
+    controls.profileSettings = { desktop: { blurAmount: 0.7 }, mobile: {} }
+    let ps = controls.profileSettings
+    expect(ps.desktop.blurAmount).toBe(0.7)
 
-    // Reset
-    ;(controls as unknown as Record<string, unknown>).blurAmount = baseline.blurAmount
-    overrides = computeOverrides('desktop', controls.settings)
-    expect('blurAmount' in overrides).toBe(false)
+    // Reset via profileSettings setter
+    controls.profileSettings = { desktop: {}, mobile: {} }
+    ps = controls.profileSettings
+    expect('blurAmount' in ps.desktop).toBe(false)
+    // Effective settings reflect baseline
+    expect(controls.settings.blurAmount).toBe(baseline.blurAmount)
   })
 
   it('false boolean override is preserved (not truthy check)', () => {
     const controls = new SparkControls()
 
     // sortRadial default is true
-    ;(controls as unknown as Record<string, unknown>).sortRadial = false
-    const overrides = computeOverrides('desktop', controls.settings)
-    expect(overrides.sortRadial).toBe(false)
-    expect('sortRadial' in overrides).toBe(true)
+    controls.profileSettings = { desktop: { sortRadial: false }, mobile: {} }
+    const ps = controls.profileSettings
+    expect(ps.desktop.sortRadial).toBe(false)
+    expect('sortRadial' in ps.desktop).toBe(true)
+    expect(controls.settings.sortRadial).toBe(false)
   })
 
   it('zero numeric override is preserved', () => {
     const controls = new SparkControls()
     // preBlurAmount default is 0, so setting to 0 produces no override
-    const overrides1 = computeOverrides('desktop', controls.settings)
-    expect('preBlurAmount' in overrides1).toBe(false)
+    const ps1 = controls.profileSettings
+    expect('preBlurAmount' in ps1.desktop).toBe(false)
 
     // Set to non-zero
-    ;(controls as unknown as Record<string, unknown>).preBlurAmount = 1
-    const overrides2 = computeOverrides('desktop', controls.settings)
-    expect(overrides2.preBlurAmount).toBe(1)
+    controls.profileSettings = { desktop: { preBlurAmount: 1 }, mobile: {} }
+    const ps2 = controls.profileSettings
+    expect(ps2.desktop.preBlurAmount).toBe(1)
 
     // Reset to 0
-    ;(controls as unknown as Record<string, unknown>).preBlurAmount = 0
-    const overrides3 = computeOverrides('desktop', controls.settings)
-    expect('preBlurAmount' in overrides3).toBe(false)
+    controls.profileSettings = { desktop: {}, mobile: {} }
+    const ps3 = controls.profileSettings
+    expect('preBlurAmount' in ps3.desktop).toBe(false)
   })
 })

@@ -3,13 +3,13 @@
   import { useStudio } from '@threlte/studio/extend'
   import { useTransactions } from '@threlte/studio/extensions'
   import type { SparkSettings, SparkControls } from '$lib/spark/SparkControls'
-  import { SPARK_PAGE_SIZE, SETTINGS_KEYS } from '$lib/spark/SparkControls'
+  import { SPARK_PAGE_SIZE } from '$lib/spark/SparkControls'
+  import type { ProfileSettings } from '$lib/spark/SparkControls'
   import { activeSparkControlsRuntime } from './activeSparkControlsRuntime'
   import { guardScrollAnimatorTransactions, type GuardTransaction } from '$lib/studio/scroll-animator/transactionGuard'
   import SparkFixedToolbarPane from './SparkFixedToolbarPane.svelte'
   import type { DeviceProfileName } from '$lib/types'
-  import type { ProfileSettings } from '$lib/scenes/sceneObjects'
-  import { getGlobalBaseline } from '$lib/spark/deviceProfile'
+  import { getGlobalBaseline, computeOverrides } from '$lib/spark/deviceProfile'
 
   interface FieldMeta {
     key: keyof SparkSettings
@@ -68,11 +68,6 @@
     reloading: false,
     reloadError: '' as string,
   })
-
-  // Scene-local profile overrides — managed via source sync on the <T> attribute.
-  // For file-backed scenes, this is the source of truth for persistence.
-  // For ad-hoc scenes, edits are transient (no source sync target).
-  let profileOverrides = $state<ProfileSettings>({ desktop: {}, mobile: {} })
 
   // Local draft values for editing
   let drafts = $state<Record<string, string>>({})
@@ -139,35 +134,6 @@
     }
   }
 
-  /**
-   * Compute the effective profile settings for the active profile from
-   * the current scene overrides. Used to initialize profileOverrides
-   * when the active controller changes (e.g. for ad-hoc scenes or when
-   * source sync hasn't set them yet).
-   */
-  function computeProfileOverridesFromSettings(): ProfileSettings {
-    const activeProfile = uiState.profileName
-    const baseline = getGlobalBaseline(activeProfile)
-    const currentSettings = uiState.controls?.settings ?? ({} as SparkSettings)
-
-    // Compute overrides for active profile
-    const activeOverrides: Record<string, SparkSettings[keyof SparkSettings]> = {}
-    for (const key of SETTINGS_KEYS) {
-      if (currentSettings[key] !== baseline[key]) {
-        activeOverrides[key] = currentSettings[key]
-      }
-    }
-
-    // Preserve existing overrides for the inactive profile
-    const inactiveProfile: DeviceProfileName = activeProfile === 'desktop' ? 'mobile' : 'desktop'
-    const inactiveOverrides = profileOverrides[inactiveProfile] ?? {}
-
-    return {
-      desktop: activeProfile === 'desktop' ? activeOverrides : inactiveOverrides as Partial<SparkSettings>,
-      mobile: activeProfile === 'mobile' ? activeOverrides : inactiveOverrides as Partial<SparkSettings>,
-    }
-  }
-
   // Subscribe to active controller changes from the runtime
   let unsubscribeActive: (() => void) | null = null
 
@@ -187,8 +153,6 @@
       subscribeToReloadStatus(current)
       subscribeToSettings(current)
       initDrafts(current.settings)
-      // Initialize profile overrides from current settings
-      profileOverrides = computeProfileOverridesFromSettings()
     } else {
       uiState.controls = null
       uiState.settings = {} as SparkSettings
@@ -205,8 +169,6 @@
         subscribeToReloadStatus(controls)
         subscribeToSettings(controls)
         initDrafts(controls.settings)
-        // Initialize profile overrides from current settings
-        profileOverrides = computeProfileOverridesFromSettings()
       } else {
         uiState.controls = null
         uiState.settings = {} as SparkSettings
@@ -225,31 +187,28 @@
 
   /**
    * Build the complete nested profileSettings object after a field edit.
-   * Captures historic snapshot BEFORE mutation (onChange fires synchronously),
-   * then computes the new overrides AFTER mutation.
+   * Reads the inactive profile from the controller's real profileSettings
+   * (not from a local extension variable) so persisted inactive overrides
+   * are never lost.
    */
   function buildNewProfileOverrides(
     controls: SparkControls,
     newSettings: SparkSettings,
   ): ProfileSettings {
     const activeProfile = uiState.profileName
+    const inactiveProfile: DeviceProfileName = activeProfile === 'desktop' ? 'mobile' : 'desktop'
     const baseline = getGlobalBaseline(activeProfile)
 
-    // Compute new overrides for active profile
-    const newActiveOverrides: Record<string, SparkSettings[keyof SparkSettings]> = {}
-    for (const key of SETTINGS_KEYS) {
-      if (newSettings[key] !== baseline[key]) {
-        newActiveOverrides[key] = newSettings[key]
-      }
-    }
+    // Compute new overrides for active profile from effective settings
+    const newActiveOverrides = computeOverrides(newSettings, baseline)
 
-    // Preserve existing overrides for the inactive profile
-    const inactiveProfile: DeviceProfileName = activeProfile === 'desktop' ? 'mobile' : 'desktop'
-    const inactiveOverrides = profileOverrides[inactiveProfile] ?? {}
+    // Read inactive profile from the controller's authoritative copy
+    const controllerOverrides = controls.profileSettings
+    const inactiveOverrides = controllerOverrides[inactiveProfile] ?? {}
 
     return {
-      desktop: activeProfile === 'desktop' ? newActiveOverrides : inactiveOverrides as Partial<SparkSettings>,
-      mobile: activeProfile === 'mobile' ? newActiveOverrides : inactiveOverrides as Partial<SparkSettings>,
+      desktop: activeProfile === 'desktop' ? newActiveOverrides : inactiveOverrides,
+      mobile: activeProfile === 'mobile' ? newActiveOverrides : inactiveOverrides,
     }
   }
 
@@ -274,7 +233,7 @@
 
     // Capture historic snapshot BEFORE mutation (onChange fires synchronously)
     const historicSettings = controls.settings
-    const historicProfileOverrides = JSON.parse(JSON.stringify(profileOverrides))
+    const historicProfileOverrides = controls.profileSettings
 
     // Validate through the setter (fires onChange → refreshes uiState.settings)
     ctrl[key] = raw
@@ -297,8 +256,6 @@
         sync: true,
       })
       transactions.commit([tx])
-      // Update local state
-      profileOverrides = newProfileOverrides
     }
     // uiState.settings already refreshed by the synchronous onChange callback
   }
@@ -312,7 +269,7 @@
 
     // Capture historic snapshot BEFORE mutation (onChange fires synchronously)
     const historicSettings = controls.settings
-    const historicProfileOverrides = JSON.parse(JSON.stringify(profileOverrides))
+    const historicProfileOverrides = controls.profileSettings
 
     // Validate through the setter (fires onChange → refreshes uiState.settings)
     ctrl[key] = checked
@@ -335,8 +292,6 @@
         sync: true,
       })
       transactions.commit([tx])
-      // Update local state
-      profileOverrides = newProfileOverrides
     }
     // uiState.settings already refreshed by the synchronous onChange callback
   }

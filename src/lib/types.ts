@@ -42,6 +42,8 @@ export interface SparkRendererOptions {
 
 /** Device profile for Spark / renderer settings */
 export interface DeviceProfile {
+  /** Named profile identifier — the single source of truth for profile detection. */
+  profileName: DeviceProfileName
   isMobile: boolean
   dpr: number
   sparkRenderer: SparkRendererOptions

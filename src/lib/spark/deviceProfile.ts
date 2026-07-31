@@ -1,7 +1,7 @@
-import type { DeviceProfile } from '$lib/types'
+import type { DeviceProfile, DeviceProfileName } from '$lib/types'
 import type { SparkSettings } from './SparkControls'
-import { SPARK_PAGE_SIZE, SETTINGS_KEYS, FIELD_DEFS } from './SparkControls'
-import type { DeviceProfileName } from '$lib/types'
+import { SPARK_PAGE_SIZE, FIELD_DEFS } from './SparkControls'
+import { computeEffectiveSettings as _computeEffectiveSettings, computeOverrides as _computeOverrides, type ProfileSettings } from './profileResolution'
 
 // ---------------------------------------------------------------------------
 // Complete 22-field global baselines per profile
@@ -101,17 +101,9 @@ export function getAllGlobalBaselines(): Record<DeviceProfileName, SparkSettings
  */
 export function computeEffectiveSettings(
   profileName: DeviceProfileName,
-  sceneOverrides: Record<DeviceProfileName, Partial<SparkSettings>>,
+  sceneOverrides: ProfileSettings,
 ): SparkSettings {
-  const baseline = GLOBAL_BASELINES[profileName]
-  const overrides = sceneOverrides[profileName] ?? {}
-  const effective = { ...baseline }
-  for (const key of SETTINGS_KEYS) {
-    if (key in overrides) {
-      effective[key] = overrides[key]!
-    }
-  }
-  return effective
+  return _computeEffectiveSettings(profileName, sceneOverrides, GLOBAL_BASELINES[profileName])
 }
 
 /**
@@ -121,17 +113,10 @@ export function computeEffectiveSettings(
  * or `null`.
  */
 export function computeOverrides(
-  profileName: DeviceProfileName,
   effectiveSettings: SparkSettings,
+  baseline: SparkSettings,
 ): Partial<SparkSettings> {
-  const baseline = GLOBAL_BASELINES[profileName]
-  const overrides: Record<string, unknown> = {}
-  for (const key of SETTINGS_KEYS) {
-    if (effectiveSettings[key] !== baseline[key]) {
-      overrides[key] = effectiveSettings[key]
-    }
-  }
-  return overrides as Partial<SparkSettings>
+  return _computeOverrides(effectiveSettings, baseline)
 }
 
 // ---------------------------------------------------------------------------
@@ -147,6 +132,7 @@ export function getDeviceProfile(): DeviceProfile {
 
   if (mobile) {
     return {
+      profileName: 'mobile',
       isMobile: true,
       dpr: 1,
       sparkRenderer: {
@@ -163,6 +149,7 @@ export function getDeviceProfile(): DeviceProfile {
   }
 
   return {
+    profileName: 'desktop',
     isMobile: false,
     dpr: Math.min(window.devicePixelRatio, 2),
     sparkRenderer: {

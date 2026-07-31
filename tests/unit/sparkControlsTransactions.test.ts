@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { SparkControls, type SparkSettings } from '$lib/spark/SparkControls'
-import { buildSparkSettingsTransaction } from '$lib/studio/spark-controls/sparkSettingsTransaction'
+import { SparkControls } from '$lib/spark/SparkControls'
+import { buildProfileSettingsTransaction } from '$lib/studio/spark-controls/sparkSettingsTransaction'
+import type { ProfileSettings } from '$lib/spark/SparkControls'
 
 /**
  * Minimal mock of the public useTransactions() contract from @threlte/studio/extensions.
@@ -9,8 +10,8 @@ import { buildSparkSettingsTransaction } from '$lib/studio/spark-controls/sparkS
 interface MockTransaction {
   object: object
   propertyPath: string
-  value: SparkSettings
-  historicValue: SparkSettings
+  value: ProfileSettings
+  historicValue: ProfileSettings
   createHistoryRecord: boolean
   sync: boolean | undefined
 }
@@ -34,9 +35,9 @@ function createMockTransactions(): MockTransactionsAPI {
       return tx
     },
     commit(txs) {
-      // Simulate: transaction guard strips sync for non-settings attributes
+      // Simulate: transaction guard strips sync for non-profileSettings attributes
       for (const tx of txs) {
-        if (tx.propertyPath !== 'settings') {
+        if (tx.propertyPath !== 'profileSettings') {
           tx.sync = undefined
         }
       }
@@ -45,118 +46,115 @@ function createMockTransactions(): MockTransactionsAPI {
   }
 }
 
-describe('buildSparkSettingsTransaction (production helper)', () => {
+describe('buildProfileSettingsTransaction (production helper)', () => {
   it('returns correct transaction shape', () => {
     const controls = new SparkControls()
-    const original = controls.settings
+    const historic: ProfileSettings = controls.profileSettings
 
-    // Make a change
-    ;(controls as unknown as Record<string, unknown>).blurAmount = 0.7
-    const newSettings = controls.settings
+    // Make a change via profileSettings setter
+    controls.profileSettings = { desktop: { blurAmount: 0.7 }, mobile: {} }
+    const newProfileSettings = controls.profileSettings
 
-    const tx = buildSparkSettingsTransaction(controls, newSettings, original)
+    const tx = buildProfileSettingsTransaction(controls, newProfileSettings, historic)
 
     expect(tx.object).toBe(controls)
-    expect(tx.propertyPath).toBe('settings')
-    expect(tx.value).toBe(newSettings)
-    expect(tx.historicValue).toBe(original)
+    expect(tx.propertyPath).toBe('profileSettings')
+    expect(tx.value).toBe(newProfileSettings)
+    expect(tx.historicValue).toBe(historic)
     expect(tx.createHistoryRecord).toBe(true)
     expect(tx.sync).toBe(true)
-    expect(tx.value.blurAmount).toBe(0.7)
+    expect(tx.value.desktop.blurAmount).toBe(0.7)
   })
 
   it('transaction passes through guard with sync preserved', () => {
     const controls = new SparkControls()
     const transactions = createMockTransactions()
-    const oldSettings = controls.settings
+    const historic = controls.profileSettings
 
-    // Make a change
-    ;(controls as unknown as Record<string, unknown>).blurAmount = 0.7
-    const newSettings = controls.settings
+    // Make a change via profileSettings setter
+    controls.profileSettings = { desktop: { blurAmount: 0.7 }, mobile: {} }
+    const newProfileSettings = controls.profileSettings
 
     const tx = transactions.buildTransaction(
-      buildSparkSettingsTransaction(controls, newSettings, oldSettings),
+      buildProfileSettingsTransaction(controls, newProfileSettings, historic),
     )
     transactions.commit([tx])
 
     expect(tx.object).toBe(controls)
-    expect(tx.propertyPath).toBe('settings')
-    expect(tx.sync).toBe(true) // settings root passes through guard
-    expect(tx.value.blurAmount).toBe(0.7)
+    expect(tx.propertyPath).toBe('profileSettings')
+    expect(tx.sync).toBe(true) // profileSettings root passes through guard
+    expect(tx.value.desktop.blurAmount).toBe(0.7)
   })
 
   it('transaction helper is used by extension for field edits', () => {
     const controls = new SparkControls()
     const transactions = createMockTransactions()
 
-    const original = controls.settings
-    ;(controls as unknown as Record<string, unknown>).lodSplatScale = 3
-    const newSettings = controls.settings
+    const original = controls.profileSettings
+    controls.profileSettings = { desktop: { lodSplatScale: 3 }, mobile: {} }
+    const newProfileSettings = controls.profileSettings
 
     // This is exactly what the extension does
     const tx = transactions.buildTransaction(
-      buildSparkSettingsTransaction(controls, newSettings, original),
+      buildProfileSettingsTransaction(controls, newProfileSettings, original),
     )
     transactions.commit([tx])
 
-    expect(tx.propertyPath).toBe('settings')
-    expect(tx.value.lodSplatScale).toBe(3)
-    expect(tx.historicValue.lodSplatScale).toBe(1)
+    expect(tx.propertyPath).toBe('profileSettings')
+    expect(tx.value.desktop.lodSplatScale).toBe(3)
+    expect(tx.historicValue.desktop['lodSplatScale']).toBeUndefined()
   })
 })
 
 describe('SparkControls transaction semantics', () => {
-  it('undo applies historic full settings snapshot via writable setter', () => {
+  it('undo applies historic full profileSettings via writable setter', () => {
     const controls = new SparkControls()
-    const original = { ...controls.settings }
+    const original = controls.profileSettings
 
-    // Make a change
-    ;(controls as unknown as Record<string, unknown>).blurAmount = 0.9
-    const afterChange = controls.settings
+    // Make a change via profileSettings setter
+    controls.profileSettings = { desktop: { blurAmount: 0.9 }, mobile: {} }
 
-    // Undo: apply historic settings through the writable setter
-    controls.settings = original
+    // Undo: apply historic profileSettings through the writable setter
+    controls.profileSettings = original
 
     // All fields should be restored to original
-    const restored = controls.settings
-    expect(restored.blurAmount).toBe(original.blurAmount)
-    expect(restored.blurAmount).not.toBe(afterChange.blurAmount)
-    // Other fields unchanged
-    expect(restored.lodSplatScale).toBe(original.lodSplatScale)
-    expect(restored.maxPagedSplats).toBe(original.maxPagedSplats)
+    const restored = controls.profileSettings
+    expect(restored.desktop['blurAmount']).toBeUndefined()
+    // blurAmount should be back to baseline
+    expect(controls.settings.blurAmount).toBe(0.3)
   })
 
-  it('redo re-applies the new settings snapshot', () => {
+  it('redo re-applies the new profileSettings snapshot', () => {
     const controls = new SparkControls()
-    const original = { ...controls.settings }
+    const original = controls.profileSettings
 
     // Forward change
-    ;(controls as unknown as Record<string, unknown>).blurAmount = 0.9
-    const afterChange = controls.settings
+    controls.profileSettings = { desktop: { blurAmount: 0.9 }, mobile: {} }
+    const afterChange = controls.profileSettings
 
     // Undo
-    controls.settings = original
-    expect(controls.settings.blurAmount).toBe(original.blurAmount)
+    controls.profileSettings = original
+    expect(controls.settings.blurAmount).toBe(0.3)
 
     // Redo
-    controls.settings = afterChange
+    controls.profileSettings = afterChange
     expect(controls.settings.blurAmount).toBe(0.9)
   })
 
-  it('non-settings transaction has sync stripped by guard', () => {
+  it('non-profileSettings transaction has sync stripped by guard', () => {
     const transactions = createMockTransactions()
 
     const tx = transactions.buildTransaction({
       object: {} as object,
       propertyPath: 'position',
-      value: {} as SparkSettings,
-      historicValue: {} as SparkSettings,
+      value: {} as ProfileSettings,
+      historicValue: {} as ProfileSettings,
       createHistoryRecord: true,
       sync: true,
     })
     transactions.commit([tx])
 
-    expect(tx.sync).toBeUndefined() // guard strips sync for non-settings
+    expect(tx.sync).toBeUndefined() // guard strips sync for non-profileSettings
   })
 
   it('individual field edit through setter validates and notifies', () => {

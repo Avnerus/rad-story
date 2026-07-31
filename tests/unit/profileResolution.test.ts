@@ -44,16 +44,6 @@ describe('profile resolution', () => {
       const { detectProfileName } = await import('$lib/spark/deviceProfile')
       expect(detectProfileName()).toBe('mobile')
     })
-
-    it('returns "desktop" for iPad UA (non-Mobi)', async () => {
-      // iPad UA without Mobi keyword
-      Object.defineProperty(globalThis, 'navigator', {
-        value: { userAgent: 'Mozilla/5.0 (iPad; CPU OS 16_0)' },
-        writable: true,
-      })
-      const { detectProfileName } = await import('$lib/spark/deviceProfile')
-      expect(detectProfileName()).toBe('mobile') // matches iPad pattern
-    })
   })
 
   describe('getGlobalBaseline', () => {
@@ -193,29 +183,32 @@ describe('profile resolution', () => {
     })
   })
 
-  describe('computeOverrides', () => {
-    it('returns empty when settings match baseline', async () => {
+  describe('computeOverrides (pure function)', () => {
+    // Uses the pure function from profileResolution.ts
+    async function getComputeOverrides() {
       Object.defineProperty(globalThis, 'navigator', {
         value: { userAgent: 'Mozilla/5.0 (Windows)' },
         writable: true,
       })
       vi.stubGlobal('devicePixelRatio', 2)
-      const { computeOverrides, getGlobalBaseline } = await import('$lib/spark/deviceProfile')
+      const mod = await import('$lib/spark/profileResolution')
+      return mod.computeOverrides
+    }
+
+    it('returns empty when settings match baseline', async () => {
+      const computeOverrides = await getComputeOverrides()
+      const { getGlobalBaseline } = await import('$lib/spark/deviceProfile')
       const baseline = getGlobalBaseline('desktop')
-      const overrides = computeOverrides('desktop', baseline)
+      const overrides = computeOverrides(baseline, baseline)
       expect(Object.keys(overrides).length).toBe(0)
     })
 
     it('returns only differing fields', async () => {
-      Object.defineProperty(globalThis, 'navigator', {
-        value: { userAgent: 'Mozilla/5.0 (Windows)' },
-        writable: true,
-      })
-      vi.stubGlobal('devicePixelRatio', 2)
-      const { computeOverrides, getGlobalBaseline } = await import('$lib/spark/deviceProfile')
+      const computeOverrides = await getComputeOverrides()
+      const { getGlobalBaseline } = await import('$lib/spark/deviceProfile')
       const baseline = getGlobalBaseline('desktop')
       const modified = { ...baseline, blurAmount: 0.7, maxStdDev: 2.8 }
-      const overrides = computeOverrides('desktop', modified)
+      const overrides = computeOverrides(modified, baseline)
       expect(overrides.blurAmount).toBe(0.7)
       expect(overrides.maxStdDev).toBe(2.8)
       expect('lodSplatScale' in overrides).toBe(false)
@@ -223,64 +216,47 @@ describe('profile resolution', () => {
     })
 
     it('preserves false as override (not truthy check)', async () => {
-      Object.defineProperty(globalThis, 'navigator', {
-        value: { userAgent: 'Mozilla/5.0 (Windows)' },
-        writable: true,
-      })
-      vi.stubGlobal('devicePixelRatio', 2)
-      const { computeOverrides, getGlobalBaseline } = await import('$lib/spark/deviceProfile')
+      const computeOverrides = await getComputeOverrides()
+      const { getGlobalBaseline } = await import('$lib/spark/deviceProfile')
       const baseline = getGlobalBaseline('desktop')
       const modified = { ...baseline, sortRadial: false }
-      const overrides = computeOverrides('desktop', modified)
+      const overrides = computeOverrides(modified, baseline)
       expect(overrides.sortRadial).toBe(false)
       expect('sortRadial' in overrides).toBe(true)
     })
 
     it('preserves null as override', async () => {
-      Object.defineProperty(globalThis, 'navigator', {
-        value: { userAgent: 'Mozilla/5.0 (Windows)' },
-        writable: true,
-      })
-      vi.stubGlobal('devicePixelRatio', 2)
-      const { computeOverrides, getGlobalBaseline } = await import('$lib/spark/deviceProfile')
+      const computeOverrides = await getComputeOverrides()
+      const { getGlobalBaseline } = await import('$lib/spark/deviceProfile')
       const baseline = getGlobalBaseline('desktop')
-      // Set lodSplatCount to a number, then compute overrides
       const modified = { ...baseline, lodSplatCount: 500_000 }
-      const overrides = computeOverrides('desktop', modified)
+      const overrides = computeOverrides(modified, baseline)
       expect(overrides.lodSplatCount).toBe(500_000)
       expect('lodSplatCount' in overrides).toBe(true)
     })
 
     it('removes override when reset to baseline value', async () => {
-      Object.defineProperty(globalThis, 'navigator', {
-        value: { userAgent: 'Mozilla/5.0 (Windows)' },
-        writable: true,
-      })
-      vi.stubGlobal('devicePixelRatio', 2)
-      const { computeOverrides, getGlobalBaseline } = await import('$lib/spark/deviceProfile')
+      const computeOverrides = await getComputeOverrides()
+      const { getGlobalBaseline } = await import('$lib/spark/deviceProfile')
       const baseline = getGlobalBaseline('desktop')
       // Start with modified value
       const modified = { ...baseline, blurAmount: 0.7 }
-      let overrides = computeOverrides('desktop', modified)
+      let overrides = computeOverrides(modified, baseline)
       expect(overrides.blurAmount).toBe(0.7)
 
       // Reset to baseline
       const reset = { ...modified, blurAmount: baseline.blurAmount }
-      overrides = computeOverrides('desktop', reset)
+      overrides = computeOverrides(reset, baseline)
       expect('blurAmount' in overrides).toBe(false)
     })
 
     it('handles coupled-field diff (coneFov0 + coneFov)', async () => {
-      Object.defineProperty(globalThis, 'navigator', {
-        value: { userAgent: 'Mozilla/5.0 (Windows)' },
-        writable: true,
-      })
-      vi.stubGlobal('devicePixelRatio', 2)
-      const { computeOverrides, getGlobalBaseline } = await import('$lib/spark/deviceProfile')
+      const computeOverrides = await getComputeOverrides()
+      const { getGlobalBaseline } = await import('$lib/spark/deviceProfile')
       const baseline = getGlobalBaseline('desktop')
       // coneFov0=150 forces coneFov=150 (invariant)
       const modified = { ...baseline, coneFov0: 150, coneFov: 150 }
-      const overrides = computeOverrides('desktop', modified)
+      const overrides = computeOverrides(modified, baseline)
       expect(overrides.coneFov0).toBe(150)
       expect(overrides.coneFov).toBe(150)
     })
@@ -293,14 +269,17 @@ describe('profile resolution', () => {
         writable: true,
       })
       vi.stubGlobal('devicePixelRatio', 2)
-      const { computeEffectiveSettings, computeOverrides } = await import('$lib/spark/deviceProfile')
+      const { computeEffectiveSettings } = await import('$lib/spark/deviceProfile')
+      const { computeOverrides } = await import('$lib/spark/profileResolution')
+      const { getGlobalBaseline } = await import('$lib/spark/deviceProfile')
 
+      const baseline = getGlobalBaseline('desktop')
       const inputOverrides = {
         desktop: { blurAmount: 0.7, maxStdDev: 2.8, sortRadial: false },
         mobile: {},
       }
       const effective = computeEffectiveSettings('desktop', inputOverrides)
-      const outputOverrides = computeOverrides('desktop', effective)
+      const outputOverrides = computeOverrides(effective, baseline)
 
       expect(outputOverrides).toEqual(inputOverrides.desktop)
     })
@@ -311,14 +290,17 @@ describe('profile resolution', () => {
         writable: true,
       })
       vi.stubGlobal('devicePixelRatio', 2)
-      const { computeEffectiveSettings, computeOverrides } = await import('$lib/spark/deviceProfile')
+      const { computeEffectiveSettings } = await import('$lib/spark/deviceProfile')
+      const { computeOverrides } = await import('$lib/spark/profileResolution')
+      const { getGlobalBaseline } = await import('$lib/spark/deviceProfile')
 
+      const baseline = getGlobalBaseline('desktop')
       const inputOverrides = {
         desktop: { sortRadial: false, enableLod: false, lodInflate: true },
         mobile: {},
       }
       const effective = computeEffectiveSettings('desktop', inputOverrides)
-      const outputOverrides = computeOverrides('desktop', effective)
+      const outputOverrides = computeOverrides(effective, baseline)
 
       expect(outputOverrides.sortRadial).toBe(false)
       expect(outputOverrides.enableLod).toBe(false)

@@ -11,15 +11,15 @@ Supports three viewing modes:
 
 **Key files:**
 - `src/App.svelte` — Root component. Landing screen ↔ viewer/scene/not-found state machine. Pathname router for `/scene/{sceneName}` and `/scene/{sceneName}/edit`. `<Canvas>` wrapping either `RadStoryScene` (ad-hoc, inside `<Studio>`), a dynamic scene component in playback (`/scene/{name}`, no `<Studio>`), or a dynamic scene component in edit mode (`/scene/{name}/edit`, inside `<Studio>`).
-- `src/lib/components/SceneRuntime.svelte` — Reusable scene runtime: ScrollTrigger creation/attachment, scene-wide `ScrollAnimator` playback via `scene.traverse`, per-frame camera look-at (always on app camera, never editor camera), debug state, Spark bridge, reload lifecycle, SparkControls disposal, and **active SparkControls registration** (calls `activeSparkControlsRuntime.attach(sparkControls)` on mount, identity-safe detach on destroy). Editor-agnostic — does not mount `CameraFrustumHelper` (moved to `ScrollAnimatorExtension`). Receives scene-specific `<T>` declarations via a `children` snippet. Typed props: `appCamera: PerspectiveCamera`, `cameraTarget: Object3D`, `splatWrapper: Object3D`.
+- `src/lib/components/SceneRuntime.svelte` — Reusable scene runtime: ScrollTrigger creation/attachment, scene-wide `ScrollAnimator` playback via `scene.traverse`, per-frame camera look-at (always on app camera, never editor camera), debug state, Spark bridge, reload lifecycle, SparkControls disposal, and **active SparkControls registration** (calls `activeSparkControlsRuntime.attach(sparkControls, sparkControls.profileName)` on mount, identity-safe detach on destroy). Editor-agnostic — does not mount `CameraFrustumHelper` (moved to `ScrollAnimatorExtension`). Receives scene-specific `<T>` declarations via a `children` snippet. Typed props: `appCamera: PerspectiveCamera`, `cameraTarget: Object3D`, `splatWrapper: Object3D`.
 - `src/lib/components/RadStoryScene.svelte` — Ad-hoc URL scene. Uses `createSceneObjects()` helper + `SceneRuntime`. Literal `<T>` nodes for camera/target animators, SparkControls, and SplatWrapper.
 - `src/lib/components/SparkSplats.svelte` — SplatMesh lifecycle inside a scene-provided `wrapper` Object3D. The wrapper is created by the scene file and declared via a literal `<T>` for Studio source sync. SparkSplats manages the internal `SplatMesh` child and reload coordination. Exports `reload(url)` for `SparkStudioBridge` to call. Uses `SparkReloadCoordinator` for race-safe reload coordination.
 - `src/lib/components/SparkStudioBridge.svelte` — Manages dual SparkRenderer lifecycle via `createSparkStudioRenderer`. Subscribes to `SparkControls` settings changes and propagates them to both renderers. On `maxPagedSplats` changes, calls `reconfigureMaxPagedSplats()` and triggers SplatMesh reload via `onMeshReload` callback.
 - `src/lib/router.ts` — Lightweight pathname router for `/scene/{sceneName}` (playback) and `/scene/{sceneName}/edit` (editing). `parseRoute()` returns `SceneRouteMatch` with `mode: 'view' | 'edit'`. Uses `navigateToScene()` (defaults to view) and `navigateToSceneEdit()` with `history.pushState` + `popstate`.
 - `src/lib/scenes/registry.ts` — Static scene discovery via `import.meta.glob('./[a-z0-9_]*.svelte', { eager: true })`. Validates names against `/^[a-z0-9_]+$/`. Maps normalized names to Svelte component default exports.
-- `src/lib/scenes/sceneObjects.ts` — `createSceneObjects(profile, profileName, profileSettings)` factory: creates `PerspectiveCamera`, `CameraTarget`, `ScrollAnimator` (camera + target), `SparkControls` (seeded from effective settings = global baseline + scene overrides), and `SplatWrapper`. Exports `ProfileSettings` type and `DEFAULT_PROFILE_SETTINGS`. Keyframes/settings are authored ONLY in `<T>` attributes (single source of truth).
+- `src/lib/scenes/sceneObjects.ts` — `createSceneObjects(profile, profileName, profileSettings)` factory: creates `PerspectiveCamera`, `CameraTarget`, `ScrollAnimator` (camera + target), `SparkControls` (seeded from global baseline + scene overrides via constructor), and `SplatWrapper`. Re-exports `ProfileSettings` type and `DEFAULT_PROFILE_SETTINGS` from `SparkControls.ts`. Keyframes/settings are authored ONLY in `<T>` attributes (single source of truth).
 - `src/lib/scenes/baby_yoda.svelte` — Example scene: `/scene/baby_yoda`, RAD URL `https://avner.us/baby_yoda-lod.rad`, frustum helper enabled.
-- `src/lib/spark/SparkControls.ts` — Three.js `Object3D` subclass holding all editable Spark 2.1 quality/LOD/foveation settings. Appears as "Spark" in Studio outline. Has a writable `settings` getter/setter for Threlte `<T>` source sync, plus individual top-level property getters/setters for each field. All values validated against field-specific bounds; constructor input and single-field edits both pass through the same validation path.
+- `src/lib/spark/SparkControls.ts` — Three.js `Object3D` subclass holding all editable Spark 2.1 quality/LOD/foveation settings. Appears as "Spark" in Studio outline. Has a writable `profileSettings` getter/setter (authoritative for source sync and undo/redo) that normalizes both profile parents, merges active profile overrides with stored baseline, updates flat effective `settings`, and emits change signal. Also has writable `settings` getter/setter and individual top-level property getters/setters for each field. `profileName` getter returns the active profile. All values validated against field-specific bounds; constructor input and single-field edits both pass through the same validation path. Exports `ProfileSettings` type, `DEFAULT_PROFILE_SETTINGS`, and `normalizeProfileSettings()`.
 - `src/lib/spark/ScrollAnimator.ts` — Three.js `Object3D` subclass with `keyframes` property, `showChildCameraFrustumWhenSelected` boolean, and `applyScrollPercentage()`.
 - `src/lib/spark/scrollAnimation.ts` — Pure keyframe model, canonicalization (with dedup), upsert/delete, bracketing, and interpolation (position lerp + quaternion slerp).
 - `src/lib/studio/scroll-animator/ScrollAnimatorExtension.svelte` — Studio extension: fixed toolbar pane with percentage display/input, keyframe list, jump, delete, and insert/save actions. Also owns `<CameraFrustumHelper />` so the helper only mounts inside Studio context. Uses public `@threlte/studio/extensions` imports. Toolbar icon: `mdiAnimationOutline`.
@@ -27,15 +27,16 @@ Supports three viewing modes:
 - `src/lib/studio/scroll-animator/descendantCameraResolver.ts` — Pure function `findAllDescendantCameras(obj: Object3D): PerspectiveCamera[]` that resolves all descendant `PerspectiveCamera` objects. Imported by CameraFrustumHelper and tested independently.
 - `src/lib/studio/scroll-animator/FixedToolbarPane.svelte` — Local replacement for Studio's `DropDownPane`. Uses public `ToolbarButton` + `ToolbarItem` from `@threlte/studio/extend`, `@floating-ui/dom` (direct dependency) for `computePosition` with `strategy: 'fixed'`, and a simple portal to `document.body`. See "Studio Extension Pane" section below.
 - `src/lib/studio/scroll-animator/scrollAnimatorRuntime.ts` — Shared runtime bridge: reactive percentage from ScrollTrigger, `jumpToPercentage` via trigger's measured range, attach/detach lifecycle.
-- `src/lib/studio/scroll-animator/transactionGuard.ts` — Suppresses source sync for ScrollAnimator transforms (only `keyframes` and `showChildCameraFrustumWhenSelected` persist) and SparkControls transforms (only `settings` root and individual field names persist). Uses narrow structural types (no private imports).
+- `src/lib/studio/scroll-animator/transactionGuard.ts` — Suppresses source sync for ScrollAnimator transforms (only `keyframes` and `showChildCameraFrustumWhenSelected` persist) and SparkControls transforms (only `profileSettings` root persists). Uses narrow structural types (no private imports).
 - `src/lib/studio/spark-controls/SparkControlsExtension.svelte` — Studio extension: fixed toolbar pane with individual numeric/boolean/nullable inputs for all 22 Spark settings. Displays active profile badge (`Desktop` or `Mobile`). Reacts to `activeSparkControlsRuntime.activeController` (not hierarchy selection) so the pane auto-binds to the active scene's SparkControls. Subscribes to `activeController.onChange()` for settings-change notifications (undo/redo, Inspector, programmatic setters) and `activeController.reloadStatus` for progress/error indicators. On settings change, refreshes the full `uiState.settings` snapshot and all drafts (coupled invariants included). Stale-controller guard: ignores notifications from a superseded controller. Commits edits via `transactions.buildTransaction()` with `propertyPath: 'profileSettings'` (nested `desktop`/`mobile` override map). Uses `buildProfileSettingsTransaction()` helper from `sparkSettingsTransaction.ts`. Uses `mdiTune` icon.
-- `src/lib/studio/spark-controls/sparkSettingsTransaction.ts` — Production helper for building Spark settings transactions. `buildSparkSettingsTransaction()` (legacy `settings` attribute) and `buildProfileSettingsTransaction()` (profile-aware `profileSettings` attribute). Used by the extension and tested independently.
+- `src/lib/studio/spark-controls/sparkSettingsTransaction.ts` — Production helper for building Spark settings transactions. `buildProfileSettingsTransaction()` for profile-aware `profileSettings` attribute. Used by the extension and tested independently.
 - `src/lib/studio/spark-controls/SparkFixedToolbarPane.svelte` — Fixed toolbar pane for Spark controls (separate from ScrollAnimator's pane).
 - `src/lib/studio/spark-controls/activeSparkControlsRuntime.ts` — `ActiveSparkControlsRuntime` class and `activeSparkControlsRuntime` singleton. Reactive registry for the active scene's `SparkControls` instance and device profile name. `attach(controls, profileName)` returns an identity-safe `detach()` function. `profileName` getter returns active profile. `onChange(fn)` subscribes to active controller changes. Used by `SceneRuntime` (attach on mount, detach on destroy) and `SparkControlsExtension` (react to active controller instead of hierarchy selection). See "Active Spark Controls Runtime" section below.
 - `src/lib/spark/SparkReloadRuntime.ts` — `SparkReloadCoordinator` class (per-instance, not singleton) for race-safe SplatMesh reload coordination. Uses monotonically increasing generation IDs: latest request wins, superseded requests disposed, component destruction aborts in-flight operations. No arbitrary timing delays. `onReloadComplete` callback may return `void | Promise<void>`; the coordinator awaits it, keeping `requestReload()` and `isReloading` pending through full activation. Callback rejection is caught for the current generation and reported via `status.fail()`. Only the current generation publishes a terminal result. `SparkReloadStatus` (subscribe/unsubscribe) for pane progress/error UI.
 - `src/lib/studio/editor-camera/editorCameraControlsBridge.ts` — Future-facing, typed bridge for Studio editor CameraControls tuning. Currently unattached (no supported public path to the CameraControls instance). Documented in code.
 - `src/lib/spark/createSparkStudioRenderer.ts` — Factory for dual SparkRenderer setup. `applyChangedSettings()` applies only changed fields with field-level dirty classification (shader/sort/LOD/foveation). `reconfigureMaxPagedSplats()` recreates both renderers with the complete current settings snapshot so ordinary edits survive capacity changes.
-- `src/lib/spark/deviceProfile.ts` — Named device profiles (`desktop` | `mobile`), detection (`detectProfileName()`), complete 22-field global baselines (`getGlobalBaseline()`), effective settings merge (`computeEffectiveSettings()`), minimal diff generation (`computeOverrides()`), and legacy `getDeviceProfile()` for renderer construction. Cone angles are full-width **degrees** (Spark 2.1 API: default `coneFov0: 90`, `coneFov: 120`).
+- `src/lib/spark/deviceProfile.ts` — Named device profiles (`desktop` | `mobile`), detection (`detectProfileName()`), complete 22-field global baselines (`getGlobalBaseline()`), effective settings merge (`computeEffectiveSettings()`), minimal diff generation (`computeOverrides()`), and legacy `getDeviceProfile()` for renderer construction (now includes `profileName` field). Cone angles are full-width **degrees** (Spark 2.1 API: default `coneFov0: 90`, `coneFov: 120`).
+- `src/lib/spark/profileResolution.ts` — Pure computation functions (`computeEffectiveSettings`, `computeOverrides`) and `ProfileSettings` type. No dependencies on `SparkControls` class — avoids circular imports. Used by `deviceProfile.ts` and `SparkControls.ts`.
 - `src/lib/spark/radUrl.ts` — RAD URL validation with typed results.
 - `src/lib/types.ts` — Shared TypeScript types.
 - `src/lib/types/stats.d.ts` — TypeScript declarations for `stats.js` (no bundled types).
@@ -99,26 +100,27 @@ Route namespace: `/scene/{sceneName}` (playback) and `/scene/{sceneName}/edit` (
 **Editor-only helper ownership**: `CameraFrustumHelper` is mounted inside `ScrollAnimatorExtension.svelte` (not `SceneRuntime.svelte`). This ensures it only exists when Studio is active (edit mode). Playback mode never creates the helper or its diagnostic.
 
 **Scene contract**: Each scene file is a Svelte component that:
-1. Imports `createSceneObjects()` and `DEFAULT_PROFILE_SETTINGS` from `./sceneObjects`, plus `detectProfileName()` from `deviceProfile`
-2. Declares `profileSettings: ProfileSettings = $state({ ...DEFAULT_PROFILE_SETTINGS })` as a reactive variable
-3. Calls `createSceneObjects(profile, detectProfileName(), profileSettings)` to create all scene objects with effective settings
-4. Renders `<SceneRuntime>` with typed props including `profileSettings` and `onProfileSettingsChange`
-5. Declares literal `<T>` nodes inside `SceneRuntime` for Studio source sync (keyframes, showChildCameraFrustumWhenSelected, profileSettings, SplatWrapper transform)
-6. All debug/loading/lifecycle plumbing is in `SceneRuntime` — scene files contain only minimal imports, object construction, RAD URL, and literal `<T>` declarations
+1. Imports `createSceneObjects()` from `./sceneObjects`
+2. Calls `createSceneObjects(profile, profile.profileName)` to create all scene objects (SparkControls seeded from global baseline)
+3. Renders `<SceneRuntime>` with typed props: `url`, `profile`, `onReady`, `sparkControls`, `splatWrapper`, `appCamera`, `cameraTarget`
+4. Declares literal `<T>` nodes inside `SceneRuntime` for Studio source sync (keyframes, showChildCameraFrustumWhenSelected, profileSettings, SplatWrapper transform)
+5. All debug/loading/lifecycle plumbing is in `SceneRuntime` — scene files contain only minimal imports, object construction, RAD URL, and literal `<T>` declarations
 
-**Scene authoring** (`src/lib/scenes/sceneObjects.ts`): `createSceneObjects(profile, profileName, profileSettings)` creates all standard scene objects. SparkControls is seeded from `computeEffectiveSettings(profileName, profileSettings)` (global baseline + scene overrides). Keyframes and frustum opt-in are authored ONLY in `<T>` attributes — never duplicated in constructor assignments. The `splatWrapper` Object3D is created here and declared via `<T is={splatWrapper}>` in the scene file for Studio source sync.
+**Scene authoring** (`src/lib/scenes/sceneObjects.ts`): `createSceneObjects(profile, profileName, profileSettings)` creates all standard scene objects. SparkControls receives the global baseline from `getGlobalBaseline(profileName)` and the scene overrides. Keyframes and frustum opt-in are authored ONLY in `<T>` attributes — never duplicated in constructor assignments. The `splatWrapper` Object3D is created here and declared via `<T is={splatWrapper}>` in the scene file for Studio source sync.
 
 **Exact persisted `<T>` shape from each authored scene:**
 ```svelte
-<T is={sparkControls} name="Spark" profileSettings={{
-  desktop: {
-    // only fields differing from desktop global baseline
-  },
-  mobile: {
-    // only fields differing from mobile global baseline
-  },
-}} />
+<T
+  is={sparkControls}
+  name="Spark"
+  profileSettings={{
+    desktop: {},
+    mobile: {},
+  }}
+/>
 ```
+
+The `profileSettings` literal is the **scene-local source of truth**. No duplicate `$state` variable holds the same data. The `<T>` attribute value is applied to `sparkControls.profileSettings` setter, which merges the active profile's overrides with its stored baseline and updates the flat effective `settings`. This works in both playback and edit modes after a cold reload.
 
 **Example**: `src/lib/scenes/baby_yoda.svelte` at `/scene/baby_yoda` (playback) and `/scene/baby_yoda/edit` (editing) with RAD URL `https://avner.us/baby_yoda-lod.rad`.
 
@@ -165,7 +167,7 @@ Active only for exactly one selected `ScrollAnimator`; otherwise shows "Select o
 
 ## Source-Sync Guard Invariant
 
-The `guardScrollAnimatorTransactions` helper runs via `useTransactions().onTransaction()`. For any transaction whose object is a branded `ScrollAnimator`, it clears `transaction.sync` unless the final path segment is exactly `keyframes` or `showChildCameraFrustumWhenSelected`. For `SparkControls`, it clears sync unless `attributeName` is `profileSettings` (profile-aware root), `settings` (legacy root), or an individual whitelisted field name. Descendant attributes like `keyframes.0`, `profileSettings.desktop.blurAmount`, `settings.lodSplatScale`, or `scene.keyframes.position` are blocked. This prevents Studio's transform controls from writing `position`, `rotation`, or `scale` into Svelte source, while allowing the intended persisted attributes through.
+The `guardScrollAnimatorTransactions` helper runs via `useTransactions().onTransaction()`. For any transaction whose object is a branded `ScrollAnimator`, it clears `transaction.sync` unless the final path segment is exactly `keyframes` or `showChildCameraFrustumWhenSelected`. For `SparkControls`, it clears sync unless `attributeName` is exactly `profileSettings` (profile-aware root). All other attributes — transforms, legacy `settings`, individual field names, and nested paths like `profileSettings.desktop.blurAmount` — are blocked. This prevents Studio's transform controls from writing `position`, `rotation`, or `scale` into Svelte source, while allowing only the intended persisted attribute through.
 
 Keyframe mutations use `transactions.buildTransaction()` which derives source metadata from the object's `userData.threlteStudio` automatically. No private metadata imports needed.
 
@@ -173,17 +175,23 @@ Keyframe mutations use `transactions.buildTransaction()` which derives source me
 
 `SparkControls extends Object3D` is a branded settings controller that appears in the Studio outline as a selectable object named "Spark". It holds all editable Spark 2.1 rendering-quality, LOD, foveation, and paging-budget controls.
 
-**Profile-aware model:** Two named profiles (`desktop` | `mobile`) each have a complete 22-field global baseline (`getGlobalBaseline()`). Each scene persists a `ProfileSettings` object with `desktop` and `mobile` parent keys, each containing only fields that differ from that profile's global baseline. Effective runtime settings = `global baseline + scene overrides for active profile`.
+**Profile-aware model:** Two named profiles (`desktop` | `mobile`) each have a complete 22-field global baseline (`getGlobalBaseline()`). Each scene persists a `ProfileSettings` literal directly on the `<T>` attribute with `desktop` and `mobile` parent keys, each containing only fields that differ from that profile's global baseline. Effective runtime settings = `stored baseline + scene overrides for active profile`.
+
+**Authoritative `profileSettings` property:** `SparkControls` has a typed, copy-returning `profileSettings` getter and writable setter. The setter normalizes both profile parents, merges the active profile's overrides with its stored baseline, updates the flat effective `settings`, and emits the normal change signal. This makes `profileSettings` the authoritative target for source sync and undo/redo — transaction commit, undo, and redo all update both the nested overrides and live effective controller settings.
+
+**`profileName` property:** Read-only getter returning the active device profile name (`'desktop'` | `'mobile'`), set at construction time.
 
 **Editor pane:** The `SparkControlsExtension` provides a fixed toolbar pane (icon: `mdiTune`, label: "Spark Controls") with a **profile badge** showing `Desktop` or `Mobile`, and individual labeled inputs for all 22 settings. Numeric fields use `<input type="number">`, booleans use checkboxes, and `lodSplatCount` uses a text input with "auto" placeholder for null. Edits are committed via `transactions.buildTransaction()` with `propertyPath: 'profileSettings'` (the nested override map). The pane **auto-binds** to the active scene's SparkControls via `activeSparkControlsRuntime` — hierarchy selection is not required. Selecting other objects, clearing selection, or selecting multiple objects does not disable the pane.
+
+**Inactive-profile preservation:** The extension reads inactive-profile overrides from the controller's real `controls.profileSettings` (not from a local extension variable). This ensures persisted inactive overrides are never lost during active-profile edits.
 
 **Reload status subscription:** `SparkControls.reloadStatus` is a `SparkReloadStatus` instance with `subscribe(fn)` / `unsubscribe()` API. The extension subscribes to the active controller from `activeSparkControlsRuntime` and cleans up when the active controller changes or the extension is destroyed. Status updates (`isReloading`, `error`) drive the pane's progress/error indicators reactively. The coordinator's status is mirrored via `handleReloadStatus()` → `sparkControls.reloadStatus.update()`.
 
 **Settings-change subscription:** The extension subscribes to `activeController.onChange()` (the `SparkControls` change signal) for the active controller. On notification, it refreshes `uiState.settings` from the controller's copy-returning `settings` getter and all draft values so the pane stays in sync with external edits (Studio undo/redo, Inspector edits, source sync, programmatic setters). A stale-controller guard (`if (uiState.controls !== controls) return`) ensures a superseded controller's notification does not update the pane. The subscription is bound once per active-controller identity and cleaned up on controller replacement and extension destruction.
 
-**Pre-mutation historic-snapshot invariant:** `SparkControls.onChange()` fires **synchronously** inside its setters. For pane-originated edits, the extension captures `historicSettings = controls.settings` AND `historicProfileOverrides` (deep copy of nested override map) **before** invoking the setter, then captures `newSettings = controls.settings` **after**. The transaction is built with `value: newProfileOverrides` and `historicValue: historicProfileOverrides`. This ensures `historicValue` and `value` remain distinct even though the synchronous `onChange` callback has already refreshed `uiState.settings`. The `onChange` subscription is NOT suppressed during pane edits — it continues refreshing all displayed drafts. Unchanged edits (where `historicSettings[key] === newSettings[key]`) produce no transaction.
+**Pre-mutation historic-snapshot invariant:** `SparkControls.onChange()` fires **synchronously** inside its setters. For pane-originated edits, the extension captures `historicSettings = controls.settings` AND `historicProfileOverrides = controls.profileSettings` (defensive copy) **before** invoking the setter, then captures `newSettings = controls.settings` **after**. The transaction is built with `value: newProfileOverrides` and `historicValue: historicProfileOverrides`. This ensures `historicValue` and `value` remain distinct even though the synchronous `onChange` callback has already refreshed `uiState.settings`. The `onChange` subscription is NOT suppressed during pane edits — it continues refreshing all displayed drafts. Unchanged edits (where `historicSettings[key] === newSettings[key]`) produce no transaction.
 
-**Source sync:** The `<T is={sparkControls} name="Spark" profileSettings={profileSettings} />` pattern persists the complete nested override map. `profileSettings` is a `$state` variable in the scene file holding `{ desktop: { ...deltas }, mobile: { ...deltas } }`. The transaction guard whitelists `profileSettings` (root), `settings` (legacy root), and individual field names, while blocking transforms and nested paths like `profileSettings.desktop.blurAmount`.
+**Source sync:** The `<T is={sparkControls} name="Spark" profileSettings={{ desktop: {}, mobile: {} }} />` literal is the scene-local source of truth. Studio rewrites this attribute via the `profileSettings` setter on the SparkControls instance. The setter merges overrides with the stored baseline and updates effective settings. Works in both playback and edit modes after a cold reload. The transaction guard whitelists only `profileSettings` (root), blocking transforms, legacy `settings`, individual field names, and nested paths like `profileSettings.desktop.blurAmount`.
 
 **Override rules:**
 - Persist only deltas (fields differing from global baseline).
@@ -191,6 +199,8 @@ Keyframe mutations use `transactions.buildTransaction()` which derives source me
 - Resetting a field to its profile baseline removes that key from the persisted override.
 - Editing one profile preserves existing overrides for the other profile.
 - Coupled invariants (`coneFov0 <= coneFov`, `minPixelRadius <= maxPixelRadius`) are computed on the complete effective snapshot; both changed fields appear in the diff.
+
+**Single profile detection:** `DeviceProfile.profileName` is the single source of truth for profile detection, set once at app startup by `getDeviceProfile()`. Scenes use `profile.profileName` — no independent `detectProfileName()` calls in scene files.
 
 **Mandatory fields (from device profile):**
 - `lodSplatScale`, `lodRenderScale`, `maxStdDev`, `maxPagedSplats` — LOD quality and budget
@@ -231,7 +241,7 @@ Keyframe mutations use `transactions.buildTransaction()` which derives source me
 - `profileName` getter — The active device profile name (`'desktop'` | `'mobile'`), defaults to `'desktop'`.
 
 **Lifecycle:**
-1. `SceneRuntime.onMount()` calls `activeSparkControlsRuntime.attach(sparkControls, profileName)` and stores the returned `detach`.
+1. `SceneRuntime.onMount()` calls `activeSparkControlsRuntime.attach(sparkControls, sparkControls.profileName)` and stores the returned `detach`.
 2. `SceneRuntime.onDestroy()` calls `detach()` (identity-safe) before disposing the SparkControls.
 3. `SparkControlsExtension.onMount()` subscribes to `activeSparkControlsRuntime.onChange()` and initializes UI from the current active controller and profile name.
 4. When the active controller changes (new scene, scene unmount), the extension updates its UI, settings, drafts, and reload-status subscription atomically.
@@ -430,9 +440,9 @@ This calls `page.screenshot()` directly with a configurable timeout, bypassing t
 
 ## Profile-Aware Spark Settings — Unit Tests
 
-- `tests/unit/profileResolution.test.ts` — desktop/mobile detection, complete 22-field global baselines, effective settings merge, minimal diff generation, false/null/coupled-field diff behavior, profile isolation, round-trip verification.
-- `tests/unit/profileSettingsTransaction.test.ts` — `buildProfileSettingsTransaction()` shape, guard pass-through for `profileSettings`, guard blocking for nested paths, historic/new distinctness, undo/redo, coupled invariant persistence, profile isolation, reset-to-baseline removal, false boolean preservation.
-- `tests/unit/profileTransactionGuard.test.ts` — `profileSettings` root allowed, nested `profileSettings.desktop`/`profileSettings.mobile.blurAmount` blocked, position/rotation/scale suppressed, individual field names allowed.
+- `tests/unit/profileResolution.test.ts` — desktop/mobile detection, complete 22-field global baselines, effective settings merge, minimal diff generation (pure `computeOverrides`), false/null/coupled-field diff behavior, profile isolation, round-trip verification.
+- `tests/unit/profileSettingsTransaction.test.ts` — `buildProfileSettingsTransaction()` shape, guard pass-through for `profileSettings`, guard blocking for nested paths and legacy `settings`, actual `profileSettings` setter undo/redo (not simulated), coupled invariant persistence, profile isolation, reset-to-baseline removal, false boolean preservation.
+- `tests/unit/profileTransactionGuard.test.ts` — `profileSettings` root allowed, nested `profileSettings.desktop`/`profileSettings.mobile.blurAmount` blocked, position/rotation/scale suppressed, legacy `settings` and individual field names blocked.
 
 ## CORS Note
 
