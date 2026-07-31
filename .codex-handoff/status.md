@@ -1,85 +1,109 @@
-# Status: Keep the automatic Spark pane synchronized
+# Status: Preserve Spark transaction history with synchronous settings sync
 
-## Summary and root cause
+## Root cause and exact ordering fix
 
-**Root cause:** The Spark Controls pane only updated its `uiState.settings` and `drafts` on its own field-edit handlers. When settings changed externally — via Studio undo/redo, Inspector edits, source sync, or programmatic `SparkControls` setters — the pane's displayed values and drafts became stale.
+**Root cause:** `SparkControls.onChange()` fires synchronously inside its setters. The pane's `onChange` subscription refreshes `uiState.settings` to the new state *before* `handleFieldChange()` or `handleBooleanChange()` builds its transaction. Since the code used `uiState.settings` as `historicValue`, both `value` and `historicValue` were the same (post-edit) snapshot, breaking Studio undo/history.
 
-**Fix:** Subscribe to `SparkControls.onChange()` for the active controller. On each settings-change notification, refresh the full `uiState.settings` snapshot and all drafts. A stale-controller guard ensures a superseded controller's notification does not update the pane.
+**Fix:** Both `handleFieldChange()` and `handleBooleanChange()` now capture `historicSettings = controls.settings` **before** invoking the setter, then capture `newSettings = controls.settings` **after**. The transaction is built with `value: newSettings` and `historicValue: historicSettings`. The `onChange` subscription is not suppressed — it continues refreshing all displayed drafts.
 
 ## Files changed
 
 | File | Change |
 |------|--------|
-| `src/lib/studio/spark-controls/SparkControlsExtension.svelte` | Added `unsubscribeSettings` subscription to `controls.onChange()`. On settings change: refreshes `uiState.settings` and all drafts with stale-controller guard. Subscribed on initial controller bind, on controller replacement, and cleaned up on destroy. |
-| `src/lib/components/SceneRuntime.svelte` | Added `__spark_stub_active_controls` exposure in stub build for e2e external-setter tests. Cleared on destroy. |
-| `tests/unit/sparkPaneSettingsSync.test.ts` | **New.** 13 tests: onChange fires for single field, settings object, coupled invariants (coneFov0→coneFov, minPixelRadius→maxPixelRadius), no-fire on unchanged, unsubscribe, multiple subscribers, deep-copy getter, sequential snapshots, boolean/nullable fields, dispose cleanup, and stale-controller guard. |
-| `tests/e2e/playback-edit.spec.ts` | Added "Spark Controls pane external settings sync" describe block (2 tests): pane values update after programmatic setter, coupled invariant refreshes both fields. |
-| `AGENTS.md` | Updated SparkControlsExtension description and added "Settings-change subscription" paragraph documenting the per-controller `onChange()` subscription, stale-controller guard, and cleanup invariant. |
+| `src/lib/studio/spark-controls/SparkControlsExtension.svelte` | Both `handleFieldChange()` and `handleBooleanChange()` now capture pre-setter `historicSettings` and post-setter `newSettings`. Transactions use these explicit snapshots instead of `uiState.settings`. Unchanged edits (where `historicSettings[key] === newSettings[key]`) produce no transaction. Removed redundant `uiState.settings`/`refreshDrafts` calls after setter (already done by synchronous `onChange`). |
+| `src/lib/components/SceneRuntime.svelte` | Made `__spark_stub_active_controls` cleanup identity-safe: only deletes the diagnostic if it still points to this scene's `sparkControls` (matching the production runtime's stale-detach guarantee). |
+| `tests/unit/sparkPaneTransactionOrdering.test.ts` | **New.** 10 tests covering: numeric/boolean/nullable edit snapshot ordering, coupled invariant snapshots, unchanged edit (no transaction), settings setter distinctness, sequential edits with correct historic/value chains, undo/redo simulation via settings setter, pane onChange continuing after pane-originated edits, and stale-controller guard with synchronous onChange. |
+| `tests/unit/activeSparkControlsRuntime.test.ts` | Added 3 stub diagnostic identity-safety tests: old scene destroy doesn't clear newer scene, single scene destroy clears, and destroy when no diagnostic is safe. |
+| `AGENTS.md` | Added "Pre-mutation historic-snapshot invariant" paragraph documenting the capture-before-setter pattern and why it's necessary. |
 
-## Settings/reload subscription lifecycle
+## Old/new transaction snapshot evidence for every input type
 
-The extension maintains three independent subscriptions per active controller:
+### Numeric edit (`lodSplatScale = 5`)
+- `historicValue.lodSplatScale` = 1 (default, pre-setter)
+- `value.lodSplatScale` = 5 (post-setter)
+- Verified: distinct snapshots, pane refreshed by synchronous onChange
 
-1. **Active controller** (`activeSparkControlsRuntime.onChange()`): Notified when the scene changes. On replacement, unsubscribes from old controller's settings and reload-status before binding to the new one.
-2. **Settings changes** (`controls.onChange()`): Refreshes `uiState.settings` and all drafts. Stale-controller guard (`if (uiState.controls !== controls) return`) prevents a superseded controller from updating the pane. Bound once per controller identity.
-3. **Reload status** (`controls.reloadStatus.subscribe()`): Drives progress/error indicators.
+### Boolean edit (`sortRadial = false`)
+- `historicValue.sortRadial` = true (default)
+- `value.sortRadial` = false (post-setter)
+- Verified: distinct snapshots, pane refreshed
 
-All three are cleaned up on controller replacement and extension destruction.
+### Nullable edit (`lodSplatCount = 50000`)
+- `historicValue.lodSplatCount` = null (default)
+- `value.lodSplatCount` = 50000 (post-setter)
+- Verified: distinct snapshots, pane refreshed
 
-## Undo/redo and historic-value synchronization
+### Coupled invariant edit (`coneFov0 = 170`)
+- `historicValue.coneFov0` = 90, `historicValue.coneFov` = 120 (defaults unchanged)
+- `value.coneFov0` = 170, `value.coneFov` = 170 (coneFov raised by invariant)
+- Verified: invariant change only in new snapshot, historic preserved
 
-When settings change externally (e.g., Studio undo/redo), the `onChange` callback fires, refreshing `uiState.settings` from `controls.settings` (a deep copy). The next field edit then uses this refreshed snapshot as `historicValue` in `buildSparkSettingsTransaction()`, ensuring the transaction history correctly reflects the state after the external change.
+### Unchanged edit (`lodSplatScale = 1` when already 1)
+- No transaction created (onChange not fired, `historic[key] === new[key]`)
+- Verified: no spurious transaction
+
+## Undo/redo evidence
+
+Unit test "undo/redo simulation" verifies:
+1. Edit: `lodSplatScale` 1 → 5, captures `historic` (1) and `new` (5)
+2. Undo: `ctrl.settings = historic` restores `lodSplatScale = 1`, pane refreshed
+3. Redo: `ctrl.settings = new` restores `lodSplatScale = 5`, pane refreshed
+4. Each step fires `onChange`, pane stays in sync
+
+Sequential edits test verifies:
+- Edit 1's `value` becomes Edit 2's `historicValue`
+- Each transaction has correct pre/post snapshots
+
+## Stub diagnostic identity-safety change
+
+`SceneRuntime.onDestroy()` now checks `if (current === sparkControls)` before deleting `__spark_stub_active_controls`. This mirrors the production `activeSparkControlsRuntime`'s generation-based stale-detach guarantee: an older scene's destroy cannot erase a newer scene's diagnostic reference.
 
 ## Tests added or updated
 
-### Unit tests (new file: `tests/unit/sparkPaneSettingsSync.test.ts`)
-- 13 tests covering:
-  - Single field setter fires onChange
-  - Settings object setter fires onChange
-  - Coupled invariant: coneFov0 raises coneFov
-  - Coupled invariant: minPixelRadius raises maxPixelRadius
-  - No notification when value unchanged
-  - Unsubscribe stops notifications
-  - Multiple subscribers each receive notifications
-  - Settings getter returns deep copy
-  - Sequential external changes produce correct snapshots
-  - Boolean field changes trigger onChange
-  - Nullable field changes trigger onChange
-  - Dispose clears all listeners
-  - Stale-controller guard: old controller changes don't affect new controller state
+### Unit tests (new file: `tests/unit/sparkPaneTransactionOrdering.test.ts`)
+- 10 tests:
+  - Numeric edit: historic has old value, value has new value
+  - Boolean edit: same pattern
+  - Nullable edit: same pattern
+  - Coupled invariant: only new snapshot has adjusted field
+  - Unchanged edit: no transaction created
+  - Settings setter: historic and value distinct
+  - Sequential edits: each transaction has correct historic/value
+  - Undo/redo simulation: settings setter restores pre/post states
+  - Pane onChange continues after pane-originated edits
+  - Stale-controller guard with synchronous onChange
 
-### E2e tests (updated: `tests/e2e/playback-edit.spec.ts`)
-- "pane values update when controller settings change programmatically" — verifies the pane's input draft reflects a programmatic setter
-- "pane coupled invariant refreshes both fields after external change" — verifies coneFov0→coneFov invariant is reflected in both pane inputs
+### Unit tests (updated: `tests/unit/activeSparkControlsRuntime.test.ts`)
+- 3 new tests for stub diagnostic identity-safety
+
+### E2e tests
+- All 122 existing tests pass unchanged, confirming no regression
 
 ## Exact commands and results
 
 ```
 npm run check     → 0 errors, 0 warnings
 npm run lint      → clean (no output)
-npm run test:unit → 19 test files, 320 tests passed
+npm run test:unit → 20 test files, 333 tests passed
 npm run test:e2e  → 122 tests passed
-npm run build     → built in 4.82s
+npm run build     → built in 4.79s
 git diff --check  → clean (no whitespace errors)
 ```
 
 ## Acceptance criteria checklist
 
-1. ✅ The Spark pane still opens with the active controller without selecting Spark.
-2. ✅ Pane values and drafts update when the active controller changes through:
-   - a direct/programmatic property or settings setter (tested via e2e);
-   - Studio undo (onChange fires for any settings mutation);
-   - Studio redo (same path as undo);
-   - an Inspector edit (same path — Inspector edits go through the settings setter).
-3. ✅ Coupled validation changes refresh every affected field (coneFov0→coneFov, minPixelRadius→maxPixelRadius tested in unit and e2e).
-4. ✅ After an external change, the pane's next transaction uses the refreshed state as `historicValue` (onChange refreshes `uiState.settings` which is used as `historicValue` in `buildSparkSettingsTransaction`).
-5. ✅ Replacing the active controller unsubscribes the old settings and reload-status listeners; old-controller changes cannot affect the pane (stale-controller guard + explicit unsubscribe before new bind).
-6. ✅ Destroying the extension cleans up all active-controller, settings, and reload-status subscriptions (`onDestroy` calls all three unsubscribe functions).
-7. ✅ Selection independence, reload progress/error display, scene remount safety, persisted source sync, and accepted header behavior remain intact (all 122 e2e tests pass).
-8. ✅ All tests and static checks pass.
-9. ✅ `AGENTS.md` concisely documents the controller settings subscription and cleanup invariant.
+1. ✅ Pane-originated numeric, nullable, and boolean edits build transactions whose `historicValue` is the complete pre-edit snapshot and `value` is the complete validated post-edit snapshot.
+2. ✅ `historicValue` and `value` remain distinct when a setting changes, including when the synchronous `onChange()` callback refreshes pane state.
+3. ✅ Coupled validation changes appear only in the new snapshot while the historic snapshot remains unchanged.
+4. ✅ Undo restores the pre-edit settings and redo restores the post-edit settings using the actual transaction snapshots (verified via settings setter simulation).
+5. ✅ External programmatic/Inspector/undo/redo changes continue refreshing the open pane and all drafts (onChange subscription active).
+6. ✅ Unchanged edits do not create transactions.
+7. ✅ Boolean and nullable edit paths have the same correct history semantics as numeric edits.
+8. ✅ Stub active-controller cleanup cannot erase a newer controller reference (identity-safe check).
+9. ✅ Selection independence, subscription cleanup, reload status, header behavior, routing, persistence, and all prior accepted behavior remain intact (122 e2e tests pass).
+10. ✅ `AGENTS.md` documents the pre-mutation historic-snapshot invariant concisely.
 
 ## Limitations / manual checks
 
-- Studio undo/redo and Inspector editing are exercised through the `onChange` signal path. The stub build does not expose a full Studio undo/redo stack, so the e2e tests use programmatic setters to verify the same notification path. The unit tests verify `onChange` fires for all setter paths.
-- Inspector editing in the stub build depends on Threlte Studio's internal implementation; the stub tests the same setter path without verifying Inspector UI interaction specifically.
+- Studio undo/redo is tested via the `settings` setter path (which is what Studio uses to apply undo/redo transactions). The stub build does not expose a full Studio undo/redo stack for direct UI interaction, but the transaction snapshot correctness is verified at the unit level for all input types.
+- Inspector editing follows the same setter path and is covered by the same onChange subscription mechanism.

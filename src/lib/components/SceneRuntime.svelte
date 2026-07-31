@@ -172,9 +172,13 @@
     // Detach from active-controller runtime (identity-safe)
     detachSparkControls?.()
     detachSparkControls = null
-    // Stub-only: clear the active controls reference
-    if ((window as unknown as Record<string, unknown>).__spark_stub === true) {
-      delete (window as unknown as Record<string, unknown>).__spark_stub_active_controls
+    // Stub-only: identity-safe clear of active controls reference
+    // (only delete if it still points to this scene's sparkControls)
+    if ((window as unknown as Record<string, unknown>).__spark_stub === true && sparkControls) {
+      const current = (window as unknown as Record<string, unknown>).__spark_stub_active_controls
+      if (current === sparkControls) {
+        delete (window as unknown as Record<string, unknown>).__spark_stub_active_controls
+      }
     }
     // Dispose SparkControls on scene unmount (single owner)
     if (sparkControls) {

@@ -180,6 +180,9 @@
   })
 
   // Commit a field edit via transaction
+  // Pattern: capture historicSettings BEFORE the setter (which fires onChange synchronously),
+  // then capture newSettings AFTER. This ensures historicValue !== value even though
+  // the onChange callback has already refreshed uiState.settings.
   function handleFieldChange(meta: FieldMeta): void {
     const controls = uiState.controls
     if (!controls) return
@@ -197,24 +200,27 @@
 
     const key = meta.key
     const ctrl = controls as unknown as Record<string, unknown>
-    const currentValue = ctrl[key]
 
-    // Validate through the setter
+    // Capture historic snapshot BEFORE mutation (onChange fires synchronously)
+    const historicSettings = controls.settings
+
+    // Validate through the setter (fires onChange → refreshes uiState.settings)
     ctrl[key] = raw
 
-    const newValue = ctrl[key]
+    // Capture new snapshot AFTER mutation (includes coupled invariant changes)
+    const newSettings = controls.settings
 
-    if (currentValue !== newValue) {
-      // If source sync is available, commit as a transaction
-      if (transactions.vitePluginEnabled) {
-        const tx = transactions.buildTransaction(
-          buildSparkSettingsTransaction(controls, controls.settings, uiState.settings),
-        )
-        transactions.commit([tx])
-      }
-      uiState.settings = controls.settings
-      refreshDrafts(controls)
+    // Check if any field actually changed
+    if (historicSettings[key] === newSettings[key]) return
+
+    // If source sync is available, commit as a transaction
+    if (transactions.vitePluginEnabled) {
+      const tx = transactions.buildTransaction(
+        buildSparkSettingsTransaction(controls, newSettings, historicSettings),
+      )
+      transactions.commit([tx])
     }
+    // uiState.settings already refreshed by the synchronous onChange callback
   }
 
   function handleBooleanChange(meta: FieldMeta, checked: boolean): void {
@@ -223,21 +229,27 @@
 
     const key = meta.key
     const ctrl = controls as unknown as Record<string, unknown>
-    const currentValue = ctrl[key]
 
+    // Capture historic snapshot BEFORE mutation (onChange fires synchronously)
+    const historicSettings = controls.settings
+
+    // Validate through the setter (fires onChange → refreshes uiState.settings)
     ctrl[key] = checked
-    const newValue = ctrl[key]
 
-    if (currentValue !== newValue) {
-      if (transactions.vitePluginEnabled) {
-        const tx = transactions.buildTransaction(
-          buildSparkSettingsTransaction(controls, controls.settings, uiState.settings),
-        )
-        transactions.commit([tx])
-      }
-      uiState.settings = controls.settings
-      refreshDrafts(controls)
+    // Capture new snapshot AFTER mutation (includes coupled invariant changes)
+    const newSettings = controls.settings
+
+    // Check if any field actually changed
+    if (historicSettings[key] === newSettings[key]) return
+
+    // If source sync is available, commit as a transaction
+    if (transactions.vitePluginEnabled) {
+      const tx = transactions.buildTransaction(
+        buildSparkSettingsTransaction(controls, newSettings, historicSettings),
+      )
+      transactions.commit([tx])
     }
+    // uiState.settings already refreshed by the synchronous onChange callback
   }
 
   function handleBlur(meta: FieldMeta): void {

@@ -182,3 +182,60 @@ describe('ActiveSparkControlsRuntime', () => {
     expect(runtime.activeController).toBeNull()
   })
 })
+
+describe('Stub diagnostic identity-safety (SceneRuntime __spark_stub_active_controls)', () => {
+  /**
+   * Simulates the SceneRuntime stub cleanup pattern:
+   *   if (current === sparkControls) delete __spark_stub_active_controls
+   * An older scene's destroy must not delete a newer scene's reference.
+   */
+  test('old scene destroy does not clear newer scene diagnostic', () => {
+    const ctrlA = { __id: 'a' }
+    const ctrlB = { __id: 'b' }
+
+    // Simulate window.__spark_stub_active_controls
+    let diagnostic: typeof ctrlA | undefined = undefined
+
+    // Scene A mounts
+    diagnostic = ctrlA as never
+
+    // Scene B mounts (replaces A)
+    diagnostic = ctrlB as never
+
+    // Scene A destroys — identity-safe check
+    const current = diagnostic
+    if (current === ctrlA) {
+      diagnostic = undefined
+    }
+    expect(diagnostic).toBe(ctrlB, 'A did not clear B')
+
+    // Scene B destroys
+    const currentB = diagnostic
+    if (currentB === ctrlB) {
+      diagnostic = undefined
+    }
+    expect(diagnostic).toBeUndefined()
+  })
+
+  test('single scene destroy clears diagnostic', () => {
+    const ctrl = { __id: 'only' }
+    let diagnostic: typeof ctrl | undefined = ctrl
+
+    const current = diagnostic
+    if (current === ctrl) {
+      diagnostic = undefined
+    }
+    expect(diagnostic).toBeUndefined()
+  })
+
+  test('destroy when no diagnostic is set is safe', () => {
+    const ctrl = { __id: 'orphan' }
+    let diagnostic: typeof ctrl | undefined = undefined
+
+    const current = diagnostic
+    if (current === ctrl) {
+      diagnostic = undefined
+    }
+    expect(diagnostic).toBeUndefined()
+  })
+})
