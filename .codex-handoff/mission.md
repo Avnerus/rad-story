@@ -1,211 +1,147 @@
-# Mission: profile-aware Spark Controls with scene-local per-profile overrides
+# Follow-up mission: make persisted profile overrides authoritative and undoable
 
 ## Objective
 
-Replace the previous flat Spark settings persistence design with a profile-aware model and fix the blocking Studio source-sync failure as part of that design.
+Fix the blocking disconnect in the profile-aware Spark Controls implementation. The current code can make Studio write a nested `profileSettings` object into a scene's `<T>` attribute, but that persisted object is not an authoritative runtime input after HMR/reload and transaction undo/redo writes an inert property instead of restoring effective Spark settings.
 
-RAD Story currently chooses Spark values from device detection, but the Spark Controls pane neither identifies the active profile nor has a correct persistence model. Editing and syncing also rejects asynchronously in Studio with:
+Do not treat the previous status as accepted. Preserve the useful global-baseline/minimal-diff work, but complete the data flow so the literal scene value, live controller, Studio transaction, HMR/reload, playback, and undo/redo all represent the same state.
 
-```text
-TransactionQueue.svelte.js:202 Uncaught (in promise) {}
-doSync @ TransactionQueue.svelte.js:202
-await in doSync
-```
+## Verified defects
 
-Implement exactly two named device profiles for now: `desktop` and `mobile`.
+1. `baby_yoda.svelte` constructs `SparkControls` from a separate script variable initialized with empty overrides:
 
-The final model must have:
+   ```ts
+   let profileSettings = $state({ desktop: {}, mobile: {} })
+   createSceneObjects(..., untrack(() => profileSettings))
+   ```
 
-1. A clearly displayed active profile in the Spark Controls extension.
-2. Correct profile detection on page load, including Chrome/Firefox mobile device emulation after reload.
-3. Global effective settings for each profile.
-4. Scene-local persisted overrides containing only values that differ from that profile's global effective settings.
-5. A scene `<T>` attribute whose persisted data is visibly grouped under `desktop` and `mobile` parents.
-6. Effective runtime settings computed as `global profile settings + current scene overrides for the active profile`.
-7. Working Studio source sync with no `doSync` rejection.
+   Studio rewrites the `<T>` attribute, not that script initializer. A full reload therefore constructs the controller from empty overrides.
 
-## Required conceptual model
+2. `<T is={sparkControls} profileSettings={...} />` assigns `profileSettings` after construction, but `SparkControls` has no declared writable `profileSettings` property or setter. The assigned value is not merged into `settings` and does not reach renderers.
 
-Introduce a stable profile identifier:
+3. `buildTransaction({ object: controls, propertyPath: 'profileSettings' })` makes transaction commit/undo/redo write `controls.profileSettings`. Because that property is inert, undo/redo does not restore `controls.settings`. The added unit test does not exercise the transaction's `write`; it manually assigns `controls.settings`, so it cannot prove undo/redo behavior.
 
-```ts
-type DeviceProfileName = 'desktop' | 'mobile'
-```
+4. `SparkControlsExtension` initializes its local override map by diffing the active controller and preserves the inactive profile from its own initially empty local object. It cannot read the scene's persisted inactive-profile overrides, so a later edit can erase them.
 
-Define or derive a complete effective `SparkSettings` baseline for each profile. The existing profile specifies only eight Spark fields and relies on `SparkControls` defaults for the other fields; centralize that merge so comparisons use all 22 effective fields and cannot confuse an omitted global default with a scene override.
+5. The committed authored `<T>` declaration is `profileSettings={profileSettings}`, not a literal visibly containing both `desktop` and `mobile` parents as required. The prior status shows an inline literal as the claimed final shape, but the checked-in source contradicts it.
 
-Each scene persists a partial override map shaped approximately like this (the final attribute/property name may differ if a better supported public Studio contract is proven):
+6. Profile detection is duplicated: the app creates `profile` from `getDeviceProfile()`, while the scene independently calls `detectProfileName()`. Establish one startup detection result and propagate it.
 
-```svelte
-<T
-  is={sparkControls}
-  name="Spark"
-  profileSettings={{
-    desktop: {
-      maxStdDev: 2.8,
-    },
-    mobile: {
-      maxPagedSplats: 131072,
-    },
-  }}
-/>
-```
+7. Manual real-dev-server source-sync verification is sufficient; a new automated source-mutating e2e test is not required. However, the previous manual check inspected source rewrites only and did not prove that persisted overrides affect effective runtime/controller/renderer values after a cold reload.
 
-The important invariants are:
-
-- both `desktop` and `mobile` are visible parent keys in each scene's `<T>` declaration;
-- child objects contain only differences from that profile's complete global baseline;
-- the runtime receives a flat, complete, validated `SparkSettings` snapshot for only the active profile;
-- editing one profile does not copy its values into the other profile;
-- setting a field back to its global profile value removes that field from the persisted override object rather than storing a redundant override.
-
-Do not mechanically use the illustrative property name until live source-sync reproduction confirms the public Threlte Studio parser can rewrite the chosen literal reliably.
-
-## Live investigation required
-
-Before implementing, reproduce the current source-sync failure using `npm run dev` and `/scene/baby_yoda/edit`.
-
-Capture and report:
-
-- active field/value edited;
-- built transaction sync metadata (`moduleId`, `componentIndex`, `attributeName`);
-- browser rejection;
-- Vite dev-server-side error;
-- source attribute shape before failure.
-
-The browser's rejected `{}` is not a root cause. Identify the concrete server/parser/metadata failure. Existing preview/stub e2e tests do not exercise Studio's real dev-server RPC and therefore are insufficient for this bug.
+8. The claimed original root cause remains unproven. Studio's updater can rewrite mustache expressions generally, and the report contains no concrete Vite-side failure/error. Do not retain “computed expression” as the root cause without evidence.
 
 ## Files likely involved
 
-- `src/lib/types.ts`
-- `src/lib/spark/deviceProfile.ts`
 - `src/lib/spark/SparkControls.ts`
+- `src/lib/spark/deviceProfile.ts`
+- `src/lib/types.ts`
 - `src/lib/scenes/sceneObjects.ts`
-- Every discoverable authored scene `.svelte` file, currently including `src/lib/scenes/baby_yoda.svelte`
-- `src/lib/components/SceneRuntime.svelte` and/or the active Spark-controls runtime if profile identity and override metadata must travel with the controller
+- Every authored scene `.svelte` file, currently `src/lib/scenes/baby_yoda.svelte`
+- `src/lib/components/SceneRuntime.svelte`
 - `src/lib/studio/spark-controls/activeSparkControlsRuntime.ts`
 - `src/lib/studio/spark-controls/SparkControlsExtension.svelte`
 - `src/lib/studio/spark-controls/sparkSettingsTransaction.ts`
-- `src/lib/studio/scroll-animator/transactionGuard.ts` only if its narrow whitelist must recognize the new root persisted property
-- Unit tests for profile resolution, diffing, validation, and transaction snapshots
-- A real Vite dev-server source-sync integration/e2e test
+- `src/lib/studio/scroll-animator/transactionGuard.ts`
+- Profile/unit tests plus the existing e2e suite
 - `AGENTS.md`
 
-## Constraints
+## Constraints and implementation guidance
 
-- Use public Threlte Studio transaction APIs. Do not patch `node_modules`, import private Studio internals into production, disable sync, or catch-and-ignore the rejection.
-- Keep `desktop` and `mobile` as the only profile names. Use the same typed identifier throughout detection, UI, persistence, merging, tests, and documentation.
-- Preserve the current mobile detection behavior where appropriate, but make the selected name explicit. Browser device emulation that supplies a mobile UA/device identity must select `mobile` after page reload; ordinary desktop browsing must select `desktop`.
-- Profile selection is startup/load-time state. Hot-switching profiles without a page reload is not required.
-- The Spark Controls pane must prominently show the active profile (`Desktop` or `Mobile`) even when no Spark hierarchy object is selected. It remains bound through `activeSparkControlsRuntime`, not hierarchy selection.
-- The pane inputs show the complete effective values for the active profile: global baseline merged with the current scene's active-profile overrides.
-- A pane edit applies live to the current controller/renderers and updates only the active profile's override map.
-- Persist the complete nested override map in one scene-local literal so edits to one profile preserve existing overrides for the other profile.
-- Persist only deltas. Use own-property presence to distinguish “no override” from valid falsey overrides such as `false`, `0` where allowed, and `lodSplatCount: null`.
-- Reverting a field to the active profile's baseline deletes that override key. If coupled validation changes a second field, diff both complete validated effective snapshots against the baseline and persist the correct resulting deltas.
-- Do not compare against only the eight currently explicit renderer-profile fields. Resolve a complete 22-field baseline using the canonical Spark defaults/validation path.
-- Scene files, not `deviceProfile.ts`, `sceneObjects.ts`, or a singleton, own scene-specific overrides. Global profile baselines remain centralized.
-- Each authored scene `<T>` declaration visibly contains both parent profile keys, even when one or both override objects are empty.
-- Source sync must target only the active scene's `<T>` declaration. Scene A edits must never mutate scene B, global baselines, or shared construction helpers.
-- Avoid competing authorities. The scene override literal plus global baseline must deterministically produce the controller's effective settings in playback and edit modes.
-- Ad-hoc URL viewing should still use the detected global profile baseline. Do not accidentally persist an ad-hoc session's tweaks into a shared production component as if it were a file-backed scene. If the pane remains editable there, clearly define and test whether edits are transient.
-- Preserve the pre-mutation history invariant: capture the complete effective snapshot and complete nested override map before invoking synchronous setters; transaction `historicValue` and `value` must remain distinct and undoable.
-- Undo/redo must restore both the effective controller state and the correct nested scene override literal without redundant baseline values.
-- Preserve Spark validation/clamping, `coneFov0 <= coneFov`, `minPixelRadius <= maxPixelRadius`, boolean/null types, active-controller stale guards, live renderer propagation, reload status, and `maxPagedSplats` recreation/reload.
-- Do not use arbitrary delays or HMR timing assumptions.
-- Source-sync integration tests must mutate only an isolated fixture/copy and restore it reliably on success or failure. Never leave authored scene sources changed by test values.
-- Keep changes scoped and avoid unrelated formatting or architecture churn.
+- Give `SparkControls` (or a narrowly scoped profile-aware controller abstraction) a real typed, copy-returning `profileSettings` getter and writable setter plus a stable active `profileName`.
+- Assigning `profileSettings` must normalize/preserve both profile parents, merge the active profile's overrides with its complete global baseline, validate through the existing canonical settings path, update the flat effective `settings`, and emit the normal change signal so renderer propagation and pane drafts update.
+- Transaction commit, undo, and redo on `propertyPath: 'profileSettings'` must therefore update both the nested overrides and live effective controller settings. Test the actual transaction `write` path; do not simulate it by separately assigning `controls.settings`.
+- The extension must initialize historic/current overrides from the active controller's real copy-returning `profileSettings`, including inactive-profile data. Do not reconstruct the inactive profile from an extension-local empty object.
+- Persist a direct literal on each authored scene `<T>` node, visibly containing both parents:
+
+  ```svelte
+  <T
+    is={sparkControls}
+    name="Spark"
+    profileSettings={{
+      desktop: {},
+      mobile: {},
+    }}
+  />
+  ```
+
+  The literal `<T>` value must be the scene-local source of truth. Do not keep a duplicate `$state` initializer containing the same overrides.
+- Ensure declarative `<T>` application makes the literal effective in both playback and edit modes after a cold reload. Construction may start from the detected global baseline, but the `<T>` setter must apply scene overrides deterministically.
+- Store the detected `DeviceProfileName` in the single `DeviceProfile` created by `App.svelte` (or an equivalent single startup result), pass it down, and use it everywhere. Do not call device detection again inside individual scene components.
+- Keep global baselines centralized and immutable. Prefer deriving legacy renderer profile values from the same canonical baseline rather than duplicating the eight profile fields in two tables.
+- Use `Record<DeviceProfileName, Partial<SparkSettings>>` or an equivalently key-safe type. Avoid `Record<string, SparkSettings[keyof SparkSettings]>`, which permits a boolean value under a numeric field name.
+- Maintain minimal deltas. Resetting to baseline removes the active override key; false and null remain valid own-property overrides where different from baseline.
+- Preserve the inactive profile byte-for-byte/structurally across active-profile edits, source sync, HMR, undo, and redo.
+- Re-check the transaction guard. Only the intended exact profile-aware root should be source-syncable for this controller unless a documented compatibility requirement justifies legacy `settings`/individual-field sync. Nested paths and transforms must remain blocked.
+- Preserve selection independence, synchronous pre-mutation history snapshots, validation/coupled invariants, external-change subscriptions, renderer propagation, reload status, and `maxPagedSplats` recreation.
+- Ad-hoc mode remains transient and uses the detected global profile; do not give it a file-backed scene override target.
+- Use public Threlte Studio APIs only. Do not patch `node_modules`, import private production APIs, disable sync, or suppress rejected promises.
+- Capture the actual original dev-server rejection if it remains reproducible. If changing the authoritative property model eliminates it before a precise Vite-side message can be obtained, state that honestly; do not assert an unsupported parser limitation.
+- Keep manual source-sync mutations isolated/recoverable and restore authored scene values before finalizing.
 
 ## Acceptance criteria
 
-- Pi reports the concrete root cause of the original `TransactionQueue.doSync` rejection with browser and Vite-side evidence.
-- A stable typed `desktop | mobile` profile identity is available with complete global effective Spark settings for each profile.
-- Desktop load selects `desktop`; emulated mobile load selects `mobile` and receives the mobile baseline values.
-- The Spark Controls pane visibly reports `Desktop` or `Mobile` and displays the correct complete effective values for that profile.
-- Every discoverable authored scene `.svelte` file has a scene-local literal override map with both `desktop` and `mobile` parent keys.
-- Scene override child objects contain only fields different from their corresponding global profile baseline.
-- Editing a desktop setting persists only under that scene's `desktop` parent and leaves `mobile` unchanged; the inverse holds for mobile.
-- Resetting a field to its profile baseline removes the redundant override key from source.
-- Numeric, boolean, nullable-number, and coupled-invariant edits round-trip with correct types and minimal deltas.
-- Source sync completes with no unhandled promise rejection, browser console error, Vite server error, malformed Svelte, or wrong-file mutation.
-- HMR/remount and full reload preserve the nested overrides and recompute the same effective values.
-- Playback and edit routes use identical effective settings for the same scene and detected profile.
-- Two-scene isolation is proven using safe test fixtures: editing one scene/profile changes neither the other scene nor the other profile.
-- Undo/redo source-sync both the effective live values and nested minimal override map correctly.
-- Existing selection independence, controller subscriptions, Spark rendering propagation, capacity reload, routing, debug FPS widget, and ScrollAnimator source sync remain intact.
-- A real dev-server source-writing regression test covers the public Studio/Vite RPC. Preview-only, mocked, or in-memory transaction tests are not sufficient as the sole regression.
-- Tests leave the repository and fixtures byte-for-byte restored.
-- `AGENTS.md` documents named profiles, global baselines, scene-local delta structure, merge/reset rules, source-sync path, and source/test references concisely.
+- Each authored scene has one direct literal `profileSettings` `<T>` attribute with visible `desktop` and `mobile` parents and no duplicate script variable holding the same data.
+- On cold desktop load, a persisted desktop override changes `SparkControls.settings`, pane input, and driving renderer; mobile override remains inactive.
+- On cold emulated-mobile load, the same scene applies the persisted mobile override, reports `Mobile`, and does not apply desktop overrides.
+- Playback and edit produce identical effective settings for the same profile and literal.
+- The active controller exposes the complete nested persisted override state, including inactive-profile overrides, as a defensive copy.
+- Editing the active profile preserves every inactive-profile override.
+- Transaction commit, undo, and redo through the actual built transaction `write` update nested overrides, effective settings, pane/controller subscribers, source, and renderer behavior correctly.
+- HMR/remount and full page reload preserve and apply the source-written override; tests prove runtime values after reload rather than only inspecting source text.
+- Reset-to-baseline removes the redundant key from source and remains removed after reload.
+- Numeric, boolean, nullable, coupled-invariant, and capacity edits retain correct types and behavior.
+- Profile detection occurs once per app startup and the same explicit name drives DPR/profile data, scene controller, runtime registry, and pane badge.
+- Source sync has no unhandled rejection, does not corrupt Svelte, and targets only the intended scene.
+- Scene and profile isolation are proven with safe fixtures.
+- Manual verification against the real Vite development server exercises source rewriting, cold reload into edit and playback, inactive-profile preservation, reset removal, undo/redo, and restoration of authored scene values. A new automated source-mutating e2e test is explicitly not required.
+- Existing unit/e2e/build behavior remains green.
+- `AGENTS.md` accurately describes the final authoritative flow and removes claims based on the broken intermediate design.
 - Re-check every acceptance criterion before finalizing.
 
-## Tests to create and run
+## Tests to add or correct
 
-Add focused unit tests for:
+- Correct the transaction tests to call the built transaction's real `write` for commit/undo/redo values and assert both `controls.profileSettings` and `controls.settings` after each step.
+- Add unit coverage for defensive copies, key-safe nested typing/normalization, inactive-profile preservation, one-time profile propagation, and baseline reset.
+- Add a declarative check that every authored scene contains the direct two-parent literal and no `settings={sparkControls.settings}` or duplicate profile override initializer.
+- Perform and document manual live verification through the real pane/Vite RPC. Inspect the rewritten source, cold-reload edit and playback, inspect effective controller/renderer state, cover both profiles, exercise undo/redo and reset-to-baseline, watch browser/Vite errors, and restore authored source values before finalizing. A new automated source-sync e2e test is not needed.
+- Run and report:
+  - `npm run check`
+  - `npm run lint`
+  - `npm run test:unit`
+  - `npm run test:e2e`
+  - `npm run build`
+  - `git diff --check`
 
-- desktop/mobile detection and explicit profile name;
-- construction of complete 22-field global baselines;
-- merging baseline plus partial scene overrides;
-- minimal diff generation, including removal when reset to baseline;
-- false, null, and coupled-field diff behavior;
-- active-profile isolation and preservation of the inactive profile object;
-- transaction historic/new nested override snapshots;
-- transaction guard allowance for only the exact new persisted root property, if applicable.
-
-Add a serial real-dev-server integration/e2e test that:
-
-1. starts from an isolated scene fixture containing `desktop` and `mobile` override parents;
-2. opens edit mode under desktop identity, verifies the pane label/baseline, edits via the real pane, and waits for actual source rewrite;
-3. verifies a minimal desktop delta and unchanged mobile object;
-4. resets to baseline and verifies source-key removal;
-5. repeats a representative edit under emulated mobile identity and verifies mobile values/parenting;
-6. covers boolean, nullable, coupled-invariant, undo, and redo persistence;
-7. reloads edit/playback and verifies effective runtime settings;
-8. captures page errors and relevant console/server errors;
-9. proves only the intended scene fixture changed;
-10. restores all source files in reliable teardown.
-
-Run and report:
-
-- `npm run check`
-- `npm run lint`
-- `npm run test:unit`
-- the focused real source-sync integration test serially
-- `npm run test:e2e`
-- `npm run build`
-- `git diff --check`
-
-Do not claim persistence from an input/controller value alone; verify the source file and a reload.
+Trust neither source text alone nor live pre-reload input state; prove both source persistence and post-reload runtime application.
 
 ## Things Pi must not change
 
-- Do not persist complete effective settings per scene/profile when values equal global baselines.
-- Do not flatten desktop and mobile overrides into one object.
-- Do not infer profile independently in multiple layers with potentially divergent logic.
-- Do not use truthiness to detect overrides.
-- Do not mutate global profile baselines from scene edits.
-- Do not save scene overrides in `deviceProfile.ts`, `sceneObjects.ts`, `SparkControls.ts`, or a module singleton.
-- Do not add more profiles than `desktop` and `mobile`.
-- Do not require hierarchy selection for the Spark pane.
-- Do not patch Studio dependencies, suppress sync errors, remove transactions/history, or use private production imports.
-- Do not alter unrelated camera, router, ScrollAnimator, RAD loading, debug FPS, or Spark reload behavior.
-- Do not add production scenes only for testing.
-- Do not commit test-mutated scene values, generated build output, or unrelated changes.
+- Do not leave `profileSettings` as an undeclared/inert property on `SparkControls`.
+- Do not keep duplicate scene override objects in script and markup.
+- Do not reconstruct inactive overrides from extension-local state.
+- Do not substitute manual `controls.settings` assignment for transaction undo/redo tests.
+- Do not claim a computed-expression parser root cause without Vite-side evidence.
+- Do not flatten profile overrides, persist full baseline-equal settings, or mutate global baselines.
+- Do not add production scenes for tests.
+- Do not regress ad-hoc behavior, Spark validation/render/reload logic, ScrollAnimator source sync, routing, cameras, or the FPS widget.
+- Do not commit test-mutated scene values, generated output, private dependency patches, or unrelated changes.
 
 ## Expected completion report
 
 Write `.codex-handoff/status.md` with:
 
-1. Live reproduction and concrete original root cause, including sync metadata and Vite-side evidence.
-2. Final profile/baseline/override architecture and why it avoids competing sources of truth.
-3. Exact persisted `<T>` shape from each authored scene.
-4. Changed files and purpose.
-5. Active-profile UI and device-emulation behavior.
-6. Evidence for minimal deltas, reset removal, profile isolation, scene isolation, typing, coupled invariants, undo/redo, HMR/reload, playback/edit equality, and capacity reload.
-7. Tests added and exact command results.
+1. Response to every verified defect above and the concrete correction.
+2. Honest root-cause evidence for the original rejection, distinguishing observation from inference.
+3. Final authoritative data-flow description from detected profile and scene literal through controller, pane, renderer, transaction, source rewrite, reload, undo, and redo.
+4. Exact authored scene literal(s).
+5. Changed files and purpose.
+6. Unit/e2e and manual live evidence for desktop/mobile cold reload, playback/edit equality, inactive-profile preservation, minimal reset, actual transaction write/undo/redo, scene isolation, and source cleanup.
+7. Exact test commands/results.
 8. Item-by-item acceptance checklist.
-9. Known limitations, including that device-profile switching requires reload.
+9. Known limitations.
 10. Final pushed commit hash.
 
-Update `AGENTS.md` with concise current architecture and source references, not a chronological implementation log.
+Update `AGENTS.md` with concise current architecture and source/test references, removing inaccurate intermediate claims.
 
-Always write `.codex-handoff/status.md` as the last action before pushing. Re-check every acceptance criterion immediately before writing it. After writing the report and pushing all intended implementation, tests, documentation, and report changes to the current branch, do not perform further verification or modification.
+Always write `.codex-handoff/status.md` as the final action before pushing. Immediately beforehand, re-check every acceptance criterion. After writing the report and pushing all intended code, tests, documentation, and report changes to the current branch, perform no further verification or modification.
