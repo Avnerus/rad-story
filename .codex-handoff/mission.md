@@ -1,102 +1,139 @@
-# Mission: opt-in stats.js FPS widget for scene routes
+# Mission: fix Spark Controls Studio source sync and make settings scene-owned
 
 ## Objective
 
-Add an opt-in FPS display for file-backed scenes. When either `/scene/{name}?debug=true` (playback) or `/scene/{name}/edit?debug=true` (Studio editor) runs, show the stats.js FPS widget fixed at the top of the viewport. Ordinary scene URLs must remain unchanged and show no widget.
+Investigate and fix the blocking Spark Controls persistence failure in the real Studio editor. Editing a Spark setting currently changes the live controller, but the asynchronous Studio source-sync step rejects in the browser with:
 
-This feature is scoped to file-backed scene routes in both modes. Do not enable it on the landing page, not-found page, or ad-hoc `?url=...` viewer unless an existing project convention makes that necessary and the completion report explains why.
+```text
+TransactionQueue.svelte.js:202 Uncaught (in promise) {}
+doSync @ TransactionQueue.svelte.js:202
+await in doSync
+```
+
+The fix must make Spark setting edits persist successfully into the currently edited scene's `.svelte` source file, with no unhandled console error. Each discoverable scene component must own a complete, explicit Spark settings snapshot so different scenes can retain different values and playback uses that scene's saved settings.
+
+## Preliminary findings to verify, not assume
+
+- `SparkControlsExtension.svelte` mutates the active controller, builds a whole-object transaction with `propertyPath: 'settings'`, and commits with source sync enabled.
+- `baby_yoda.svelte` currently declares `<T is={sparkControls} ... settings={sparkControls.settings} />`. This is not an explicit scene-owned persisted snapshot; the value originates from `createSceneObjects(profile)`.
+- `createSceneObjects(profile)` currently seeds only the profile-specific subset of Spark fields, while `SparkControls` supplies the remaining defaults.
+- The existing preview/stub e2e suite verifies live controller changes and view/edit equality, but it does not exercise the real Vite dev-server RPC that rewrites source files. Some tests explicitly expect source sync to be unavailable. This likely allowed the failure to escape.
+- Threlte Studio `buildTransaction()` derives sync metadata from `object.userData.threlteStudio`, and the Vite plugin rewrites the `<T>` attribute named by the transaction. Capture the actual built transaction metadata and Vite server-side rejection before choosing a fix.
+- The browser's rejected `{}` is not a sufficient root cause. Reproduce against `npm run dev`, inspect the dev-server error/log and the targeted source metadata, and document the concrete failure mechanism.
 
 ## Files likely involved
 
-- `src/App.svelte` — derive the debug flag from `window.location.search`, keep it correct during route/popstate changes, and conditionally mount the widget only for a resolved scene.
-- A small new component under `src/lib/components/` (for example `StatsWidget.svelte`) — own the stats.js instance, animation-frame updates, DOM placement, and teardown.
-- `package.json` and `package-lock.json` — add `stats.js` and TypeScript declarations if the package requires separate types.
-- `tests/e2e/playback-edit.spec.ts` or another narrowly relevant scene-route spec — verify both playback and edit behavior.
-- Unit tests for any extracted pure query parser/helper, if one is introduced.
-- `AGENTS.md` — concise current documentation of the debug query option and source references.
-
-Note: `package-lock.json` was already modified before this mission was created. Preserve legitimate existing work and integrate the dependency change carefully; do not discard unrelated lockfile edits.
+- `src/lib/studio/spark-controls/SparkControlsExtension.svelte`
+- `src/lib/studio/spark-controls/sparkSettingsTransaction.ts`
+- `src/lib/studio/scroll-animator/transactionGuard.ts` only if its whitelist changes are truly required
+- `src/lib/scenes/baby_yoda.svelte` and every other discoverable scene `.svelte` file present when implementing
+- `src/lib/scenes/sceneObjects.ts` if construction must change to support explicit scene-owned settings without duplicated authority
+- `src/lib/spark/SparkControls.ts` only if a small typed serialization/snapshot helper is needed
+- Focused unit tests for transaction construction/serialization
+- A real dev-server source-sync integration/e2e test, not only the current preview/stub suite
+- `AGENTS.md`
 
 ## Constraints
 
-- Treat the flag as opt-in: enable only when the query parameter's value is exactly `true` (`?debug=true`). `?debug=false`, a missing/empty value, and unrelated query parameters must not enable it.
-- Query parsing must not alter the existing pathname route grammar or scene registry behavior. Preserve other query parameters.
-- The widget must work in both scene playback and scene edit mode, including direct page loads.
-- The widget must be fixed at the top of the viewport and remain visible above the WebGL canvas and Studio overlays. Use an intentional z-index and avoid changing surrounding layout or scroll measurements.
-- Show the FPS panel by default. It is acceptable for the standard stats.js panel-click behavior to remain available.
-- Integrate with Svelte lifecycle correctly: instantiate only in the browser, run one update loop per mounted widget, cancel its animation frame, and remove its DOM node on unmount. Route transitions/remounts must not leak or duplicate widgets.
-- Ensure debug state is recomputed when the app handles history navigation (`popstate`), rather than being a one-time immutable read if that would leave stale UI.
-- Prefer a small isolated component over embedding imperative widget lifecycle code throughout `App.svelte`.
-- Keep the implementation typed; do not add broad `any`, `@ts-ignore`, or private framework imports.
-- Do not use the existing hidden camera/debug diagnostics as the visual FPS widget; use the `stats.js` package requested.
-- Preserve all current scene rendering, loading, editor/playback separation, headers, URL-prefill behavior, and scroll animation behavior.
-- Avoid unrelated refactors or formatting churn.
+- Reproduce the bug live in edit mode before implementing. Record the edited field, built sync metadata (`moduleId`, `componentIndex`, `attributeName`), browser error, and relevant Vite server error in the completion report.
+- Use supported public Threlte Studio transaction APIs. Do not patch `node_modules`, import Studio private internals into production, swallow `doSync` rejections, or merely suppress the console error.
+- Preserve live application of a valid edit, validation/clamping, coupled invariants, undo/redo snapshots, active-controller selection independence, and settings-change subscriptions.
+- Preserve the pre-mutation history invariant: `historicValue` is the complete snapshot before invoking the synchronous setter; `value` is the complete validated snapshot afterward.
+- Source sync must target the active scene component and its Spark `<T>` declaration, never a shared helper/default file or a different scene.
+- Each discoverable scene file must contain its own complete persisted values for all 22 `SparkSettings` fields. Do not leave `settings={sparkControls.settings}` as the scene's supposed persisted source of truth, and do not put one shared mutable settings object in `sceneObjects.ts`.
+- Prefer a typed explicit object literal directly on the scene's Spark `<T>` node if that is what Studio can reliably rewrite. If a different source shape is required, prove that Studio rewrites the scene-local declaration deterministically and explain it.
+- Avoid two competing sources of truth. Construction may use safe temporary defaults, but after declarative mounting the scene file's persisted settings must govern both edit and playback behavior.
+- Saved settings must survive HMR/remount and a full reload, and the same scene must use them in `/scene/{name}` playback.
+- Multiple scenes must be independent: editing scene A must not change scene B's source or runtime settings. There is currently one discoverable authored scene, so add focused fixtures/tests or another non-production fixture as needed to prove isolation without adding an unwanted production scene.
+- Preserve exact numeric/boolean/null types. In particular, `lodSplatCount: null` must round-trip as `null`; do not stringify numbers or booleans.
+- Persistence must work for representative numeric, boolean, nullable-number, and coupled-invariant edits. `maxPagedSplats` must continue its controlled renderer/mesh reload behavior.
+- Do not add arbitrary delays or rely on HMR timing races.
+- A source-sync failure must not corrupt/truncate the scene file. Keep integration tests isolated and restore any fixture/source mutation in reliable cleanup, including on failure.
+- Keep edits narrowly scoped and avoid unrelated formatting churn.
 
-Critical lifecycle shape, if useful (adapt to Svelte 5/project conventions rather than copying blindly):
+Critical desired scene ownership shape (illustrative field values only; use the correct complete settings for each scene):
 
-```ts
-onMount(() => {
-  const stats = new Stats()
-  stats.showPanel(0) // FPS
-  // Attach/mark/style stats.dom, then update it from requestAnimationFrame.
-  return () => {
-    cancelAnimationFrame(frameId)
-    stats.dom.remove()
-  }
-})
+```svelte
+<T
+  is={sparkControls}
+  name="Spark"
+  settings={{
+    lodSplatScale: 1,
+    // ...all remaining SparkSettings fields, including booleans and null...
+  }}
+/>
 ```
+
+Do not mechanically adopt this example until the live reproduction confirms the Studio parser/source-sync behavior.
 
 ## Acceptance criteria
 
-- Visiting `/scene/baby_yoda?debug=true` displays exactly one stats.js FPS widget fixed at the top of the viewport.
-- Visiting `/scene/baby_yoda/edit?debug=true` displays exactly one stats.js FPS widget fixed at the top of the viewport and above the Studio UI/canvas.
-- The widget is visibly the FPS panel on initial display.
-- `/scene/baby_yoda`, `/scene/baby_yoda/edit`, `?debug=false`, `?debug=`, and unrelated query strings do not display the widget.
-- Landing, not-found, and ad-hoc viewer flows do not gain the widget from this scene-only feature.
-- History/route transitions do not leave a stale widget or create duplicates; query-derived state reflects the current browser URL when routing is re-evaluated.
-- Mount/unmount cleanup cancels the widget's RAF loop and removes its DOM element.
-- Existing behavior and tests continue to pass.
-- New automated tests cover positive behavior in both playback and edit modes and representative negative behavior. Tests should use a stable app-owned selector/test identifier rather than depending solely on undocumented stats.js DOM internals.
-- `AGENTS.md` concisely documents `?debug=true`, its scope, and the main implementation/test source references.
+- Pi identifies and reports the concrete root cause behind the `doSync` rejection, including the Vite-side error rather than guessing from the browser's `{}`.
+- In `/scene/baby_yoda/edit`, changing a Spark setting through the Spark Controls pane completes source sync without an unhandled promise rejection or relevant console/server error.
+- The edit is written to `src/lib/scenes/baby_yoda.svelte`, not `sceneObjects.ts`, `SparkControls.ts`, or another scene.
+- Every discoverable scene `.svelte` component owns a complete explicit snapshot of all 22 Spark settings; there is no scene declaration using `settings={sparkControls.settings}` as persisted state.
+- Numeric, boolean, `lodSplatCount` null/number, and a coupled-invariant edit serialize as valid Svelte/TypeScript with correct types.
+- The saved scene compiles, survives HMR and full reload, and yields the saved values in both edit and playback routes.
+- Undo and redo continue to restore and source-sync the complete historic/new settings snapshots without errors.
+- Repeated edits do not target a stale controller/component after a scene remount.
+- Scene isolation is covered: persisting settings for one scene does not modify another scene's source or values.
+- Existing Spark live propagation remains intact, including ordinary shader/LOD settings and the `maxPagedSplats` recreation/reload path.
+- New automated coverage fails on the current broken behavior and exercises the real source-writing route through a Vite development server (or an equivalently faithful integration of the public Studio/Vite RPC). A preview-only or mocked transaction assertion is insufficient as the sole regression.
+- Integration tests leave the repository/fixture byte-for-byte restored even when assertions fail.
+- Existing tests continue to pass.
+- `AGENTS.md` concisely documents scene-owned Spark settings, the supported source-sync path, and source/test references.
 - Re-check every acceptance criterion immediately before finalizing.
 
-## Tests to run
+## Tests to create and run
 
-- Add focused Playwright coverage for playback and edit scene URLs with `?debug=true`.
-- Add focused negative coverage for no flag and at least `?debug=false`; cover route transition/duplicate cleanup if practical.
-- Add a unit test if query interpretation is extracted into a pure helper.
-- `npm run check`
-- `npm run lint`
-- `npm run test:unit`
-- Run the directly relevant Playwright spec(s), then `npm run test:e2e` if feasible.
-- `npm run build`
+- Add focused unit tests for transaction shape and any new pure serialization/scene-settings helper.
+- Add a dev-server integration/e2e regression that:
+  1. starts with a known scene-local settings literal;
+  2. opens the scene edit route and changes a field through the real pane;
+  3. observes no page error/console error and waits for actual source persistence;
+  4. verifies only the intended scene source changed and remains parseable;
+  5. reloads edit and playback and verifies the saved runtime value;
+  6. covers undo/redo and representative boolean/null typing;
+  7. restores the source fixture in `finally`/test teardown.
+- Add or update declarative tests that validate all discoverable scenes contain all 22 scene-owned settings fields.
+- Run `npm run check`.
+- Run `npm run lint`.
+- Run `npm run test:unit`.
+- Run the focused real source-sync integration test serially.
+- Run `npm run test:e2e`.
+- Run `npm run build`.
+- Run `git diff --check` before writing the final status report.
 
-Create new tests for the feature; do not rely only on manual inspection. Report exact commands and outcomes, including any failures that pre-date the change.
+Report exact commands and results. Do not claim persistence based only on the live input/controller value.
 
 ## Things Pi must not change
 
-- Do not change scene route syntax, registry discovery, or playback-versus-edit hosting.
-- Do not enable Studio in playback mode or alter editor extension behavior.
-- Do not alter camera, ScrollTrigger, Spark renderer/reload, or SplatMesh lifecycle code.
-- Do not change the meaning of the existing `url` query parameter.
-- Do not expose or repurpose test-only Spark/camera diagnostics in production.
-- Do not discard unrelated user changes, especially the pre-existing `package-lock.json` modification.
-- Do not add a custom FPS implementation in place of stats.js.
-- Do not commit generated build output or unrelated dependency upgrades.
+- Do not patch or vendor `@threlte/studio` as the first response; work through its supported transaction/source metadata contract unless the report proves an upstream defect and no scoped application fix is possible.
+- Do not disable source sync, set `sync: false`, catch-and-ignore the rejection, or remove history records.
+- Do not persist settings into a global singleton, `deviceProfile.ts`, `sceneObjects.ts`, or one shared configuration used by every scene.
+- Do not remove device profiling outside the minimum adjustment necessary to establish scene-local authority.
+- Do not regress ScrollAnimator source sync or broaden its transaction whitelist.
+- Do not restore hierarchy-selection dependence for the Spark pane.
+- Do not alter Spark setting defaults/validation, renderer dirty classification, foveation semantics, reload coordination, routing, camera behavior, or the new debug FPS widget unless directly required and justified.
+- Do not add a production scene solely for testing.
+- Do not leave tests with mutated authored scene files or commit transient values written during reproduction.
+- Do not modify unrelated user work or commit generated build output.
 
 ## Expected completion report
 
-Write `.codex-handoff/status.md` with:
+Write `.codex-handoff/status.md` containing:
 
-1. Summary of the implemented user-visible behavior.
-2. Changed files and the purpose of each.
-3. Exact debug-query semantics and widget lifecycle/cleanup design.
-4. Tests added or changed.
-5. Exact verification commands and pass/fail results.
-6. Acceptance-criteria checklist, item by item.
-7. Any known limitations, assumptions, or unrelated pre-existing working-tree changes preserved.
-8. Commit hash pushed to the current branch.
+1. Live reproduction steps and evidence, including browser and Vite-side errors plus built sync metadata.
+2. Concrete root cause.
+3. Fix design and why it follows Studio's supported public contract.
+4. Changed files and purpose.
+5. Per-scene ownership design and a list of every scene updated.
+6. Evidence for numeric, boolean, nullable, coupled-invariant, undo, redo, HMR/reload, playback, remount, and scene-isolation behavior.
+7. Tests added, exact commands, and exact results.
+8. Item-by-item acceptance-criteria checklist.
+9. Known limitations or upstream constraints.
+10. Final pushed commit hash.
 
-Update `AGENTS.md` with concise, up-to-date feature information and source references; it does not need a full implementation log.
+Update `AGENTS.md` with concise, up-to-date feature information and source references. It should help a fresh agent understand the scene-owned settings and persistence path without becoming an implementation diary.
 
-Always write `status.md` as the final action before pushing. After writing the report and pushing the implementation, do not perform any further verification or modification. Re-check that every acceptance-criteria item is met before finalizing the mission, then push all intended implementation, tests, documentation, and the final report to the current branch.
+Always write `.codex-handoff/status.md` as the final action before pushing. Before writing it, re-check every acceptance criterion. After writing the report and pushing all intended implementation, tests, and documentation to the current branch, do not perform further verification or modification.
