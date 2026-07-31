@@ -89,11 +89,12 @@ const SPARK_CONTROL_KEYS = new Set([
 
 /**
  * Check whether a transaction's attribute name is a whitelisted SparkControls setting.
- * Allows the root `settings` attribute (source-synced whole object) and individual
- * field names. Blocks descendants like `settings.lodSplatScale`.
+ * Allows `profileSettings` (profile-aware persisted overrides), the root `settings`
+ * attribute (legacy source-synced whole object), and individual field names.
+ * Blocks descendants like `settings.lodSplatScale`.
  */
 function isSparkControlAttribute(attributeName: string): boolean {
-  return attributeName === 'settings' || SPARK_CONTROL_KEYS.has(attributeName)
+  return attributeName === 'profileSettings' || attributeName === 'settings' || SPARK_CONTROL_KEYS.has(attributeName)
 }
 
 /**

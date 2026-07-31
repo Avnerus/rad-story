@@ -2,7 +2,8 @@
   import { T } from '@threlte/core'
   import { untrack } from 'svelte'
   import type { DeviceProfile } from '$lib/types'
-  import { createSceneObjects } from './sceneObjects'
+  import { detectProfileName } from '$lib/spark/deviceProfile'
+  import { createSceneObjects, DEFAULT_PROFILE_SETTINGS, type ProfileSettings } from './sceneObjects'
   import SceneRuntime from '$lib/components/SceneRuntime.svelte'
 
   interface Props {
@@ -14,10 +15,19 @@
 
   const RAD_URL = 'https://avner.us/baby_yoda-lod.rad'
 
+  // Scene-local profile overrides — persisted via source sync on the <T> attribute.
+  // Both `desktop` and `mobile` parent keys must always be present.
+  // Child objects contain only fields that differ from the global baseline.
+  let profileSettings: ProfileSettings = $state({ ...DEFAULT_PROFILE_SETTINGS })
+
   // untrack() explicitly captures the initial profile value — scene objects
   // are created once at startup and profile is immutable after that
   const { camera, cameraTarget, cameraAnimator, targetAnimator, sparkControls, splatWrapper } =
-    createSceneObjects(untrack(() => profile))
+    createSceneObjects(
+      untrack(() => profile),
+      detectProfileName(),
+      untrack(() => profileSettings),
+    )
 </script>
 
 <SceneRuntime
@@ -28,6 +38,8 @@
   {splatWrapper}
   appCamera={camera}
   {cameraTarget}
+  profileSettings={profileSettings}
+  onProfileSettingsChange={(newSettings) => { profileSettings = newSettings }}
 >
   <T
     is={cameraAnimator}
@@ -51,7 +63,7 @@
     <T is={cameraTarget} name="CameraTarget" />
   </T>
 
-  <T is={sparkControls} name="Spark" settings={sparkControls.settings} />
+  <T is={sparkControls} name="Spark" profileSettings={profileSettings} />
 
   <T is={splatWrapper} name="SplatWrapper" position={[0, 0, 0]} rotation={[0, 0, 0]} scale={[1, 1, 1]} />
 </SceneRuntime>

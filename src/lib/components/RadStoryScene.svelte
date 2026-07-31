@@ -49,7 +49,7 @@
     <T is={cameraTarget} name="CameraTarget" />
   </T>
 
-  <T is={sparkControls} name="Spark" settings={sparkControls.settings} />
+  <T is={sparkControls} name="Spark" />
 
   <T is={splatWrapper} name="SplatWrapper" />
 </SceneRuntime>

@@ -9,6 +9,7 @@
   import { activeSparkControlsRuntime } from '$lib/studio/spark-controls/activeSparkControlsRuntime'
   import type { DeviceProfile } from '$lib/types'
   import type { SparkControls } from '$lib/spark/SparkControls'
+  import type { ProfileSettings } from '$lib/scenes/sceneObjects'
   import SparkStudioBridge from './SparkStudioBridge.svelte'
   import SparkSplats from './SparkSplats.svelte'
 
@@ -24,10 +25,17 @@
     appCamera: PerspectiveCamera
     /** The CameraTarget Object3D — always used for look-at and debug. */
     cameraTarget: Object3D
+    /** Scene-local profile overrides (file-backed scenes only). Used by scene file for <T> attribute. */
+    profileSettings?: ProfileSettings | null
+    /** Callback when profileSettings need to be persisted (source sync writes this). Used by scene file. */
+    onProfileSettingsChange?: (settings: ProfileSettings) => void
     children?: Snippet
   }
 
-  let { url, profile, onReady, sparkControls = null, splatWrapper, appCamera, cameraTarget, children }: Props = $props()
+  // profileSettings and onProfileSettingsChange are pass-through props used by the scene file
+  // for the <T> attribute and state management — not consumed inside SceneRuntime itself
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  let { url, profile, onReady, sparkControls = null, splatWrapper, appCamera, cameraTarget, profileSettings = null, onProfileSettingsChange, children }: Props = $props()
 
   // Camera debug state for e2e tests (world-space)
   let cameraProgress = $state(0)
@@ -116,7 +124,8 @@
 
     // Register SparkControls with the active-controller runtime
     if (sparkControls) {
-      detachSparkControls = activeSparkControlsRuntime.attach(sparkControls)
+      const detectedProfileName = profile.isMobile ? 'mobile' : 'desktop'
+      detachSparkControls = activeSparkControlsRuntime.attach(sparkControls, detectedProfileName)
     }
 
     // Stub-only: expose scene UUID, app camera UUID, and register SparkControls

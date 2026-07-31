@@ -14,7 +14,9 @@
 import { PerspectiveCamera, Object3D } from 'three'
 import { ScrollAnimator } from '$lib/spark/ScrollAnimator'
 import { SparkControls } from '$lib/spark/SparkControls'
-import type { DeviceProfile } from '$lib/types'
+import type { DeviceProfile, DeviceProfileName } from '$lib/types'
+import type { SparkSettings } from '$lib/spark/SparkControls'
+import { computeEffectiveSettings } from '$lib/spark/deviceProfile'
 
 /**
  * Objects created for a scene. The scene file passes these to literal
@@ -37,15 +39,39 @@ export interface SceneObjects {
 }
 
 /**
+ * Scene-local profile overrides as persisted in the `<T>` attribute.
+ * Both `desktop` and `mobile` parent keys must be present, even if empty.
+ * Child objects contain only fields that differ from the global baseline.
+ * Uses own-property presence (not truthiness) to distinguish "no override"
+ * from valid falsey values like `false`, `0`, or `null`.
+ */
+export type ProfileSettings = {
+  desktop: Record<string, SparkSettings[keyof SparkSettings]>
+  mobile: Record<string, SparkSettings[keyof SparkSettings]>
+}
+
+/**
+ * Default profile settings: empty overrides for both profiles.
+ */
+export const DEFAULT_PROFILE_SETTINGS: ProfileSettings = {
+  desktop: {},
+  mobile: {},
+}
+
+/**
  * Create a standard set of scene objects for a scroll-based splat scene.
  *
  * Keyframes, settings, and frustum opt-in are authored exclusively in the
  * `<T>` attributes of the scene file. This function creates empty defaults.
  *
- * @param profile - Device profile for SparkControls seed values.
+ * @param profile - Device profile for SparkControls seed values (legacy, used only for initial renderer construction).
+ * @param profileName - Active device profile name for computing effective settings from overrides.
+ * @param profileSettings - Scene-local profile overrides from the `<T>` attribute.
  */
 export function createSceneObjects(
   profile: DeviceProfile,
+  profileName: DeviceProfileName = 'desktop',
+  profileSettings: ProfileSettings = DEFAULT_PROFILE_SETTINGS,
 ): SceneObjects {
   const camera = new PerspectiveCamera(60, 1, 0.1, 10_000)
 
@@ -58,19 +84,10 @@ export function createSceneObjects(
   const targetAnimator = new ScrollAnimator()
   targetAnimator.name = 'Camera Target ScrollAnimator'
 
-  // SparkControls seeded from device profile
-  const sparkInitial: Record<string, unknown> = {
-    lodSplatScale: profile.sparkRenderer.lodSplatScale,
-    lodRenderScale: profile.sparkRenderer.lodRenderScale,
-    maxStdDev: profile.sparkRenderer.maxStdDev,
-    maxPagedSplats: profile.sparkRenderer.maxPagedSplats,
-    coneFov0: profile.sparkRenderer.coneFov0,
-    coneFov: profile.sparkRenderer.coneFov,
-    coneFoveate: profile.sparkRenderer.coneFoveate,
-    behindFoveate: profile.sparkRenderer.behindFoveate,
-  }
+  // Compute effective settings: global baseline + scene overrides for active profile
+  const effectiveSettings = computeEffectiveSettings(profileName, profileSettings)
 
-  const sparkControls = new SparkControls(sparkInitial)
+  const sparkControls = new SparkControls(effectiveSettings)
 
   const splatWrapper = new Object3D()
   splatWrapper.name = 'SplatWrapper'

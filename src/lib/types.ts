@@ -1,3 +1,6 @@
+/** Named device profile identifier */
+export type DeviceProfileName = 'desktop' | 'mobile'
+
 /** Result type for RAD URL validation */
 export type ValidationResult = SuccessResult | ErrorResult
 

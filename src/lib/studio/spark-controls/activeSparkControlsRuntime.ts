@@ -9,7 +9,7 @@
  * an older scene's destroy cannot clear a newer scene's controller.
  *
  * Usage:
- *   const detach = activeSparkControlsRuntime.attach(sparkControls)
+ *   const detach = activeSparkControlsRuntime.attach(sparkControls, profileName)
  *   onDestroy(detach)
  *
  * The SparkControlsExtension subscribes to `activeController` and edits
@@ -17,6 +17,7 @@
  * hierarchy.
  */
 import type { SparkControls } from '$lib/spark/SparkControls'
+import type { DeviceProfileName } from '$lib/types'
 
 /**
  * Callback type for active controller changes.
@@ -35,6 +36,7 @@ export type ActiveControllerChangeListener = (controls: SparkControls | null) =>
  */
 export class ActiveSparkControlsRuntime {
   private _active: SparkControls | null = null
+  private _profileName: DeviceProfileName = 'desktop'
   private _generation = 0
   private _listeners: ActiveControllerChangeListener[] = []
 
@@ -47,6 +49,13 @@ export class ActiveSparkControlsRuntime {
   }
 
   /**
+   * The active device profile name. Defaults to 'desktop'.
+   */
+  get profileName(): DeviceProfileName {
+    return this._profileName
+  }
+
+  /**
    * Attach a SparkControls instance as the active controller.
    *
    * Returns a detach function that clears the registration only if
@@ -55,10 +64,11 @@ export class ActiveSparkControlsRuntime {
    * If a controller was already active, it is replaced and subscribers
    * are notified.
    */
-  attach(controls: SparkControls): () => void {
+  attach(controls: SparkControls, profileName: DeviceProfileName = 'desktop'): () => void {
     const gen = ++this._generation
     const previous = this._active
     this._active = controls
+    this._profileName = profileName
 
     if (previous !== controls) {
       for (const fn of this._listeners) fn(controls)

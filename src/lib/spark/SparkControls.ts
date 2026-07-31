@@ -104,7 +104,7 @@ interface FieldDef {
   default: number | boolean | null
 }
 
-const FIELD_DEFS: Record<keyof SparkSettings, FieldDef> = {
+export const FIELD_DEFS: Record<keyof SparkSettings, FieldDef> = {
   lodSplatScale:       { min: 0.01, max: 10,   default: 1 },
   lodRenderScale:      { min: 0.1,  max: 10,   default: 1 },
   maxStdDev:           { min: 1,    max: 100,  default: 8 },
