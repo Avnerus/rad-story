@@ -10,6 +10,7 @@
   import type { DeviceProfile } from '$lib/types'
   import { parseRoute, navigateToLanding, type RouteMatch } from '$lib/router'
   import RadStoryScene from '$lib/components/RadStoryScene.svelte'
+  import StatsWidget from '$lib/components/StatsWidget.svelte'
   import type { ComponentType } from 'svelte'
 
   const SAMPLE_URL = 'https://storage.googleapis.com/forge-dev-public/asundqui/rad/260217/cozy-spaceship_2-lod.rad'
@@ -28,6 +29,9 @@
   let SceneComponent = $state<ComponentType | null>(null)
   let sceneMode = $state<'view' | 'edit' | null>(null)
   let attemptedSceneName = $state('')
+
+  // Debug flag derived from query string
+  let debugMode = $state(false)
 
   // Check for URL in query string on mount
   onMount(() => {
@@ -50,6 +54,10 @@
   function handleRouteChange(): void {
     const match = parseRoute()
     sceneMatch = match
+
+    // Recompute debug flag from current query string
+    const params = new URLSearchParams(window.location.search)
+    debugMode = params.get('debug') === 'true'
 
     switch (match.kind) {
       case 'scene':
@@ -146,6 +154,9 @@
   </div>
 {:else if appState === 'scene' && SceneComponent}
   <!-- Scene route: render the scene component inside Canvas. Studio only in edit mode. -->
+  {#if debugMode}
+    <StatsWidget />
+  {/if}
   {#if sceneMode === 'view'}
     <div class="viewer-header">
       <button class="back-btn" onclick={handleGoHome} aria-label="Go back">← Home</button>

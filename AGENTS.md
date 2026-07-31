@@ -38,6 +38,8 @@ Supports three viewing modes:
 - `src/lib/spark/deviceProfile.ts` — Mobile/iOS detection + Spark performance profile. Cone angles are full-width **degrees** (Spark 2.1 API: default `coneFov0: 90`, `coneFov: 120`).
 - `src/lib/spark/radUrl.ts` — RAD URL validation with typed results.
 - `src/lib/types.ts` — Shared TypeScript types.
+- `src/lib/types/stats.d.ts` — TypeScript declarations for `stats.js` (no bundled types).
+- `src/lib/components/StatsWidget.svelte` — Isolated stats.js FPS widget component. Appends its DOM node to `document.body`, runs a single RAF loop, and cleans up on unmount. Mounted conditionally in `App.svelte` when `?debug=true` on a scene route.
 
 ## ScrollAnimator Model
 
@@ -256,6 +258,19 @@ Keyframe mutations use `transactions.buildTransaction()` which derives source me
 Cleanup is safe and idempotent: `detachMesh()` checks that the mesh is actually in the wrapper before removing it, and `dispose()` is idempotent. An older generation cannot detach the newest mesh because it checks `coordinator?.generation === generation && mesh === newMesh`.
 
 **Stub diagnostics:** `__spark_stub_diagnostics` exposes `wrapper`, `drivingPagerId`, `drivingGeneration`, `meshes`, `pagers`, `renderers`, and `sparkControlsDisposals` (disposal counts keyed by stub-assigned ID) for e2e assertions. `__stubActivationGate` (boolean on `window`) withholds pager assignment in `SparkRenderer.update()` for deterministic progress-visibility tests. `__stub_scene_uuid` and `__stub_app_camera_uuid` are exposed by SceneRuntime for exact identity assertions. `__spark_stub_register_controls` and `__spark_stub_record_controls_disposal` track SparkControls lifecycle.
+
+## Debug FPS Widget (`?debug=true`)
+
+Opt-in stats.js FPS display for file-backed scene routes only.
+
+- **Activation:** Append `?debug=true` to a scene URL, e.g. `/scene/baby_yoda?debug=true` (playback) or `/scene/baby_yoda/edit?debug=true` (Studio editor).
+- **Semantics:** Only the exact value `true` enables the widget. `?debug=false`, `?debug=`, `?debug=yes`, and missing `debug` parameter all leave the widget hidden.
+- **Scope:** Scene routes only. Landing, not-found, and ad-hoc viewer flows do not show the widget.
+- **Positioning:** Fixed at top-left of viewport (`z-index: 99999`), above WebGL canvas and Studio overlays. Styled via `.stats-widget` in `app.css`.
+- **Lifecycle:** `StatsWidget.svelte` appends its DOM to `document.body`, runs one RAF loop calling `stats.begin()/end()` per frame, and cancels the loop + removes the DOM node on unmount. Route transitions clean up correctly — no stale widgets or duplicates.
+- **Query reactivity:** `App.svelte` recomputes `debugMode` from `window.location.search` on every `popstate`/route change, so the widget tracks the current URL.
+- **Source files:** `src/lib/components/StatsWidget.svelte`, `src/lib/types/stats.d.ts`, `src/App.svelte` (integration), `src/app.css` (`.stats-widget` styles).
+- **Tests:** `tests/e2e/debug-fps-widget.spec.ts` — positive (playback + edit), negative (no flag, `?debug=false`, landing, not-found), and route-transition cleanup (navigate away, remounts, reload).
 
 ## Removed Features
 

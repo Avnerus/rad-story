@@ -39,6 +39,7 @@
     "@threlte/extras": "^9.21.0",
     "@threlte/studio": "^0.4.3",
     "gsap": "^3.12.7",
+    "stats.js": "^0.17.0",
     "three": "^0.185.0"
   },
   "allowScripts": {
