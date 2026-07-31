@@ -72,6 +72,9 @@
   // Reload status subscription — clean up when active controller changes or extension is destroyed
   let unsubscribeReloadStatus: (() => void) | null = null
 
+  // Settings-change subscription — keeps pane in sync with external edits (undo/redo, Inspector, programmatic)
+  let unsubscribeSettings: (() => void) | null = null
+
   /** Subscribe to reload status from the given SparkControls. */
   function subscribeToReloadStatus(controls: SparkControls): void {
     unsubscribeReloadStatus?.()
@@ -91,6 +94,23 @@
     unsubscribeReloadStatus = null
     uiState.reloading = false
     uiState.reloadError = ''
+  }
+
+  /** Subscribe to settings changes from the given SparkControls. */
+  function subscribeToSettings(controls: SparkControls): void {
+    unsubscribeSettings?.()
+    unsubscribeSettings = controls.onChange(() => {
+      // Stale-controller guard: ignore if a newer controller has taken over
+      if (uiState.controls !== controls) return
+      uiState.settings = controls.settings
+      refreshDrafts(controls)
+    })
+  }
+
+  /** Unsubscribe from settings changes. */
+  function unsubscribeFromSettings(): void {
+    unsubscribeSettings?.()
+    unsubscribeSettings = null
   }
 
   /** Initialize drafts from the current settings. */
@@ -126,6 +146,7 @@
       uiState.controls = current
       uiState.settings = current.settings
       subscribeToReloadStatus(current)
+      subscribeToSettings(current)
       initDrafts(current.settings)
     } else {
       uiState.controls = null
@@ -134,13 +155,18 @@
 
     unsubscribeActive = activeSparkControlsRuntime.onChange((controls) => {
       if (controls) {
+        // Unsubscribe from old controller before binding to new one
+        unsubscribeFromSettings()
+        unsubscribeFromReloadStatus()
         uiState.controls = controls
         uiState.settings = controls.settings
         subscribeToReloadStatus(controls)
+        subscribeToSettings(controls)
         initDrafts(controls.settings)
       } else {
         uiState.controls = null
         uiState.settings = {} as SparkSettings
+        unsubscribeFromSettings()
         unsubscribeFromReloadStatus()
       }
     })
@@ -149,6 +175,7 @@
   onDestroy(() => {
     unsubscribeGuard?.()
     unsubscribeActive?.()
+    unsubscribeFromSettings()
     unsubscribeFromReloadStatus()
   })
 

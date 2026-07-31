@@ -659,3 +659,69 @@ test.describe('Spark Controls pane remount safety', () => {
     await expect(page.getByTestId('spark-controls-panel')).toBeVisible()
   })
 })
+
+// ---------------------------------------------------------------------------
+// Spark Controls pane: external settings change synchronization
+// ---------------------------------------------------------------------------
+
+test.describe('Spark Controls pane external settings sync', () => {
+  test('pane values update when controller settings change programmatically', async ({ page }) => {
+    await page.goto('/scene/baby_yoda/edit')
+    await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
+
+    // Open Spark Controls pane
+    await page.getByRole('button', { name: 'Spark Controls' }).click()
+    await page.waitForTimeout(500)
+    await expect(page.getByTestId('spark-controls-panel')).toBeVisible()
+
+    // Get initial value from the pane's input
+    const initialDraft = await page.locator('input#spark-lodSplatScale').inputValue()
+
+    // Change the controller's settings programmatically via evaluate
+    await page.evaluate(() => {
+      const d = (window as unknown as Record<string, unknown>).__spark_stub_diagnostics as {
+        sparkControlsSettings: Record<string, Record<string, unknown>>
+        sparkControlsDisposals: Record<string, number>
+      }
+      // Find the active (non-disposed) controller and change it
+      const id = Object.keys(d.sparkControlsDisposals).find(id => d.sparkControlsDisposals[id] === 0)
+      if (!id) return
+      // We need to access the actual controller, not just the settings snapshot
+      // Use the stub's controls reference
+      const controls = (window as unknown as Record<string, unknown>).__spark_stub_active_controls
+      if (controls && 'lodSplatScale' in controls) {
+        (controls as Record<string, unknown>).lodSplatScale = 5
+      }
+    })
+    await page.waitForTimeout(500)
+
+    // The pane's input should reflect the new value
+    const newDraft = await page.locator('input#spark-lodSplatScale').inputValue()
+    expect(newDraft, 'pane draft updated after external setter').toBe('5')
+    expect(newDraft).not.toBe(initialDraft)
+  })
+
+  test('pane coupled invariant refreshes both fields after external change', async ({ page }) => {
+    await page.goto('/scene/baby_yoda/edit')
+    await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
+
+    await page.getByRole('button', { name: 'Spark Controls' }).click()
+    await page.waitForTimeout(500)
+    await expect(page.getByTestId('spark-controls-panel')).toBeVisible()
+
+    // Set coneFov0 to a value > coneFov, which should raise coneFov
+    await page.evaluate(() => {
+      const controls = (window as unknown as Record<string, unknown>).__spark_stub_active_controls
+      if (controls) {
+        (controls as Record<string, unknown>).coneFov0 = 170
+      }
+    })
+    await page.waitForTimeout(500)
+
+    // Both coneFov0 and coneFov should show 170
+    const coneFov0Draft = await page.locator('input#spark-coneFov0').inputValue()
+    const coneFovDraft = await page.locator('input#spark-coneFov').inputValue()
+    expect(coneFov0Draft, 'coneFov0 draft').toBe('170')
+    expect(coneFovDraft, 'coneFov draft raised by invariant').toBe('170')
+  })
+})

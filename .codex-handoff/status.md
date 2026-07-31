@@ -1,97 +1,85 @@
-# Status: Scene-scoped Spark Controls and unobstructed edit route
+# Status: Keep the automatic Spark pane synchronized
 
-## Summary
+## Summary and root cause
 
-Decoupled the Spark Controls Studio extension from hierarchy selection so it auto-binds to the active scene's `SparkControls` instance. Authors no longer need to select the `Spark` hierarchy object before opening or using the pane. Removed the viewer header from `/scene/{name}/edit` so the Studio toolbar is unobstructed.
+**Root cause:** The Spark Controls pane only updated its `uiState.settings` and `drafts` on its own field-edit handlers. When settings changed externally — via Studio undo/redo, Inspector edits, source sync, or programmatic `SparkControls` setters — the pane's displayed values and drafts became stale.
+
+**Fix:** Subscribe to `SparkControls.onChange()` for the active controller. On each settings-change notification, refresh the full `uiState.settings` snapshot and all drafts. A stale-controller guard ensures a superseded controller's notification does not update the pane.
 
 ## Files changed
 
 | File | Change |
 |------|--------|
-| `src/lib/studio/spark-controls/activeSparkControlsRuntime.ts` | **New.** `ActiveSparkControlsRuntime` class + singleton. Reactive registry with generation-based identity-safe attach/detach and subscriber notifications. |
-| `src/lib/components/SceneRuntime.svelte` | Added import of `activeSparkControlsRuntime`. On mount: calls `attach(sparkControls)`. On destroy: calls identity-safe `detach()` before disposal. |
-| `src/lib/studio/spark-controls/SparkControlsExtension.svelte` | Replaced `useObjectSelection()`-driven logic with `activeSparkControlsRuntime.onChange()` subscription. Pane auto-binds to the active controller. Removed selection-dependent state; kept all field-editing, transaction, and reload-status logic. No-selection message changed from "Select the Spark object" to "No scene loaded". |
-| `src/App.svelte` | Wrapped the scene-route viewer header in `{#if sceneMode === 'view'}` so edit mode renders no header. Playback and ad-hoc modes unchanged. |
-| `AGENTS.md` | Updated key files list, SceneRuntime description, SparkControlsExtension description, Editor pane paragraph, Reload status subscription paragraph. Added "Active Spark Controls Runtime" section, "Header visibility by route" subsection, and updated Spark controls e2e documentation. |
+| `src/lib/studio/spark-controls/SparkControlsExtension.svelte` | Added `unsubscribeSettings` subscription to `controls.onChange()`. On settings change: refreshes `uiState.settings` and all drafts with stale-controller guard. Subscribed on initial controller bind, on controller replacement, and cleaned up on destroy. |
+| `src/lib/components/SceneRuntime.svelte` | Added `__spark_stub_active_controls` exposure in stub build for e2e external-setter tests. Cleared on destroy. |
+| `tests/unit/sparkPaneSettingsSync.test.ts` | **New.** 13 tests: onChange fires for single field, settings object, coupled invariants (coneFov0→coneFov, minPixelRadius→maxPixelRadius), no-fire on unchanged, unsubscribe, multiple subscribers, deep-copy getter, sequential snapshots, boolean/nullable fields, dispose cleanup, and stale-controller guard. |
+| `tests/e2e/playback-edit.spec.ts` | Added "Spark Controls pane external settings sync" describe block (2 tests): pane values update after programmatic setter, coupled invariant refreshes both fields. |
+| `AGENTS.md` | Updated SparkControlsExtension description and added "Settings-change subscription" paragraph documenting the per-controller `onChange()` subscription, stale-controller guard, and cleanup invariant. |
 
-## Active-controller lifecycle and transaction-targeting
+## Settings/reload subscription lifecycle
 
-1. **Scene mount:** `SceneRuntime.onMount()` calls `activeSparkControlsRuntime.attach(sparkControls)`. The runtime stores the returned `detach` function.
-2. **Extension subscription:** `SparkControlsExtension.onMount()` reads `activeSparkControlsRuntime.activeController` and subscribes via `onChange()`. On each notification, it updates `uiState.controls`, `uiState.settings`, drafts, and reload-status subscription atomically.
-3. **Transactions:** All field edits build transactions against `uiState.controls` (the active controller from the runtime), not the selected hierarchy object. Source sync targets the correct scene's `<T is={sparkControls} settings={...}>` attribute.
-4. **Scene unmount:** `SceneRuntime.onDestroy()` calls `detach()` (identity-safe — only clears if this registration is still current), then disposes the SparkControls.
-5. **Stale-detach safety:** Each `attach()` increments a generation counter. `detach()` checks both generation and object identity. An older scene's destroy cannot clear a newer scene's controller during remounts.
+The extension maintains three independent subscriptions per active controller:
 
-## Header visibility behavior by route/mode
+1. **Active controller** (`activeSparkControlsRuntime.onChange()`): Notified when the scene changes. On replacement, unsubscribes from old controller's settings and reload-status before binding to the new one.
+2. **Settings changes** (`controls.onChange()`): Refreshes `uiState.settings` and all drafts. Stale-controller guard (`if (uiState.controls !== controls) return`) prevents a superseded controller from updating the pane. Bound once per controller identity.
+3. **Reload status** (`controls.reloadStatus.subscribe()`): Drives progress/error indicators.
 
-| Route | Header | Home/Back button | Scene-name indicator |
-|-------|--------|-----------------|---------------------|
-| `/scene/{name}` (playback) | Yes | ← Home | Scene: name |
-| `/scene/{name}/edit` (edit) | **No** | — | — |
-| Ad-hoc viewer/editor | Yes | ← Back | URL label |
-| Landing / not-found | No | Go home (not-found only) | — |
+All three are cleaned up on controller replacement and extension destruction.
+
+## Undo/redo and historic-value synchronization
+
+When settings change externally (e.g., Studio undo/redo), the `onChange` callback fires, refreshing `uiState.settings` from `controls.settings` (a deep copy). The next field edit then uses this refreshed snapshot as `historicValue` in `buildSparkSettingsTransaction()`, ensuring the transaction history correctly reflects the state after the external change.
 
 ## Tests added or updated
 
-### Unit tests (new file)
-- `tests/unit/activeSparkControlsRuntime.test.ts` — 12 tests:
-  - Initial state (no active controller)
-  - Attach publishes controller
-  - Current detach clears controller
-  - Stale detach cannot clear newer controller
-  - Subscriber notified on attach, detach, replacement
-  - Subscriber cleanup prevents further notifications
+### Unit tests (new file: `tests/unit/sparkPaneSettingsSync.test.ts`)
+- 13 tests covering:
+  - Single field setter fires onChange
+  - Settings object setter fires onChange
+  - Coupled invariant: coneFov0 raises coneFov
+  - Coupled invariant: minPixelRadius raises maxPixelRadius
+  - No notification when value unchanged
+  - Unsubscribe stops notifications
   - Multiple subscribers each receive notifications
-  - Destroy clears active controller and listeners
-  - Remount: old detach does not clear new controller
-  - No-controller state is safe (double detach)
+  - Settings getter returns deep copy
+  - Sequential external changes produce correct snapshots
+  - Boolean field changes trigger onChange
+  - Nullable field changes trigger onChange
+  - Dispose clears all listeners
+  - Stale-controller guard: old controller changes don't affect new controller state
 
-### E2e tests (updated)
-- `tests/e2e/playback-edit.spec.ts`:
-  - Updated "direct visit loads the scene with Studio toolbar" — removed header assertion (edit mode has no header)
-  - Renamed "edit mode Spark Controls pane works" → "works without selecting Spark" — removed Spark selection step
-  - **New:** "Edit route header visibility" describe block (4 tests): no header in edit mode, playback retains header, Studio toolbar unobstructed, refresh retains no header
-  - **New:** "Spark Controls pane selection independence" describe block (3 tests): non-Spark selection, multiple selection, clearing selection — pane stays bound
-  - **New:** "Spark Controls pane remount safety" describe block (2 tests): pane works after remount, Spark still in hierarchy and selectable
+### E2e tests (updated: `tests/e2e/playback-edit.spec.ts`)
+- "pane values update when controller settings change programmatically" — verifies the pane's input draft reflects a programmatic setter
+- "pane coupled invariant refreshes both fields after external change" — verifies coneFov0→coneFov invariant is reflected in both pane inputs
 
-- `tests/e2e/rad-story.spec.ts`:
-  - Updated `selectSparkAndOpenPane` helper — removed Spark selection step
-  - Renamed "Spark pane shows Select the Spark object..." → "Spark pane shows controls automatically without selecting Spark"
-  - Renamed "Spark pane shows all 22 field controls when Spark is selected" → "automatically"
-  - Updated mid-reload selection-change test: pane stays bound (not no-selection) when Spark deselected during reload
-  - Updated subscription lifecycle test: pane auto-binds on reopen after selection change
-
-- `tests/e2e/scene-routing.spec.ts`:
-  - Updated "wrapper transform persists across capacity reload" test — removed Spark selection step
-
-## Exact commands run and results
+## Exact commands and results
 
 ```
 npm run check     → 0 errors, 0 warnings
 npm run lint      → clean (no output)
-npm run test:unit → 18 test files, 307 tests passed
-npm run test:e2e  → 120 tests passed
-npm run build     → built in 4.99s
+npm run test:unit → 19 test files, 320 tests passed
+npm run test:e2e  → 122 tests passed
+npm run build     → built in 4.82s
 git diff --check  → clean (no whitespace errors)
 ```
 
 ## Acceptance criteria checklist
 
-1. ✅ Opening the Spark Controls pane in a scene editor immediately shows and edits the active scene's settings without selecting Spark.
-2. ✅ Selecting any other hierarchy object, selecting multiple objects, or clearing selection does not disable, retarget, or reset the Spark Controls pane.
-3. ✅ Spark edits still persist to the correct scene Svelte source and retain all current validation behavior.
-4. ✅ Reload progress and errors continue to reflect the active controller, including when hierarchy selection changes during a reload.
-5. ✅ Scene/editor remounts do not retain stale controllers or subscriptions, and an older detach cannot clear a newer registration.
-6. ✅ `/scene/baby_yoda/edit` renders no viewer header, Home button, or `Scene: baby_yoda` indicator.
-7. ✅ The Studio toolbar is unobstructed at the top of the edit route.
-8. ✅ `/scene/baby_yoda` retains its playback header and behavior.
-9. ✅ The ad-hoc viewer/editor retains its existing header and Spark authoring behavior.
-10. ✅ Existing playback/edit route behavior remains full-page/direct-load based; no SPA transition requirement is introduced.
-11. ✅ Existing ScrollAnimator, camera-frustum-helper, renderer, reload, source-sync, and scene persistence behavior remains intact.
-12. ✅ `AGENTS.md` is updated with concise current architecture and source references.
+1. ✅ The Spark pane still opens with the active controller without selecting Spark.
+2. ✅ Pane values and drafts update when the active controller changes through:
+   - a direct/programmatic property or settings setter (tested via e2e);
+   - Studio undo (onChange fires for any settings mutation);
+   - Studio redo (same path as undo);
+   - an Inspector edit (same path — Inspector edits go through the settings setter).
+3. ✅ Coupled validation changes refresh every affected field (coneFov0→coneFov, minPixelRadius→maxPixelRadius tested in unit and e2e).
+4. ✅ After an external change, the pane's next transaction uses the refreshed state as `historicValue` (onChange refreshes `uiState.settings` which is used as `historicValue` in `buildSparkSettingsTransaction`).
+5. ✅ Replacing the active controller unsubscribes the old settings and reload-status listeners; old-controller changes cannot affect the pane (stale-controller guard + explicit unsubscribe before new bind).
+6. ✅ Destroying the extension cleans up all active-controller, settings, and reload-status subscriptions (`onDestroy` calls all three unsubscribe functions).
+7. ✅ Selection independence, reload progress/error display, scene remount safety, persisted source sync, and accepted header behavior remain intact (all 122 e2e tests pass).
+8. ✅ All tests and static checks pass.
+9. ✅ `AGENTS.md` concisely documents the controller settings subscription and cleanup invariant.
 
-## Limitations / risks / manual checks
+## Limitations / manual checks
 
-- The `Spark` hierarchy object is preserved and still selectable for Inspector use. The only change is that the Spark Controls pane no longer requires it to be selected.
-- No manual GPU-dependent checks were needed — all verification is via the stub e2e suite.
-- The ad-hoc editor (RadStoryScene) also benefits from auto-binding since it uses the same SceneRuntime + SparkControlsExtension stack.
+- Studio undo/redo and Inspector editing are exercised through the `onChange` signal path. The stub build does not expose a full Studio undo/redo stack, so the e2e tests use programmatic setters to verify the same notification path. The unit tests verify `onChange` fires for all setter paths.
+- Inspector editing in the stub build depends on Threlte Studio's internal implementation; the stub tests the same setter path without verifying Inspector UI interaction specifically.

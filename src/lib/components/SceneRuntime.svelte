@@ -128,6 +128,8 @@
       if (sparkControls) {
         const register = (window as unknown as Record<string, unknown>).__spark_stub_register_controls
         if (typeof register === 'function') register(sparkControls)
+        // Expose the active controller for e2e external-setter tests
+        ;(window as unknown as Record<string, unknown>).__spark_stub_active_controls = sparkControls
       }
     }
 
@@ -170,6 +172,10 @@
     // Detach from active-controller runtime (identity-safe)
     detachSparkControls?.()
     detachSparkControls = null
+    // Stub-only: clear the active controls reference
+    if ((window as unknown as Record<string, unknown>).__spark_stub === true) {
+      delete (window as unknown as Record<string, unknown>).__spark_stub_active_controls
+    }
     // Dispose SparkControls on scene unmount (single owner)
     if (sparkControls) {
       // Stub-only: record disposal for e2e lifecycle assertions
