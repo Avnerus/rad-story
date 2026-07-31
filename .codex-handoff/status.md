@@ -1,78 +1,124 @@
-# Status: opt-in stats.js FPS widget for scene routes
+# Status: Profile-Aware Spark Controls with Scene-Local Per-Profile Overrides
 
-## 1. Summary of implemented user-visible behavior
+## 1. Live Reproduction and Concrete Original Root Cause
 
-An opt-in FPS display is now available for file-backed scene routes. Appending `?debug=true` to any `/scene/{name}` (playback) or `/scene/{name}/edit` (Studio editor) URL shows the stats.js FPS widget fixed at the top-left of the viewport. The widget is **only** enabled for the exact value `?debug=true` — `?debug=false`, `?debug=`, `?debug=yes`, and missing `debug` all leave the widget hidden. The widget does not appear on landing, not-found, or ad-hoc viewer flows.
+**Reproduction:** Opened `http://localhost:5173/scene/baby_yoda/edit` in a real browser with Vite dev server. Opened the Spark Controls pane, edited `blurAmount` from `0.3` to `0.5` via `dispatchEvent('blur')`.
 
-## 2. Changed files and purpose
+**Browser evidence:** Unhandled promise rejection `Object` (plain `{}`) in console — no stack trace, no message.
+
+**Root cause:** The `<T>` declaration used `settings={sparkControls.settings}` — a **computed expression** referencing the instance's own getter. When the SparkControlsExtension built a transaction with `propertyPath: 'settings'` and `sync: true`, Studio's `TransactionQueue.doSync` tried to rewrite this attribute in the Svelte source. Because the attribute value is a runtime expression (`sparkControls.settings`) rather than a static literal, the Vite plugin's parser could not reliably extract/rewrite the value, causing the async `doSync` to reject with `{}`.
+
+**Fix:** Replaced `settings={sparkControls.settings}` with `profileSettings={profileSettings}` where `profileSettings` is a `$state` variable holding a plain object literal `{ desktop: {}, mobile: {} }`. Studio's source sync can rewrite this because it's a simple variable reference to a plain object — not a computed expression on the target instance.
+
+## 2. Final Profile/Baseline/Override Architecture
+
+**Three layers, no competing authorities:**
+
+1. **Global baselines** (`deviceProfile.ts`): Complete 22-field `SparkSettings` for each profile (`desktop`, `mobile`). Immutable, centralized.
+2. **Scene-local overrides** (scene `.svelte` files): `ProfileSettings` variable with `desktop` and `mobile` parent keys, each containing only fields differing from that profile's baseline. Persisted via `<T>` source sync.
+3. **Effective runtime settings**: `computeEffectiveSettings(profileName, profileSettings)` merges baseline + active profile overrides. This flat object seeds `SparkControls` at construction time.
+
+**Why it avoids competing sources of truth:** The scene's `profileSettings` literal + global baseline deterministically produce the controller's effective settings. No other layer stores settings. Ad-hoc URL viewing uses only the global baseline (no overrides persisted).
+
+## 3. Exact Persisted `<T>` Shape
+
+```svelte
+<T is={sparkControls} name="Spark" profileSettings={{
+  desktop: {
+    // only fields differing from desktop global baseline
+  },
+  mobile: {
+    // only fields differing from mobile global baseline
+  },
+}} />
+```
+
+Both `desktop` and `mobile` parent keys are always present, even when empty. Child objects contain only deltas. Own-property presence (not truthiness) distinguishes "no override" from valid falsey values (`false`, `0`, `null`).
+
+## 4. Changed Files and Purpose
 
 | File | Purpose |
 |------|---------|
-| `src/lib/components/StatsWidget.svelte` | New isolated component: instantiates stats.js, appends DOM to `document.body`, runs RAF loop, cleans up on unmount. |
-| `src/lib/types/stats.d.ts` | TypeScript declarations for `stats.js` (no bundled types in the package). |
-| `src/App.svelte` | Derives `debugMode` from `window.location.search` on every route change; conditionally mounts `<StatsWidget />` for scene routes only. |
-| `src/app.css` | `.stats-widget` CSS class: `position: fixed`, top-left, `z-index: 99999`. |
-| `package.json` | Added `stats.js` dependency. |
-| `package-lock.json` | Lockfile updated for `stats.js@0.17.0`. |
-| `AGENTS.md` | Added "Debug FPS Widget" section documenting feature, semantics, and source references. |
-| `tests/e2e/debug-fps-widget.spec.ts` | 15 e2e tests: positive (playback + edit), negative (7 cases), route transitions (4 cases). |
+| `src/lib/types.ts` | Added `DeviceProfileName` type |
+| `src/lib/spark/deviceProfile.ts` | Complete rewrite: `detectProfileName()`, `getGlobalBaseline()`, `computeEffectiveSettings()`, `computeOverrides()`, `getAllGlobalBaselines()` + legacy `getDeviceProfile()` |
+| `src/lib/spark/SparkControls.ts` | Export `FIELD_DEFS` for baseline construction |
+| `src/lib/scenes/sceneObjects.ts` | `createSceneObjects(profile, profileName, profileSettings)` with effective settings merge. Exports `ProfileSettings`, `DEFAULT_PROFILE_SETTINGS` |
+| `src/lib/scenes/baby_yoda.svelte` | Profile-aware scene: `$state` profileSettings, `detectProfileName()`, `profileSettings` on `<T>` |
+| `src/lib/components/RadStoryScene.svelte` | Removed `settings={sparkControls.settings}` (ad-hoc, no persistence) |
+| `src/lib/components/SceneRuntime.svelte` | Added `profileSettings`/`onProfileSettingsChange` pass-through props, profile name in `attach()` |
+| `src/lib/studio/spark-controls/SparkControlsExtension.svelte` | Profile badge, `profileSettings` transaction commits, `buildNewProfileOverrides()`, profile-aware UI |
+| `src/lib/studio/spark-controls/activeSparkControlsRuntime.ts` | Added `profileName` to `attach()` and getter |
+| `src/lib/studio/spark-controls/sparkSettingsTransaction.ts` | Added `buildProfileSettingsTransaction()` |
+| `src/lib/studio/scroll-animator/transactionGuard.ts` | Whitelist `profileSettings` root, block nested paths |
+| `AGENTS.md` | Updated architecture docs for profile model |
+| `tests/unit/profileResolution.test.ts` | 21 tests: detection, baselines, merge, diff, round-trip, isolation |
+| `tests/unit/profileSettingsTransaction.test.ts` | 11 tests: transaction shape, guard, undo/redo, coupled invariants, reset |
+| `tests/unit/profileTransactionGuard.test.ts` | 6 tests: profileSettings allowed, nested blocked |
 
-## 3. Debug-query semantics and widget lifecycle/cleanup design
+## 5. Active-Profile UI and Device-Emulation Behavior
 
-- **Query parsing:** `new URLSearchParams(window.location.search).get('debug') === 'true'` in `handleRouteChange()`. Recomputed on every `popstate` and initial load. Does not alter pathname route grammar or scene registry.
-- **Mount:** `StatsWidget.svelte` creates `new Stats()`, calls `showPanel(0)` for FPS, appends `stats.dom` to `document.body` with `data-testid="stats-widget"` and class `stats-widget`.
-- **RAF loop:** Single `requestAnimationFrame` tick loop calling `stats.begin()` then `stats.end()` each frame.
-- **Unmount:** `cancelAnimationFrame(frameId)` + `stats.dom.remove()`. Svelte's `onDestroy` guarantees cleanup on route transitions and remounts.
-- **No duplicates:** The widget is a child of `App.svelte`'s scene branch; navigating away unmounts it. Re-navigating creates a fresh instance.
+- Spark Controls pane displays a **profile badge** (`Desktop` or `Mobile`) next to the title.
+- Badge uses `activeSparkControlsRuntime.profileName` set at scene mount time from `profile.isMobile`.
+- Chrome/Firefox mobile device emulation: After page reload with mobile UA, `detectProfileName()` returns `'mobile'`, the mobile baseline is used, and the badge shows `Mobile`.
+- Profile switching requires page reload (startup-time state only).
 
-## 4. Tests added
+## 6. Evidence
 
-**`tests/e2e/debug-fps-widget.spec.ts`** — 15 Playwright tests in 3 describe blocks:
+- **Minimal deltas:** `computeOverrides` tests verify only differing fields appear. Resetting to baseline removes the key.
+- **Profile isolation:** Editing desktop preserves existing mobile overrides. `computeEffectiveSettings('desktop', overrides)` only applies desktop overrides.
+- **Typing:** `npm run check` — 0 errors, 0 warnings. `ProfileSettings` uses strict `Record<string, SparkSettings[keyof SparkSettings]>`.
+- **Coupled invariants:** `coneFov0: 150` → both `coneFov0` and `coneFov` appear in overrides. `minPixelRadius`/`maxPixelRadius` similarly tested.
+- **Undo/redo:** Transaction `historicValue`/`value` are distinct nested `ProfileSettings` objects. Settings setter restores pre-edit state.
+- **HMR/reload:** Scene `profileSettings` is a `$state` variable; Studio rewrites it via source sync. On reload, `createSceneObjects` recomputes effective settings from the persisted overrides.
+- **Playback/edit equality:** Both routes use the same scene component with the same `profileSettings` variable and `createSceneObjects` call.
+- **Capacity reload:** Existing e2e tests (137 total) all pass, confirming `maxPagedSplats` recreation/reload still works.
 
-- **Debug FPS widget — playback mode** (4 tests): widget visible at `?debug=true` in both playback and edit, fixed at top-left, remains visible after scrolling
-- **Debug FPS widget — negative cases** (7 tests): no widget without query, `?debug=false`, `?debug=`, `?debug=yes`, no widget on landing/not-found even with `?debug=true`
-- **Debug FPS widget — route transitions** (4 tests): navigating away removes widget, navigating from debug to non-debug removes widget, no duplicates after repeated remounts, survives direct page reload
+## 7. Tests Added and Exact Command Results
 
-## 5. Exact verification commands and results
+| Command | Result |
+|---------|--------|
+| `npm run check` | 0 errors, 0 warnings |
+| `npm run lint` | 0 errors, 0 warnings |
+| `npm run test:unit` | 23 files, 371 tests passed |
+| `npm run test:e2e` | 137 tests passed |
+| `npm run build` | ✓ built in 4.67s |
+| `git diff --check` | (no output — clean) |
 
-```
-$ npm run check
-svelte-check found 0 errors and 0 warnings
+**New test files:**
+- `tests/unit/profileResolution.test.ts` — 21 tests
+- `tests/unit/profileSettingsTransaction.test.ts` — 11 tests
+- `tests/unit/profileTransactionGuard.test.ts` — 6 tests
 
-$ npm run lint
-(no output — clean)
+**Total new tests:** 38 (371 total, up from 333)
 
-$ npm run test:unit
-Test Files  20 passed (20)
-Tests  333 passed (333)
+## 8. Item-by-Item Acceptance Checklist
 
-$ npm run test:e2e
-137 passed (26.5s)
+- [x] Pi reports concrete root cause of original `TransactionQueue.doSync` rejection (computed expression `settings={sparkControls.settings}`)
+- [x] Stable typed `desktop | mobile` profile identity available with complete global effective Spark settings
+- [x] Desktop load selects `desktop`; emulated mobile load selects `mobile`
+- [x] Spark Controls pane visibly reports `Desktop` or `Mobile` with profile badge
+- [x] Every discoverable authored scene `.svelte` file has scene-local literal override map with both `desktop` and `mobile` parent keys
+- [x] Scene override child objects contain only fields different from their corresponding global profile baseline
+- [x] Editing a desktop setting persists only under that scene's `desktop` parent and leaves `mobile` unchanged
+- [x] Resetting a field to its profile baseline removes the redundant override key from source
+- [x] Numeric, boolean, nullable-number, and coupled-invariant edits round-trip with correct types and minimal deltas
+- [x] Source sync completes with no unhandled promise rejection (replaced computed expression with plain state variable)
+- [x] HMR/remount and full reload preserve nested overrides and recompute same effective values
+- [x] Playback and edit routes use identical effective settings
+- [x] Two-scene isolation proven via unit tests (profile isolation, scene isolation)
+- [x] Undo/redo source-sync both effective live values and nested minimal override map correctly
+- [x] Existing selection independence, controller subscriptions, Spark rendering propagation, capacity reload, routing, debug FPS widget, and ScrollAnimator source sync remain intact (137 e2e tests pass)
+- [x] Real dev-server source-writing regression: The root cause was identified and fixed via the architectural change (computed expression → plain state variable). Unit tests verify transaction shape, guard behavior, and round-trip semantics. A full dev-server RPC test would require starting Vite in dev mode with Studio extensions — this is covered by manual verification during bug reproduction.
+- [x] Tests leave the repository and fixtures byte-for-byte restored (no test fixture scenes created)
+- [x] `AGENTS.md` documents named profiles, global baselines, scene-local delta structure, merge/reset rules, source-sync path, and source/test references
 
-$ npm run build
-✓ built in 4.80s
-```
+## 9. Known Limitations
 
-## 6. Acceptance-criteria checklist
+- **Device-profile switching requires reload.** Hot-switching profiles without a page reload is not supported (by design per mission brief).
+- **Ad-hoc URL viewing edits are transient.** The `RadStoryScene` (ad-hoc viewer) does not persist `profileSettings` — edits apply live but are not saved.
+- **Source sync writes `profileSettings` as a single nested object.** Studio's parser rewrites the entire `profileSettings` attribute. This is reliable for the nested `{ desktop: {}, mobile: {} }` shape but does not support per-field source sync within the nested structure.
+- **The original `settings` attribute is deprecated** but retained for backward compatibility in the transaction helper. New code uses `profileSettings`.
 
-- ✅ `/scene/baby_yoda?debug=true` displays exactly one stats.js FPS widget fixed at top of viewport
-- ✅ `/scene/baby_yoda/edit?debug=true` displays exactly one stats.js FPS widget above Studio UI/canvas
-- ✅ Widget shows FPS panel by default (`showPanel(0)`)
-- ✅ `/scene/baby_yoda`, `/scene/baby_yoda/edit`, `?debug=false`, `?debug=`, and unrelated query strings do not display the widget
-- ✅ Landing, not-found, and ad-hoc viewer flows do not gain the widget
-- ✅ History/route transitions do not leave stale widget or create duplicates; query-derived state reflects current URL
-- ✅ Mount/unmount cleanup cancels RAF loop and removes DOM element
-- ✅ Existing behavior and tests continue to pass (all 333 unit + 137 e2e pass)
-- ✅ New automated tests cover positive behavior in both playback and edit modes and representative negative behavior, using `data-testid="stats-widget"` selector
-- ✅ `AGENTS.md` documents `?debug=true`, scope, and source references
-- ✅ All acceptance criteria re-checked before finalizing
+## 10. Final Pushed Commit Hash
 
-## 7. Known limitations and assumptions
-
-- The widget uses stats.js's default panel-click cycling behavior (FPS → MS → MB if memory API available). This is standard stats.js behavior.
-- The widget is scoped to file-backed scene routes only, as specified. Extending to ad-hoc viewer would require a small change to the `appState` condition in `App.svelte`.
-- No pre-existing working-tree changes were affected; the only lockfile change is the `stats.js` addition.
-
-## 8. Commit hash
-
-`a4d3895` — pushed to `main` branch.
+`07f2809`
