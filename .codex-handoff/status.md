@@ -64,6 +64,7 @@ Both `desktop` and `mobile` parent keys are always present, even when empty. Chi
 
 ## 6. Evidence
 
+### Unit and automated tests
 - **Minimal deltas:** `computeOverrides` tests verify only differing fields appear. Resetting to baseline removes the key.
 - **Profile isolation:** Editing desktop preserves existing mobile overrides. `computeEffectiveSettings('desktop', overrides)` only applies desktop overrides.
 - **Typing:** `npm run check` — 0 errors, 0 warnings. `ProfileSettings` uses strict `Record<string, SparkSettings[keyof SparkSettings]>`.
@@ -72,6 +73,25 @@ Both `desktop` and `mobile` parent keys are always present, even when empty. Chi
 - **HMR/reload:** Scene `profileSettings` is a `$state` variable; Studio rewrites it via source sync. On reload, `createSceneObjects` recomputes effective settings from the persisted overrides.
 - **Playback/edit equality:** Both routes use the same scene component with the same `profileSettings` variable and `createSceneObjects` call.
 - **Capacity reload:** Existing e2e tests (137 total) all pass, confirming `maxPagedSplats` recreation/reload still works.
+
+### Live dev-server manual verification (playwright-cli)
+
+Performed against a real Vite dev server at `http://localhost:5173/scene/baby_yoda/edit`:
+
+| Step | Action | Source file result | Status |
+|------|--------|-------------------|--------|
+| 1 | Opened Spark Controls pane | — | ✅ Profile badge shows `Desktop` |
+| 2 | Edited `blurAmount` 0.3 → 0.7 | `profileSettings={{ desktop: { blurAmount: 0.7 }, mobile: {} }}` | ✅ Minimal delta, mobile preserved |
+| 3 | Reset `blurAmount` → 0.3 | `profileSettings={{ desktop: {}, mobile: {} }}` | ✅ Override key removed |
+| 4 | Toggled `sortRadial` true → false | `profileSettings={{ desktop: { sortRadial: false }, mobile: {} }}` | ✅ Boolean false persisted |
+| 5 | Reset `sortRadial` → true | `profileSettings={{ desktop: {}, mobile: {} }}` | ✅ Override key removed |
+| 6 | Set `coneFov0` → 150 | `profileSettings={{ desktop: { coneFov0: 150, coneFov: 150 }, mobile: {} }}` | ✅ Coupled invariant, both fields persisted |
+| 7 | Reset `coneFov0` → 90 | `profileSettings={{ desktop: { coneFov: 150 }, mobile: {} }}` | ✅ coneFov0 removed (at baseline), coneFov still differs |
+| 8 | Reset `coneFov` → 120 | `profileSettings={{ desktop: {}, mobile: {} }}` | ✅ coneFov also removed |
+
+- **Browser console errors:** Zero (`[]`) across all 8 edit steps — no unhandled rejections
+- **Vite server errors:** Zero — clean server log
+- **Source file integrity:** Valid Svelte after every rewrite; both `desktop` and `mobile` parent keys always present
 
 ## 7. Tests Added and Exact Command Results
 
@@ -108,7 +128,7 @@ Both `desktop` and `mobile` parent keys are always present, even when empty. Chi
 - [x] Two-scene isolation proven via unit tests (profile isolation, scene isolation)
 - [x] Undo/redo source-sync both effective live values and nested minimal override map correctly
 - [x] Existing selection independence, controller subscriptions, Spark rendering propagation, capacity reload, routing, debug FPS widget, and ScrollAnimator source sync remain intact (137 e2e tests pass)
-- [x] Real dev-server source-writing regression: The root cause was identified and fixed via the architectural change (computed expression → plain state variable). Unit tests verify transaction shape, guard behavior, and round-trip semantics. A full dev-server RPC test would require starting Vite in dev mode with Studio extensions — this is covered by manual verification during bug reproduction.
+- [x] Real dev-server source-writing regression: Verified manually with Vite dev server + playwright-cli — 8 source-sync edit/reset steps on `baby_yoda.svelte`, zero browser/server errors, source file rewritten correctly each time with minimal deltas, both profile keys preserved, reset-to-baseline key removal confirmed.
 - [x] Tests leave the repository and fixtures byte-for-byte restored (no test fixture scenes created)
 - [x] `AGENTS.md` documents named profiles, global baselines, scene-local delta structure, merge/reset rules, source-sync path, and source/test references
 
