@@ -31,8 +31,8 @@ export function getDeviceProfile(): DeviceProfile {
       sparkRenderer: {
         lodSplatScale: 0.5,
         lodRenderScale: 2,
-        maxStdDev: 4,
-        maxPagedSplats: 262_144, // 4 × 65,536
+        maxStdDev: 2.8,
+        maxPagedSplats: 1_048_576,
         coneFov0: 70,
         coneFov: 110,
         coneFoveate: 0.4,
@@ -47,8 +47,8 @@ export function getDeviceProfile(): DeviceProfile {
     sparkRenderer: {
       lodSplatScale: 1,
       lodRenderScale: 1,
-      maxStdDev: 8,
-      maxPagedSplats: 1_048_576, // 16 × 65,536
+      maxStdDev: 2.8,
+      maxPagedSplats: 2_621_440,
       coneFov0: 90,
       coneFov: 120,
       coneFoveate: 0.2,
