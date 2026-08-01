@@ -438,6 +438,27 @@ This calls `page.screenshot()` directly with a configurable timeout, bypassing t
 - If you must use evaluate, access the shadow root first: `host.shadowRoot.querySelectorAll('.tv-item')`
 - Toolbar buttons (outside shadow DOM) work with both approaches
 
+**Mobile device emulation with playwright-cli:** The Spark profile (Desktop vs Mobile) is detected at app startup from `navigator.userAgent`. To test the Mobile profile, launch playwright-cli with a config file that sets a mobile user agent and viewport:
+
+```bash
+playwright-cli open --config=mobile-config.json http://localhost:5173/scene/baby_yoda/edit
+```
+
+The config file (`mobile-config.json`) must use the `browser.contextOptions` wrapper:
+
+```json
+{
+  "browser": {
+    "contextOptions": {
+      "viewport": { "width": 375, "height": 812 },
+      "userAgent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1"
+    }
+  }
+}
+```
+
+Verify the profile by checking `navigator.userAgent` or the profile badge: `playwright-cli eval "document.querySelector('[data-testid=\"spark-profile-badge\"]')?.textContent"` should return `"Mobile"`. Alternatively, use the environment variable `PLAYWRIGHT_MCP_USER_AGENT` for a quicker one-off test.
+
 ## Profile-Aware Spark Settings — Unit Tests
 
 - `tests/unit/profileResolution.test.ts` — desktop/mobile detection, complete 22-field global baselines, effective settings merge, minimal diff generation (pure `computeOverrides`), false/null/coupled-field diff behavior, profile isolation, round-trip verification.
