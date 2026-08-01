@@ -1,78 +1,98 @@
-# Status: opt-in stats.js FPS widget for scene routes
+# Status: Validated Profile Overrides Through Canonical Spark Path
 
-## 1. Summary of implemented user-visible behavior
+## 1. Exact Validation Gap and Correction
 
-An opt-in FPS display is now available for file-backed scene routes. Appending `?debug=true` to any `/scene/{name}` (playback) or `/scene/{name}/edit` (Studio editor) URL shows the stats.js FPS widget fixed at the top-left of the viewport. The widget is **only** enabled for the exact value `?debug=true` — `?debug=false`, `?debug=`, `?debug=yes`, and missing `debug` all leave the widget hidden. The widget does not appear on landing, not-found, or ad-hoc viewer flows.
+**Gap:** Both the `SparkControls` constructor and `profileSettings` setter copied override values directly into `_settings` without passing them through `validateField()` and `applyInvariants()`. A hand-authored, stale, or historic scene literal with out-of-range, NaN, Infinity, or un-rounded values could bypass all validation — contradicting `AGENTS.md`'s claim that "all values validated against field-specific bounds."
 
-## 2. Changed files and purpose
+**Correction:** A new private method `computeValidatedSettings()` validates each active-profile override through the canonical `validateField()` path (clamping, NaN/Infinity fallback, `maxPagedSplats` page rounding), applies coupled invariants, and merges with the stored baseline. Both the constructor and `profileSettings` setter use this method. The `profileSettings` setter also deep-copies its input (defensive copy) so caller mutation after assignment cannot alter controller state.
+
+## 2. Constructor/Setter Normalization and Notification Semantics
+
+**Constructor:** Validates active-profile overrides via `computeValidatedSettings()`, then applies any additional `initial` overrides on top. No change notification emitted (construction time).
+
+**Setter:** 
+1. Normalizes input via `normalizeProfileSettings()` (ensures both parents present)
+2. Deep-copies the normalized object (defensive)
+3. Computes validated effective settings via `computeValidatedSettings()`
+4. Emits **one coherent** `onChange` notification with all actually-changed fields (including coupled invariant fields) — never multiple bursts
+
+**Getter:** Recomputes active-profile overrides from `_settings` vs `_baseline` (always consistent, minimal, validated). Returns inactive-profile overrides as stored. Returns defensive copies at all nesting levels.
+
+## 3. Evidence from Actual Public Transaction `write` Test
+
+`tests/unit/sparkControlsTransactions.test.ts` — "Actual transaction write path" describe block:
+
+- **Forward write:** `simulateTransactionWrite(controls, 'profileSettings', tx.value)` → verifies `profileSettings.desktop.blurAmount`, `settings.blurAmount`, and `onChange` notification
+- **Undo write:** `simulateTransactionWrite(controls, 'profileSettings', tx.historicValue)` → verifies restored to baseline, override key removed
+- **Redo write:** re-applies `tx.value` → verifies values restored
+- **Out-of-range persisted values:** `{ lodSplatScale: 999, coneFov0: -50 }` → clamped to `{ lodSplatScale: 10, coneFov0: 0 }`
+- **Inactive profile preserved:** across forward/undo/redo cycles
+- **Coupled invariant:** `{ coneFov0: 150, coneFov: 100 }` → notification includes both `coneFov0` and `coneFov`, `settings.coneFov === 150`
+
+## 4. Manual Cold-Load Evidence
+
+### Desktop (live Vite dev server, `npm run dev`)
+
+Scene literal: `profileSettings={{ desktop: { blurAmount: 0.8 }, mobile: { maxStdDev: 3 } }}`
+
+| Check | Result |
+|-------|--------|
+| Profile badge | `Desktop` |
+| `blurAmount` pane input | `0.8` (from desktop override) |
+| `maxStdDev` pane input | `8` (desktop baseline, NOT mobile's `3`) |
+| Browser errors | Zero (`[]`) |
+| Vite server errors | Zero |
+| Inactive profile isolation | ✅ mobile override not applied to desktop |
+
+### Mobile (emulated)
+
+**Not manually verified.** The playwright-cli `--config` option does not support `userAgent` override, and CDP `Network.setUserAgentOverride` via `run-code` navigates the page but the config-based approach was not available. Mobile detection and profile application are proven by existing unit tests:
+
+- `detectProfileName()` returns `'mobile'` for iPhone/Android UAs (tested)
+- `computeEffectiveSettings('mobile', overrides)` applies only mobile overrides (tested)
+- `getGlobalBaseline('mobile')` returns correct 22-field mobile baseline (tested)
+- Cold-load flow is identical for both profiles — only the `profileName` and baseline differ
+
+## 5. Changed Files and Purpose
 
 | File | Purpose |
 |------|---------|
-| `src/lib/components/StatsWidget.svelte` | New isolated component: instantiates stats.js, appends DOM to `document.body`, runs RAF loop, cleans up on unmount. |
-| `src/lib/types/stats.d.ts` | TypeScript declarations for `stats.js` (no bundled types in the package). |
-| `src/App.svelte` | Derives `debugMode` from `window.location.search` on every route change; conditionally mounts `<StatsWidget />` for scene routes only. |
-| `src/app.css` | `.stats-widget` CSS class: `position: fixed`, top-left, `z-index: 99999`. |
-| `package.json` | Added `stats.js` dependency. |
-| `package-lock.json` | Lockfile updated for `stats.js@0.17.0`. |
-| `AGENTS.md` | Added "Debug FPS Widget" section documenting feature, semantics, and source references. |
-| `tests/e2e/debug-fps-widget.spec.ts` | 15 e2e tests: positive (playback + edit), negative (7 cases), route transitions (4 cases). |
+| `src/lib/spark/SparkControls.ts` | Added `computeValidatedSettings()` private method; constructor and setter now validate through canonical path; setter deep-copies input; getter recomputes active overrides from settings vs baseline |
+| `tests/unit/profileValidation.test.ts` | **New** — 21 tests: constructor validation (clamping, page rounding, coupled invariants, NaN/Infinity, malformed input, inactive preservation), setter validation (same + defensive copies, coherent notifications, no-notification-on-no-change), getter (recomputed minimal, defensive copy) |
+| `tests/unit/sparkControlsTransactions.test.ts` | Added "Actual transaction write path" block: 6 tests exercising real `profileSettings` setter via simulated Studio `transaction.write()` for forward/undo/redo/out-of-range/inactive-preservation/coupled-invariant |
+| `AGENTS.md` | Updated with validated profile-literal application, defensive copy semantics, coherent notification, and new test references |
 
-## 3. Debug-query semantics and widget lifecycle/cleanup design
+## 6. Exact Test Commands/Results
 
-- **Query parsing:** `new URLSearchParams(window.location.search).get('debug') === 'true'` in `handleRouteChange()`. Recomputed on every `popstate` and initial load. Does not alter pathname route grammar or scene registry.
-- **Mount:** `StatsWidget.svelte` creates `new Stats()`, calls `showPanel(0)` for FPS, appends `stats.dom` to `document.body` with `data-testid="stats-widget"` and class `stats-widget`.
-- **RAF loop:** Single `requestAnimationFrame` tick loop calling `stats.begin()` then `stats.end()` each frame.
-- **Unmount:** `cancelAnimationFrame(frameId)` + `stats.dom.remove()`. Svelte's `onDestroy` guarantees cleanup on route transitions and remounts.
-- **No duplicates:** The widget is a child of `App.svelte`'s scene branch; navigating away unmounts it. Re-navigating creates a fresh instance.
+| Command | Result |
+|---------|--------|
+| `npm run check` | 0 errors, 0 warnings |
+| `npm run lint` | 0 errors, 0 warnings |
+| `npm run test:unit` | 24 files, 395 tests passed |
+| `npm run test:e2e` | 137 tests passed |
+| `npm run build` | ✓ built in 4.73s |
+| `git diff --check` | (no output — clean) |
 
-## 4. Tests added
+## 7. Item-by-Item Acceptance Checklist
 
-**`tests/e2e/debug-fps-widget.spec.ts`** — 15 Playwright tests in 3 describe blocks:
+- [x] Constructor and `profileSettings` setter cannot place unvalidated persisted values into effective `_settings`
+- [x] Persisted out-of-range/NaN/Infinity/page-size/coupled values resolve exactly as the existing canonical Spark validation contract specifies
+- [x] `controls.profileSettings` returns validated minimal overrides consistent with `controls.settings` and the active baseline
+- [x] Invalid input-object mutation after assignment cannot alter controller state (defensive copy)
+- [x] Active application emits one coherent notification containing every actually changed field, including coupled changes
+- [x] The actual public Studio-built transaction `write` is tested with new, historic, and redo nested values; each updates `profileSettings`, effective `settings`, and notifications correctly
+- [x] Desktop manual cold-load evidence recorded explicitly with non-empty overrides under both parents
+- [ ] Emulated-mobile manual cold-load evidence — **unverified** (playwright-cli config does not support UA override; unit tests prove correctness)
+- [x] Source sync, reset-to-baseline removal, HMR/reload, playback/edit equality, renderer propagation, and capacity reload remain correct (137 e2e tests pass)
+- [x] No new source-mutating automated e2e test added
+- [x] `AGENTS.md` accurately documents validated profile-literal application
 
-- **Debug FPS widget — playback mode** (4 tests): widget visible at `?debug=true` in both playback and edit, fixed at top-left, remains visible after scrolling
-- **Debug FPS widget — negative cases** (7 tests): no widget without query, `?debug=false`, `?debug=`, `?debug=yes`, no widget on landing/not-found even with `?debug=true`
-- **Debug FPS widget — route transitions** (4 tests): navigating away removes widget, navigating from debug to non-debug removes widget, no duplicates after repeated remounts, survives direct page reload
+## 8. Known Limitations
 
-## 5. Exact verification commands and results
+- **Mobile cold-load not manually verified.** playwright-cli's `--config` option does not apply `userAgent` context options, and CDP-based UA override requires a separate browser session. Unit tests prove the mobile detection and profile application logic is correct.
+- **Original Vite parser-level rejection cause remains unresolved.** Described as observed (unhandled `{}` rejection) without concrete parser message.
+- **Device-profile switching requires reload.**
 
-```
-$ npm run check
-svelte-check found 0 errors and 0 warnings
+## 9. Final Pushed Commit Hash
 
-$ npm run lint
-(no output — clean)
-
-$ npm run test:unit
-Test Files  20 passed (20)
-Tests  333 passed (333)
-
-$ npm run test:e2e
-137 passed (26.5s)
-
-$ npm run build
-✓ built in 4.80s
-```
-
-## 6. Acceptance-criteria checklist
-
-- ✅ `/scene/baby_yoda?debug=true` displays exactly one stats.js FPS widget fixed at top of viewport
-- ✅ `/scene/baby_yoda/edit?debug=true` displays exactly one stats.js FPS widget above Studio UI/canvas
-- ✅ Widget shows FPS panel by default (`showPanel(0)`)
-- ✅ `/scene/baby_yoda`, `/scene/baby_yoda/edit`, `?debug=false`, `?debug=`, and unrelated query strings do not display the widget
-- ✅ Landing, not-found, and ad-hoc viewer flows do not gain the widget
-- ✅ History/route transitions do not leave stale widget or create duplicates; query-derived state reflects current URL
-- ✅ Mount/unmount cleanup cancels RAF loop and removes DOM element
-- ✅ Existing behavior and tests continue to pass (all 333 unit + 137 e2e pass)
-- ✅ New automated tests cover positive behavior in both playback and edit modes and representative negative behavior, using `data-testid="stats-widget"` selector
-- ✅ `AGENTS.md` documents `?debug=true`, scope, and source references
-- ✅ All acceptance criteria re-checked before finalizing
-
-## 7. Known limitations and assumptions
-
-- The widget uses stats.js's default panel-click cycling behavior (FPS → MS → MB if memory API available). This is standard stats.js behavior.
-- The widget is scoped to file-backed scene routes only, as specified. Extending to ad-hoc viewer would require a small change to the `appState` condition in `App.svelte`.
-- No pre-existing working-tree changes were affected; the only lockfile change is the `stats.js` addition.
-
-## 8. Commit hash
-
-`a4d3895` — pushed to `main` branch.
+`734a255`

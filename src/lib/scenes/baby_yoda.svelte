@@ -17,7 +17,10 @@
   // untrack() explicitly captures the initial profile value — scene objects
   // are created once at startup and profile is immutable after that
   const { camera, cameraTarget, cameraAnimator, targetAnimator, sparkControls, splatWrapper } =
-    createSceneObjects(untrack(() => profile))
+    createSceneObjects(
+      untrack(() => profile),
+      untrack(() => profile.profileName),
+    )
 </script>
 
 <SceneRuntime
@@ -51,7 +54,11 @@
     <T is={cameraTarget} name="CameraTarget" />
   </T>
 
-  <T is={sparkControls} name="Spark" settings={sparkControls.settings} />
+  <T
+    is={sparkControls}
+    name="Spark"
+    profileSettings={{ desktop: {}, mobile: {} }}
+  />
 
   <T is={splatWrapper} name="SplatWrapper" position={[0, 0, 0]} rotation={[0, 0, 0]} scale={[1, 1, 1]} />
 </SceneRuntime>

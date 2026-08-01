@@ -13,9 +13,35 @@
  */
 import { Object3D } from 'three'
 import { SparkReloadStatus } from './SparkReloadRuntime'
+import type { DeviceProfileName } from '$lib/types'
+import type { ProfileSettings } from './profileResolution'
 
 // Spark page size constant
 export const SPARK_PAGE_SIZE = 65_536
+
+// Re-export ProfileSettings from profileResolution.ts
+export type { ProfileSettings }
+
+/** Default profile settings: empty overrides for both profiles. */
+export const DEFAULT_PROFILE_SETTINGS: ProfileSettings = {
+  desktop: {},
+  mobile: {},
+}
+
+/** Validate that a value is a well-formed ProfileSettings with both parents. */
+export function normalizeProfileSettings(raw: unknown): ProfileSettings {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    const obj = raw as Record<string, unknown>
+    const desktop = obj.desktop && typeof obj.desktop === 'object' && !Array.isArray(obj.desktop)
+      ? obj.desktop as Partial<SparkSettings>
+      : {}
+    const mobile = obj.mobile && typeof obj.mobile === 'object' && !Array.isArray(obj.mobile)
+      ? obj.mobile as Partial<SparkSettings>
+      : {}
+    return { desktop, mobile }
+  }
+  return { ...DEFAULT_PROFILE_SETTINGS }
+}
 
 /**
  * Reload status snapshot — exported for consumers that need the type.
@@ -104,7 +130,7 @@ interface FieldDef {
   default: number | boolean | null
 }
 
-const FIELD_DEFS: Record<keyof SparkSettings, FieldDef> = {
+export const FIELD_DEFS: Record<keyof SparkSettings, FieldDef> = {
   lodSplatScale:       { min: 0.01, max: 10,   default: 1 },
   lodRenderScale:      { min: 0.1,  max: 10,   default: 1 },
   maxStdDev:           { min: 1,    max: 100,  default: 8 },
@@ -232,6 +258,9 @@ export class SparkControls extends Object3D {
   declare type: string
 
   private _settings: SparkSettings
+  private _profileSettings: ProfileSettings
+  private _profileName: DeviceProfileName
+  private _baseline: SparkSettings
   private _listeners: SettingsChangeHandler[] = []
 
   /**
@@ -240,28 +269,60 @@ export class SparkControls extends Object3D {
    */
   reloadStatus = new SparkReloadStatus()
 
-  constructor(initial?: Partial<SparkSettings>) {
+  constructor(initial?: Partial<SparkSettings>, profileName: DeviceProfileName = 'desktop', profileSettings: ProfileSettings = DEFAULT_PROFILE_SETTINGS, baseline?: SparkSettings) {
     super()
     this.isSparkControls = true
     this.type = 'SparkControls'
     this.name = 'Spark'
+    this._profileName = profileName
+    this._profileSettings = normalizeProfileSettings(profileSettings)
 
-    // Start with defaults
-    const defaults = this.createDefaultSettings()
+    // Use provided baseline (from device profile) or fall back to field defaults
+    this._baseline = baseline ?? this.createDefaultSettings()
 
-    // Validate and merge initial values
+    // Compute effective settings: baseline + scene overrides for active profile
+    // All override values are validated through the canonical path
+    this._settings = this.computeValidatedSettings(this._profileSettings)
+
+    // If additional initial overrides are provided, merge them on top
     if (initial) {
-      const validated: Record<string, unknown> = {}
+      const validated: Partial<SparkSettings> = {}
       for (const key of SETTINGS_KEYS) {
         const raw = initial[key]
         if (raw === undefined) continue
         validated[key] = validateField(key, raw)
       }
-      applyInvariants(validated as Partial<SparkSettings>, defaults)
-      this._settings = { ...defaults, ...validated } as SparkSettings
-    } else {
-      this._settings = defaults
+      applyInvariants(validated, this._settings)
+      this._settings = { ...this._settings, ...validated } as SparkSettings
     }
+  }
+
+  /**
+   * Compute validated effective settings from profile overrides and stored baseline.
+   * Validates each override value through the canonical field validation path,
+   * applies coupled invariants, and returns the result.
+   * Does NOT emit change notifications (used internally by constructor and setter).
+   */
+  private computeValidatedSettings(profileSettings: ProfileSettings): SparkSettings {
+    const overrides = profileSettings[this._profileName] ?? {}
+    const result = { ...this._baseline }
+
+    // Validate each override value through the canonical path
+    const validated: Partial<SparkSettings> = {}
+    for (const key of SETTINGS_KEYS) {
+      if (key in overrides) {
+        validated[key] = validateField(key, overrides[key])
+        result[key] = validated[key]!
+      }
+    }
+
+    // Apply coupled invariants
+    applyInvariants(validated, this._baseline)
+    for (const [k, v] of Object.entries(validated)) {
+      result[k as keyof SparkSettings] = v as never
+    }
+
+    return result
   }
 
   /**
@@ -288,7 +349,7 @@ export class SparkControls extends Object3D {
    */
   set settings(value: Partial<SparkSettings>) {
     const previous = { ...this._settings }
-    const validated: Record<string, unknown> = {}
+    const validated: Partial<SparkSettings> = {}
 
     for (const key of SETTINGS_KEYS) {
       const raw = value[key]
@@ -306,6 +367,77 @@ export class SparkControls extends Object3D {
     const changed = new Set<keyof SparkSettings>()
     for (const k of SETTINGS_KEYS) {
       if (previous[k] !== merged[k]) changed.add(k)
+    }
+
+    if (changed.size > 0) {
+      for (const fn of this._listeners) fn(changed)
+    }
+  }
+
+  /**
+   * The active device profile name. Set at construction time.
+   */
+  get profileName(): DeviceProfileName {
+    return this._profileName
+  }
+
+  /**
+   * Get the complete nested profile overrides (defensive copy).
+   * Both `desktop` and `mobile` parents are always present.
+   *
+   * The active profile's overrides are recomputed from the current effective
+   * settings against the stored baseline, ensuring they are always consistent
+   * with `controls.settings` (validated, minimal). The inactive profile
+   * overrides are returned as stored (already validated when set).
+   */
+  get profileSettings(): ProfileSettings {
+    // Recompute active profile overrides from current settings vs baseline
+    const activeOverrides: Partial<SparkSettings> = {}
+    for (const key of SETTINGS_KEYS) {
+      if (this._settings[key] !== this._baseline[key]) {
+        activeOverrides[key] = this._settings[key]
+      }
+    }
+
+    // Inactive profile: return stored overrides (already validated)
+    const inactiveProfile: DeviceProfileName = this._profileName === 'desktop' ? 'mobile' : 'desktop'
+    const inactiveOverrides = this._profileSettings[inactiveProfile]
+
+    return {
+      [this._profileName]: { ...activeOverrides },
+      [inactiveProfile]: { ...inactiveOverrides },
+    }
+  }
+
+  /**
+   * Set profile overrides from a nested object (used by Threlte <T> source sync).
+   * Normalizes both parents, validates active profile overrides through the
+   * canonical field validation path, applies coupled invariants, merges with
+   * stored baseline, updates the flat effective `settings`, and emits the
+   * normal change signal.
+   *
+   * Defensive copy: the input is deep-copied so later mutation of the caller's
+   * nested object cannot alter controller state.
+   *
+   * This is the authoritative setter for source sync and undo/redo.
+   */
+  set profileSettings(value: unknown) {
+    const normalized = normalizeProfileSettings(value)
+    const previous = { ...this._settings }
+
+    // Defensive deep copy of the normalized input
+    this._profileSettings = {
+      desktop: { ...normalized.desktop },
+      mobile: { ...normalized.mobile },
+    }
+
+    // Compute validated effective settings through canonical path
+    this._settings = this.computeValidatedSettings(this._profileSettings)
+
+    // Determine which fields actually changed (one coherent notification)
+    const changed = new Set<keyof SparkSettings>()
+    for (const k of SETTINGS_KEYS) {
+      if (previous[k] !== this._settings[k]) changed.add(k)
     }
 
     if (changed.size > 0) {

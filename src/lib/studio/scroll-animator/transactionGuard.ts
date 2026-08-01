@@ -59,41 +59,12 @@ function isScrollAnimatorPersistedAttribute(attributeName: string): boolean {
 }
 
 /**
- * Whitelist of SparkControls setting names that may be source-synced.
- * Only exact matches are allowed — no descendants.
- */
-const SPARK_CONTROL_KEYS = new Set([
-  'lodSplatScale',
-  'lodRenderScale',
-  'maxStdDev',
-  'maxPagedSplats',
-  'coneFov0',
-  'coneFov',
-  'coneFoveate',
-  'behindFoveate',
-  'minPixelRadius',
-  'maxPixelRadius',
-  'minAlpha',
-  'preBlurAmount',
-  'blurAmount',
-  'falloff',
-  'clipXY',
-  'focalAdjustment',
-  'sortRadial',
-  'minSortIntervalMs',
-  'enableLod',
-  'enableLodFetching',
-  'lodSplatCount',
-  'lodInflate',
-])
-
-/**
  * Check whether a transaction's attribute name is a whitelisted SparkControls setting.
- * Allows the root `settings` attribute (source-synced whole object) and individual
- * field names. Blocks descendants like `settings.lodSplatScale`.
+ * Allows only `profileSettings` (profile-aware persisted overrides root).
+ * Blocks transforms, `settings` (legacy), individual field names, and all descendants.
  */
 function isSparkControlAttribute(attributeName: string): boolean {
-  return attributeName === 'settings' || SPARK_CONTROL_KEYS.has(attributeName)
+  return attributeName === 'profileSettings'
 }
 
 /**

@@ -4,10 +4,12 @@
   import { useTransactions } from '@threlte/studio/extensions'
   import type { SparkSettings, SparkControls } from '$lib/spark/SparkControls'
   import { SPARK_PAGE_SIZE } from '$lib/spark/SparkControls'
-  import { buildSparkSettingsTransaction } from './sparkSettingsTransaction'
+  import type { ProfileSettings } from '$lib/spark/SparkControls'
   import { activeSparkControlsRuntime } from './activeSparkControlsRuntime'
   import { guardScrollAnimatorTransactions, type GuardTransaction } from '$lib/studio/scroll-animator/transactionGuard'
   import SparkFixedToolbarPane from './SparkFixedToolbarPane.svelte'
+  import type { DeviceProfileName } from '$lib/types'
+  import { getGlobalBaseline, computeOverrides } from '$lib/spark/deviceProfile'
 
   interface FieldMeta {
     key: keyof SparkSettings
@@ -62,6 +64,7 @@
   let uiState = $state({
     controls: null as SparkControls | null,
     settings: {} as SparkSettings,
+    profileName: 'desktop' as DeviceProfileName,
     reloading: false,
     reloadError: '' as string,
   })
@@ -142,9 +145,11 @@
 
     // Subscribe to active SparkControls changes
     const current = activeSparkControlsRuntime.activeController
+    const profileName = activeSparkControlsRuntime.profileName
     if (current) {
       uiState.controls = current
       uiState.settings = current.settings
+      uiState.profileName = profileName
       subscribeToReloadStatus(current)
       subscribeToSettings(current)
       initDrafts(current.settings)
@@ -160,6 +165,7 @@
         unsubscribeFromReloadStatus()
         uiState.controls = controls
         uiState.settings = controls.settings
+        uiState.profileName = activeSparkControlsRuntime.profileName
         subscribeToReloadStatus(controls)
         subscribeToSettings(controls)
         initDrafts(controls.settings)
@@ -179,10 +185,34 @@
     unsubscribeFromReloadStatus()
   })
 
+  /**
+   * Build the complete nested profileSettings object after a field edit.
+   * Reads the inactive profile from the controller's real profileSettings
+   * (not from a local extension variable) so persisted inactive overrides
+   * are never lost.
+   */
+  function buildNewProfileOverrides(
+    controls: SparkControls,
+    newSettings: SparkSettings,
+  ): ProfileSettings {
+    const activeProfile = uiState.profileName
+    const inactiveProfile: DeviceProfileName = activeProfile === 'desktop' ? 'mobile' : 'desktop'
+    const baseline = getGlobalBaseline(activeProfile)
+
+    // Compute new overrides for active profile from effective settings
+    const newActiveOverrides = computeOverrides(newSettings, baseline)
+
+    // Read inactive profile from the controller's authoritative copy
+    const controllerOverrides = controls.profileSettings
+    const inactiveOverrides = controllerOverrides[inactiveProfile] ?? {}
+
+    return {
+      desktop: activeProfile === 'desktop' ? newActiveOverrides : inactiveOverrides,
+      mobile: activeProfile === 'mobile' ? newActiveOverrides : inactiveOverrides,
+    }
+  }
+
   // Commit a field edit via transaction
-  // Pattern: capture historicSettings BEFORE the setter (which fires onChange synchronously),
-  // then capture newSettings AFTER. This ensures historicValue !== value even though
-  // the onChange callback has already refreshed uiState.settings.
   function handleFieldChange(meta: FieldMeta): void {
     const controls = uiState.controls
     if (!controls) return
@@ -203,6 +233,7 @@
 
     // Capture historic snapshot BEFORE mutation (onChange fires synchronously)
     const historicSettings = controls.settings
+    const historicProfileOverrides = controls.profileSettings
 
     // Validate through the setter (fires onChange → refreshes uiState.settings)
     ctrl[key] = raw
@@ -213,11 +244,17 @@
     // Check if any field actually changed
     if (historicSettings[key] === newSettings[key]) return
 
-    // If source sync is available, commit as a transaction
+    // If source sync is available, commit as a transaction on profileSettings
     if (transactions.vitePluginEnabled) {
-      const tx = transactions.buildTransaction(
-        buildSparkSettingsTransaction(controls, newSettings, historicSettings),
-      )
+      const newProfileOverrides = buildNewProfileOverrides(controls, newSettings)
+      const tx = transactions.buildTransaction({
+        object: controls,
+        propertyPath: 'profileSettings',
+        value: newProfileOverrides,
+        historicValue: historicProfileOverrides,
+        createHistoryRecord: true,
+        sync: true,
+      })
       transactions.commit([tx])
     }
     // uiState.settings already refreshed by the synchronous onChange callback
@@ -232,6 +269,7 @@
 
     // Capture historic snapshot BEFORE mutation (onChange fires synchronously)
     const historicSettings = controls.settings
+    const historicProfileOverrides = controls.profileSettings
 
     // Validate through the setter (fires onChange → refreshes uiState.settings)
     ctrl[key] = checked
@@ -242,11 +280,17 @@
     // Check if any field actually changed
     if (historicSettings[key] === newSettings[key]) return
 
-    // If source sync is available, commit as a transaction
+    // If source sync is available, commit as a transaction on profileSettings
     if (transactions.vitePluginEnabled) {
-      const tx = transactions.buildTransaction(
-        buildSparkSettingsTransaction(controls, newSettings, historicSettings),
-      )
+      const newProfileOverrides = buildNewProfileOverrides(controls, newSettings)
+      const tx = transactions.buildTransaction({
+        object: controls,
+        propertyPath: 'profileSettings',
+        value: newProfileOverrides,
+        historicValue: historicProfileOverrides,
+        createHistoryRecord: true,
+        sync: true,
+      })
       transactions.commit([tx])
     }
     // uiState.settings already refreshed by the synchronous onChange callback
@@ -278,7 +322,12 @@
     <div class="sc-no-selection" data-testid="spark-no-selection">No scene loaded</div>
   {:else}
     <div class="sc-panel" data-testid="spark-controls-panel">
-      <div class="sc-title">Spark Controls</div>
+      <div class="sc-title">
+        Spark Controls
+        <span class="sc-profile-badge" data-testid="spark-profile-badge">
+          {uiState.profileName === 'desktop' ? 'Desktop' : 'Mobile'}
+        </span>
+      </div>
 
       {#if !transactions.vitePluginEnabled}
         <div class="sc-warning" data-testid="spark-sync-warning">Studio source sync unavailable — edits apply live but won't persist</div>
@@ -356,6 +405,18 @@
     font-size: 12px;
     color: #ccc;
     margin-bottom: 2px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .sc-profile-badge {
+    font-size: 10px;
+    font-weight: 500;
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: #3b82f6;
+    color: #fff;
   }
 
   .sc-warning {

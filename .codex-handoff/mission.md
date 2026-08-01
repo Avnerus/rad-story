@@ -1,102 +1,109 @@
-# Mission: opt-in stats.js FPS widget for scene routes
+# Final follow-up mission: validate persisted profile overrides through the canonical Spark path
 
 ## Objective
 
-Add an opt-in FPS display for file-backed scenes. When either `/scene/{name}?debug=true` (playback) or `/scene/{name}/edit?debug=true` (Studio editor) runs, show the stats.js FPS widget fixed at the top of the viewport. Ordinary scene URLs must remain unchanged and show no widget.
+Preserve the now-correct authoritative scene-literal/profile transaction architecture, but close the remaining validation and verification gaps before acceptance.
 
-This feature is scoped to file-backed scene routes in both modes. Do not enable it on the landing page, not-found page, or ad-hoc `?url=...` viewer unless an existing project convention makes that necessary and the completion report explains why.
+The cold-reload persistence flow is structurally correct: a direct scene `<T profileSettings={{ desktop: ..., mobile: ... }}>` writes through a real `SparkControls.profileSettings` setter, and undo/redo will target that property. However, persisted overrides are currently merged directly into `_settings` in both the constructor and `profileSettings` setter. This bypasses the controller's canonical validation, clamping, `maxPagedSplats` page rounding, and coupled invariants.
+
+## Verified issues
+
+1. `SparkControls` constructor copies active profile override values directly into `_settings`.
+2. `SparkControls.profileSettings` setter also copies override values directly into `_settings`.
+3. Therefore a hand-authored, stale, or historic scene literal can bypass `validateField()` and `applyInvariants()`, despite `AGENTS.md` claiming all values use the same validation path.
+4. The updated “undo/redo” unit tests assign `controls.profileSettings` manually. They do not exercise the actual transaction returned by Studio's public `buildTransaction()` and its `write` callback as the previous mission required.
+5. The completion report checks the mobile cold-load acceptance item, but its manual evidence table documents only desktop. Provide real mobile-emulation evidence or mark it unverified; do not infer it solely from unit tests.
 
 ## Files likely involved
 
-- `src/App.svelte` — derive the debug flag from `window.location.search`, keep it correct during route/popstate changes, and conditionally mount the widget only for a resolved scene.
-- A small new component under `src/lib/components/` (for example `StatsWidget.svelte`) — own the stats.js instance, animation-frame updates, DOM placement, and teardown.
-- `package.json` and `package-lock.json` — add `stats.js` and TypeScript declarations if the package requires separate types.
-- `tests/e2e/playback-edit.spec.ts` or another narrowly relevant scene-route spec — verify both playback and edit behavior.
-- Unit tests for any extracted pure query parser/helper, if one is introduced.
-- `AGENTS.md` — concise current documentation of the debug query option and source references.
-
-Note: `package-lock.json` was already modified before this mission was created. Preserve legitimate existing work and integrate the dependency change carefully; do not discard unrelated lockfile edits.
+- `src/lib/spark/SparkControls.ts`
+- `src/lib/spark/profileResolution.ts` if a pure validated-resolution boundary is helpful
+- `src/lib/spark/deviceProfile.ts` if baseline duplication should be consolidated
+- `tests/unit/profileSettingsTransaction.test.ts`
+- `tests/unit/sparkControlsTransactions.test.ts`
+- Focused validation/profile tests
+- `AGENTS.md`
 
 ## Constraints
 
-- Treat the flag as opt-in: enable only when the query parameter's value is exactly `true` (`?debug=true`). `?debug=false`, a missing/empty value, and unrelated query parameters must not enable it.
-- Query parsing must not alter the existing pathname route grammar or scene registry behavior. Preserve other query parameters.
-- The widget must work in both scene playback and scene edit mode, including direct page loads.
-- The widget must be fixed at the top of the viewport and remain visible above the WebGL canvas and Studio overlays. Use an intentional z-index and avoid changing surrounding layout or scroll measurements.
-- Show the FPS panel by default. It is acceptable for the standard stats.js panel-click behavior to remain available.
-- Integrate with Svelte lifecycle correctly: instantiate only in the browser, run one update loop per mounted widget, cancel its animation frame, and remove its DOM node on unmount. Route transitions/remounts must not leak or duplicate widgets.
-- Ensure debug state is recomputed when the app handles history navigation (`popstate`), rather than being a one-time immutable read if that would leave stale UI.
-- Prefer a small isolated component over embedding imperative widget lifecycle code throughout `App.svelte`.
-- Keep the implementation typed; do not add broad `any`, `@ts-ignore`, or private framework imports.
-- Do not use the existing hidden camera/debug diagnostics as the visual FPS widget; use the `stats.js` package requested.
-- Preserve all current scene rendering, loading, editor/playback separation, headers, URL-prefill behavior, and scroll animation behavior.
-- Avoid unrelated refactors or formatting churn.
-
-Critical lifecycle shape, if useful (adapt to Svelte 5/project conventions rather than copying blindly):
-
-```ts
-onMount(() => {
-  const stats = new Stats()
-  stats.showPanel(0) // FPS
-  // Attach/mark/style stats.dom, then update it from requestAnimationFrame.
-  return () => {
-    cancelAnimationFrame(frameId)
-    stats.dom.remove()
-  }
-})
-```
+- Keep the direct scene literal, real writable `profileSettings`, single detected `DeviceProfile.profileName`, minimal active-profile deltas, inactive-profile preservation, and `profileSettings`-only transaction guard.
+- Route constructor-time and setter-time effective settings through the same canonical field validation and coupled-invariant semantics as ordinary `settings`/individual field edits.
+- Cover NaN/Infinity fallback, numeric bounds, `maxPagedSplats` page rounding, `coneFov0 <= coneFov`, and `minPixelRadius <= maxPixelRadius` for persisted profile overrides.
+- Decide and document normalization semantics precisely:
+  - runtime effective settings must always be validated;
+  - the controller's copy-returning `profileSettings` must represent the validated/minimal authoritative overrides used by transactions, not retain invalid values that disagree with runtime;
+  - both `desktop` and `mobile` parents remain present;
+  - inactive-profile overrides must not be erased while editing the active profile.
+- Avoid duplicate notification bursts. Applying `profileSettings` should publish one coherent changed-key set when effective settings change, including coupled fields.
+- Preserve defensive-copy behavior for both getter and setter input; later mutation of the caller's nested object must not mutate controller state or a transaction snapshot.
+- Use the existing public Studio transaction builder in a focused unit test and invoke the built transaction's actual `write` callback for forward/historic/redo values. Assert nested overrides, effective settings, and change notifications after each write. A mock that merely calls the setter separately is insufficient.
+- Manual Vite source-sync verification remains sufficient; do not add a new automated source-mutating e2e test.
+- Manually verify one desktop and one emulated-mobile cold load using non-empty overrides under both parents. Confirm badge, pane value, controller/renderer value, inactive-profile isolation, source rewrite, reset, undo/redo, and no browser/Vite error. Restore the authored scene literal afterward.
+- Keep global baseline and `DeviceProfile.sparkRenderer` values consistent. Prefer deriving duplicated profile fields from one canonical table if it can be done narrowly.
+- Do not revisit the unproven original Vite rejection cause. Continue describing it as unresolved at parser-message level.
+- Avoid unrelated refactors.
 
 ## Acceptance criteria
 
-- Visiting `/scene/baby_yoda?debug=true` displays exactly one stats.js FPS widget fixed at the top of the viewport.
-- Visiting `/scene/baby_yoda/edit?debug=true` displays exactly one stats.js FPS widget fixed at the top of the viewport and above the Studio UI/canvas.
-- The widget is visibly the FPS panel on initial display.
-- `/scene/baby_yoda`, `/scene/baby_yoda/edit`, `?debug=false`, `?debug=`, and unrelated query strings do not display the widget.
-- Landing, not-found, and ad-hoc viewer flows do not gain the widget from this scene-only feature.
-- History/route transitions do not leave a stale widget or create duplicates; query-derived state reflects the current browser URL when routing is re-evaluated.
-- Mount/unmount cleanup cancels the widget's RAF loop and removes its DOM element.
-- Existing behavior and tests continue to pass.
-- New automated tests cover positive behavior in both playback and edit modes and representative negative behavior. Tests should use a stable app-owned selector/test identifier rather than depending solely on undocumented stats.js DOM internals.
-- `AGENTS.md` concisely documents `?debug=true`, its scope, and the main implementation/test source references.
-- Re-check every acceptance criterion immediately before finalizing.
+- Constructor and `profileSettings` setter cannot place unvalidated persisted values into effective `_settings`.
+- Persisted out-of-range/NaN/Infinity/page-size/coupled values resolve exactly as the existing canonical Spark validation contract specifies.
+- `controls.profileSettings` returns validated minimal overrides consistent with `controls.settings` and the active baseline.
+- Invalid input-object mutation after assignment cannot alter controller state.
+- Active application emits one coherent notification containing every actually changed field, including coupled changes.
+- The actual public Studio-built transaction `write` is tested with new, historic, and redo nested values; each updates `profileSettings`, effective `settings`, and notifications correctly.
+- Desktop and emulated-mobile manual cold-load evidence is recorded explicitly. Each applies only its own override parent while preserving the other.
+- Source sync, reset-to-baseline removal, HMR/reload, playback/edit equality, renderer propagation, and capacity reload remain correct.
+- No new source-mutating automated e2e test is required; existing e2e tests continue to pass.
+- `AGENTS.md` accurately documents validated profile-literal application.
+- Re-check every criterion before finalizing.
 
-## Tests to run
+## Tests and verification
 
-- Add focused Playwright coverage for playback and edit scene URLs with `?debug=true`.
-- Add focused negative coverage for no flag and at least `?debug=false`; cover route transition/duplicate cleanup if practical.
-- Add a unit test if query interpretation is extracted into a pure helper.
+Add focused unit coverage for:
+
+- constructor validation of active profile overrides;
+- `profileSettings` setter validation and normalization;
+- page rounding and both coupled invariant families;
+- fallback for NaN/Infinity or malformed runtime input;
+- defensive copy on setter input and getter output;
+- coherent notification changed-key set;
+- actual public transaction `write` for commit/undo/redo.
+
+Manually verify desktop and emulated mobile against `npm run dev`, then restore the scene source.
+
+Run and report:
+
 - `npm run check`
 - `npm run lint`
 - `npm run test:unit`
-- Run the directly relevant Playwright spec(s), then `npm run test:e2e` if feasible.
+- `npm run test:e2e`
 - `npm run build`
-
-Create new tests for the feature; do not rely only on manual inspection. Report exact commands and outcomes, including any failures that pre-date the change.
+- `git diff --check`
 
 ## Things Pi must not change
 
-- Do not change scene route syntax, registry discovery, or playback-versus-edit hosting.
-- Do not enable Studio in playback mode or alter editor extension behavior.
-- Do not alter camera, ScrollTrigger, Spark renderer/reload, or SplatMesh lifecycle code.
-- Do not change the meaning of the existing `url` query parameter.
-- Do not expose or repurpose test-only Spark/camera diagnostics in production.
-- Do not discard unrelated user changes, especially the pre-existing `package-lock.json` modification.
-- Do not add a custom FPS implementation in place of stats.js.
-- Do not commit generated build output or unrelated dependency upgrades.
+- Do not revert to `settings={sparkControls.settings}` or a duplicate script `$state` override object.
+- Do not flatten or fully materialize baseline-equal scene settings.
+- Do not weaken profile isolation or the `profileSettings`-only sync guard.
+- Do not add a source-mutating automated e2e test; manual live verification is sufficient.
+- Do not patch Studio, suppress sync errors, or assert an unobserved Vite root cause.
+- Do not change unrelated rendering, reload, routing, camera, ScrollAnimator, ad-hoc, or FPS behavior.
+- Do not commit manual test values, generated output, or unrelated changes.
 
 ## Expected completion report
 
 Write `.codex-handoff/status.md` with:
 
-1. Summary of the implemented user-visible behavior.
-2. Changed files and the purpose of each.
-3. Exact debug-query semantics and widget lifecycle/cleanup design.
-4. Tests added or changed.
-5. Exact verification commands and pass/fail results.
-6. Acceptance-criteria checklist, item by item.
-7. Any known limitations, assumptions, or unrelated pre-existing working-tree changes preserved.
-8. Commit hash pushed to the current branch.
+1. Exact validation gap and correction.
+2. Constructor/setter normalization and notification semantics.
+3. Evidence from the actual public transaction `write` test.
+4. Separate desktop and emulated-mobile manual cold-load evidence.
+5. Changed files and purpose.
+6. Exact test commands/results.
+7. Item-by-item acceptance checklist.
+8. Known limitations, retaining the honest statement that the original Vite parser-level cause was not captured.
+9. Final pushed commit hash.
 
-Update `AGENTS.md` with concise, up-to-date feature information and source references; it does not need a full implementation log.
+Update `AGENTS.md` concisely with the validated authoritative flow and relevant source/test references.
 
-Always write `status.md` as the final action before pushing. After writing the report and pushing the implementation, do not perform any further verification or modification. Re-check that every acceptance-criteria item is met before finalizing the mission, then push all intended implementation, tests, documentation, and the final report to the current branch.
+Always write `.codex-handoff/status.md` as the last action before pushing. Immediately beforehand, re-check all acceptance criteria. After writing the report and pushing all intended code, tests, documentation, and report changes, do not perform further verification or modification.

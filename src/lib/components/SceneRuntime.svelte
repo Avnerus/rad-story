@@ -115,8 +115,9 @@
     if (typeof window === 'undefined') return
 
     // Register SparkControls with the active-controller runtime
+    // Use the profile name from the SparkControls itself (set at construction)
     if (sparkControls) {
-      detachSparkControls = activeSparkControlsRuntime.attach(sparkControls)
+      detachSparkControls = activeSparkControlsRuntime.attach(sparkControls, sparkControls.profileName)
     }
 
     // Stub-only: expose scene UUID, app camera UUID, and register SparkControls

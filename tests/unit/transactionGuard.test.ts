@@ -185,39 +185,33 @@ describe('SparkControls transaction guard', () => {
     expect(txs[0].sync).toBeUndefined()
   })
 
-  it('allows sync for root settings attribute', () => {
+  it('allows sync for profileSettings attribute', () => {
+    const controls = new SparkControls()
+    const txs: GuardTransaction[] = [makeTransaction(controls, 'profileSettings')]
+    guardScrollAnimatorTransactions(txs)
+    expect(txs[0].sync).toBeDefined()
+  })
+
+  it('blocks legacy settings attribute', () => {
     const controls = new SparkControls()
     const txs: GuardTransaction[] = [makeTransaction(controls, 'settings')]
     guardScrollAnimatorTransactions(txs)
-    expect(txs[0].sync).toBeDefined()
+    expect(txs[0].sync).toBeUndefined()
   })
 
-  it('allows sync for whitelisted setting: lodSplatScale', () => {
+  it('blocks individual field names', () => {
     const controls = new SparkControls()
-    const txs: GuardTransaction[] = [makeTransaction(controls, 'lodSplatScale')]
+    const txs: GuardTransaction[] = [
+      makeTransaction(controls, 'lodSplatScale'),
+      makeTransaction(controls, 'coneFov0'),
+      makeTransaction(controls, 'enableLod'),
+      makeTransaction(controls, 'lodSplatCount'),
+    ]
     guardScrollAnimatorTransactions(txs)
-    expect(txs[0].sync).toBeDefined()
-  })
-
-  it('allows sync for whitelisted setting: coneFov0', () => {
-    const controls = new SparkControls()
-    const txs: GuardTransaction[] = [makeTransaction(controls, 'coneFov0')]
-    guardScrollAnimatorTransactions(txs)
-    expect(txs[0].sync).toBeDefined()
-  })
-
-  it('allows sync for whitelisted setting: enableLod', () => {
-    const controls = new SparkControls()
-    const txs: GuardTransaction[] = [makeTransaction(controls, 'enableLod')]
-    guardScrollAnimatorTransactions(txs)
-    expect(txs[0].sync).toBeDefined()
-  })
-
-  it('allows sync for whitelisted setting: lodSplatCount', () => {
-    const controls = new SparkControls()
-    const txs: GuardTransaction[] = [makeTransaction(controls, 'lodSplatCount')]
-    guardScrollAnimatorTransactions(txs)
-    expect(txs[0].sync).toBeDefined()
+    expect(txs[0].sync).toBeUndefined()
+    expect(txs[1].sync).toBeUndefined()
+    expect(txs[2].sync).toBeUndefined()
+    expect(txs[3].sync).toBeUndefined()
   })
 
   it('blocks non-whitelisted attribute', () => {
@@ -241,12 +235,12 @@ describe('SparkControls transaction guard', () => {
       makeTransaction(animator, 'position'),
       makeTransaction(controls, 'position'),
       makeTransaction(animator, 'keyframes'),
-      makeTransaction(controls, 'lodSplatScale'),
+      makeTransaction(controls, 'profileSettings'),
     ]
     guardScrollAnimatorTransactions(txs)
     expect(txs[0].sync).toBeUndefined() // animator position suppressed
     expect(txs[1].sync).toBeUndefined() // controls position suppressed
     expect(txs[2].sync).toBeDefined()   // animator keyframes preserved
-    expect(txs[3].sync).toBeDefined()   // controls settings preserved
+    expect(txs[3].sync).toBeDefined()   // controls profileSettings preserved
   })
 })
