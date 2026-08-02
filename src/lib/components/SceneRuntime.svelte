@@ -14,8 +14,8 @@
   interface Props {
     url: string
     onReady?: () => void
-    /** Scene-specific SparkControls instance for the bridge. */
-    sparkControls?: SparkControls | null
+    /** Scene-specific SparkControls instance for the bridge. Required. */
+    sparkControls: SparkControls
     /** Scene-provided stable wrapper for the SplatMesh. */
     splatWrapper: Object3D
     /** The app's PerspectiveCamera — always used for look-at and debug. */
@@ -27,7 +27,7 @@
     children?: Snippet
   }
 
-  let { url, onReady, sparkControls = null, splatWrapper, appCamera, cameraTarget, sourceSyncEnabled = true, children }: Props = $props()
+  let { url, onReady, sparkControls, splatWrapper, appCamera, cameraTarget, sourceSyncEnabled = true, children }: Props = $props()
 
   // Camera debug state for e2e tests (world-space)
   let cameraProgress = $state(0)
@@ -116,11 +116,9 @@
 
     // Register SparkControls with the active-controller runtime
     // Use the profile name from the SparkControls itself (set at construction)
-    if (sparkControls) {
-      detachSparkControls = activeSparkControlsRuntime.attach(sparkControls, sparkControls.profileName, {
-        sourceSyncEnabled,
-      })
-    }
+    detachSparkControls = activeSparkControlsRuntime.attach(sparkControls, sparkControls.profileName, {
+      sourceSyncEnabled,
+    })
 
     // Stub-only: expose scene UUID, app camera UUID, and register SparkControls
     // for disposal tracking — all for e2e identity assertions
@@ -128,12 +126,10 @@
       const scene = threlte.scene
       ;(window as unknown as Record<string, unknown>).__stub_scene_uuid = scene?.uuid ?? null
       ;(window as unknown as Record<string, unknown>).__stub_app_camera_uuid = appCamera.uuid
-      if (sparkControls) {
-        const register = (window as unknown as Record<string, unknown>).__spark_stub_register_controls
-        if (typeof register === 'function') register(sparkControls)
-        // Expose the active controller for e2e external-setter tests
-        ;(window as unknown as Record<string, unknown>).__spark_stub_active_controls = sparkControls
-      }
+      const register = (window as unknown as Record<string, unknown>).__spark_stub_register_controls
+      if (typeof register === 'function') register(sparkControls)
+      // Expose the active controller for e2e external-setter tests
+      ;(window as unknown as Record<string, unknown>).__spark_stub_active_controls = sparkControls
     }
 
     // Register GSAP ScrollTrigger
@@ -177,21 +173,19 @@
     detachSparkControls = null
     // Stub-only: identity-safe clear of active controls reference
     // (only delete if it still points to this scene's sparkControls)
-    if ((window as unknown as Record<string, unknown>).__spark_stub === true && sparkControls) {
+    if ((window as unknown as Record<string, unknown>).__spark_stub === true) {
       const current = (window as unknown as Record<string, unknown>).__spark_stub_active_controls
       if (current === sparkControls) {
         delete (window as unknown as Record<string, unknown>).__spark_stub_active_controls
       }
     }
     // Dispose SparkControls on scene unmount (single owner)
-    if (sparkControls) {
-      // Stub-only: record disposal for e2e lifecycle assertions
-      if ((window as unknown as Record<string, unknown>).__spark_stub === true) {
-        const record = (window as unknown as Record<string, unknown>).__spark_stub_record_controls_disposal
-        if (typeof record === 'function') record(sparkControls)
-      }
-      sparkControls.dispose()
+    // Stub-only: record disposal for e2e lifecycle assertions
+    if ((window as unknown as Record<string, unknown>).__spark_stub === true) {
+      const record = (window as unknown as Record<string, unknown>).__spark_stub_record_controls_disposal
+      if (typeof record === 'function') record(sparkControls)
     }
+    sparkControls.dispose()
   })
 </script>
 

@@ -183,6 +183,21 @@ test.describe('RAD Story', () => {
     expect(await page.getByLabel('RAD file URL').inputValue()).toBe(SAMPLE_URL)
   })
 
+  test('Start writes splat_url and preserves unrelated query parameters', async ({ page }) => {
+    await page.goto('/?debug=true')
+    const input = page.getByLabel('RAD file URL')
+    await input.fill(SAMPLE_URL)
+    await page.getByRole('button', { name: 'Start' }).click()
+    await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
+
+    const url = page.url()
+    expect(url).toContain('splat_url=')
+    expect(url).toContain('debug=true')
+    // Legacy url parameter should not be present
+    const urlObj = new URL(url)
+    expect(urlObj.searchParams.has('url')).toBe(false)
+  })
+
   test('free navigation controls are absent', async ({ page }) => {
     await startViewer(page)
     await expect(page.getByLabel('Free navigation')).not.toBeVisible()

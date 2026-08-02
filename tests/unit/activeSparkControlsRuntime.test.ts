@@ -181,6 +181,106 @@ describe('ActiveSparkControlsRuntime', () => {
     detach()
     expect(runtime.activeController).toBeNull()
   })
+
+  // -----------------------------------------------------------------------
+  // Source sync capability
+  // -----------------------------------------------------------------------
+
+  test('sourceSyncEnabled defaults to false', () => {
+    const ctrl = makeFakeControls('a')
+    runtime.attach(ctrl as never, 'desktop', {})
+    expect(runtime.sourceSyncEnabled).toBe(false)
+  })
+
+  test('sourceSyncEnabled: true is respected', () => {
+    const ctrl = makeFakeControls('a')
+    runtime.attach(ctrl as never, 'desktop', { sourceSyncEnabled: true })
+    expect(runtime.sourceSyncEnabled).toBe(true)
+  })
+
+  test('sourceSyncEnabled: false is respected', () => {
+    const ctrl = makeFakeControls('a')
+    runtime.attach(ctrl as never, 'desktop', { sourceSyncEnabled: false })
+    expect(runtime.sourceSyncEnabled).toBe(false)
+  })
+
+  test('canSourceSync returns true only for exact active persistable controller', () => {
+    const ctrl = makeFakeControls('a')
+    runtime.attach(ctrl as never, 'desktop', { sourceSyncEnabled: true })
+    expect(runtime.canSourceSync(ctrl as never)).toBe(true)
+  })
+
+  test('canSourceSync returns false for non-active controller', () => {
+    const active = makeFakeControls('active')
+    const other = makeFakeControls('other')
+    runtime.attach(active as never, 'desktop', { sourceSyncEnabled: true })
+    expect(runtime.canSourceSync(other as never)).toBe(false)
+  })
+
+  test('canSourceSync returns false for non-persistable active controller', () => {
+    const ctrl = makeFakeControls('a')
+    runtime.attach(ctrl as never, 'desktop', { sourceSyncEnabled: false })
+    expect(runtime.canSourceSync(ctrl as never)).toBe(false)
+  })
+
+  test('canSourceSync returns false when no controller', () => {
+    const ctrl = makeFakeControls('a')
+    expect(runtime.canSourceSync(ctrl as never)).toBe(false)
+  })
+
+  test('same-controller reattach with changed permission notifies subscribers', () => {
+    const ctrl = makeFakeControls('a')
+    const changes: (typeof ctrl | null)[] = []
+    const unsub = runtime.onChange((c) => changes.push(c))
+
+    runtime.attach(ctrl as never, 'desktop', { sourceSyncEnabled: false })
+    changes.length = 0 // clear initial
+
+    // Re-attach same controller with changed permission
+    runtime.attach(ctrl as never, 'desktop', { sourceSyncEnabled: true })
+
+    expect(changes).toHaveLength(1)
+    expect(changes[0]).toBe(ctrl)
+    expect(runtime.sourceSyncEnabled).toBe(true)
+
+    unsub()
+  })
+
+  test('stale detach cannot alter newer controller permission', () => {
+    const ctrlA = makeFakeControls('a')
+    const ctrlB = makeFakeControls('b')
+
+    const detachA = runtime.attach(ctrlA as never, 'desktop', { sourceSyncEnabled: false })
+    runtime.attach(ctrlB as never, 'desktop', { sourceSyncEnabled: true })
+
+    expect(runtime.sourceSyncEnabled).toBe(true)
+    expect(runtime.canSourceSync(ctrlB as never)).toBe(true)
+
+    // Stale detach from A
+    detachA()
+    expect(runtime.activeController).toBe(ctrlB)
+    expect(runtime.sourceSyncEnabled).toBe(true)
+    expect(runtime.canSourceSync(ctrlB as never)).toBe(true)
+  })
+
+  test('current detach clears sourceSyncEnabled', () => {
+    const ctrl = makeFakeControls('a')
+    const detach = runtime.attach(ctrl as never, 'desktop', { sourceSyncEnabled: true })
+    expect(runtime.sourceSyncEnabled).toBe(true)
+
+    detach()
+    expect(runtime.sourceSyncEnabled).toBe(false)
+    expect(runtime.canSourceSync(ctrl as never)).toBe(false)
+  })
+
+  test('destroy clears sourceSyncEnabled', () => {
+    const ctrl = makeFakeControls('a')
+    runtime.attach(ctrl as never, 'desktop', { sourceSyncEnabled: true })
+    expect(runtime.sourceSyncEnabled).toBe(true)
+
+    runtime.destroy()
+    expect(runtime.sourceSyncEnabled).toBe(false)
+  })
 })
 
 describe('Stub diagnostic identity-safety (SceneRuntime __spark_stub_active_controls)', () => {

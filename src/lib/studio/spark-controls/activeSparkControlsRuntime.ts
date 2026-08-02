@@ -77,13 +77,33 @@ export class ActiveSparkControlsRuntime {
   }
 
   /**
+   * Check whether a specific SparkControls instance is the current active
+   * controller and its current registration explicitly permits source sync.
+   *
+   * Returns false for:
+   * - A controller that is not the current active controller
+   * - A controller whose registration has sourceSyncEnabled: false
+   * - A detached/stale controller
+   *
+   * This is the identity-aware check used by the transaction guard to prevent
+   * stale or non-active controllers from inheriting a newer controller's
+   * source-sync permission.
+   *
+   * @param controls - The SparkControls instance to check.
+   */
+  canSourceSync(controls: SparkControls): boolean {
+    return this._active === controls && this._sourceSyncEnabled
+  }
+
+  /**
    * Attach a SparkControls instance as the active controller.
    *
    * Returns a detach function that clears the registration only if
    * this attach is still the current one (identity-safe).
    *
    * If a controller was already active, it is replaced and subscribers
-   * are notified.
+   * are notified. Re-attaching the same controller with changed metadata
+   * (profile name or source sync capability) also notifies subscribers.
    *
    * @param controls - The SparkControls instance.
    * @param profileName - Active device profile name.
@@ -92,11 +112,13 @@ export class ActiveSparkControlsRuntime {
   attach(controls: SparkControls, profileName: DeviceProfileName = 'desktop', options: SparkControlsAttachOptions = {}): () => void {
     const gen = ++this._generation
     const previous = this._active
+    const previousSyncEnabled = this._sourceSyncEnabled
     this._active = controls
     this._profileName = profileName
     this._sourceSyncEnabled = options.sourceSyncEnabled ?? false
 
-    if (previous !== controls) {
+    // Notify subscribers on controller change OR same-controller metadata change
+    if (previous !== controls || previousSyncEnabled !== this._sourceSyncEnabled) {
       for (const fn of this._listeners) fn(controls)
     }
 

@@ -14,10 +14,10 @@ describe('SparkControls transaction guard — profileSettings', () => {
     }
   }
 
-  const controls = new SparkControls()
+  let controls: SparkControls
 
   beforeEach(() => {
-    // Set up a persistable controller so profileSettings sync is allowed
+    controls = new SparkControls()
     activeSparkControlsRuntime.attach(controls, 'desktop', { sourceSyncEnabled: true })
   })
 
@@ -102,5 +102,22 @@ describe('SparkControls transaction guard — non-persistable controller blocks 
     expect(txs[0].sync).toBeUndefined()
     expect(txs[1].sync).toBeUndefined()
     expect(txs[2].sync).toBeUndefined()
+  })
+
+  it('stale/non-active controller blocked even when new active is persistable', () => {
+    const staleControls = new SparkControls()
+    const newControls = new SparkControls()
+
+    // Register stale first
+    activeSparkControlsRuntime.attach(staleControls, 'desktop', { sourceSyncEnabled: false })
+    // Register new persistable controller
+    activeSparkControlsRuntime.attach(newControls, 'desktop', { sourceSyncEnabled: true })
+
+    // Transaction from stale controller should still be blocked
+    const txs: GuardTransaction[] = [
+      { object: staleControls, sync: { attributeName: 'profileSettings' } },
+    ]
+    guardScrollAnimatorTransactions(txs)
+    expect(txs[0].sync).toBeUndefined() // stale controller blocked by identity check
   })
 })

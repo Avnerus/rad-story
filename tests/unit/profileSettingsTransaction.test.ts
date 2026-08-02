@@ -8,8 +8,10 @@ import { activeSparkControlsRuntime } from '$lib/studio/spark-controls/activeSpa
 import type { ProfileSettings } from '$lib/spark/SparkControls'
 
 describe('profile-aware Spark settings transaction', () => {
+  let controls: SparkControls
+
   beforeEach(() => {
-    const controls = new SparkControls()
+    controls = new SparkControls()
     activeSparkControlsRuntime.attach(controls, 'desktop', { sourceSyncEnabled: true })
   })
   it('builds correct profileSettings transaction shape', () => {
@@ -31,7 +33,6 @@ describe('profile-aware Spark settings transaction', () => {
   })
 
   it('profileSettings transaction passes through guard', () => {
-    const controls = new SparkControls()
     const txs: GuardTransaction[] = [
       {
         object: controls,
@@ -44,7 +45,6 @@ describe('profile-aware Spark settings transaction', () => {
   })
 
   it('nested profileSettings.desktop is blocked by guard', () => {
-    const controls = new SparkControls()
     const txs: GuardTransaction[] = [
       {
         object: controls,
@@ -56,7 +56,6 @@ describe('profile-aware Spark settings transaction', () => {
   })
 
   it('nested profileSettings.mobile.blurAmount is blocked by guard', () => {
-    const controls = new SparkControls()
     const txs: GuardTransaction[] = [
       {
         object: controls,

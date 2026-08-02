@@ -165,48 +165,44 @@ describe('SparkControls transaction guard', () => {
     }
   }
 
+  let controls: SparkControls
+
   beforeEach(() => {
-    const controls = new SparkControls()
+    controls = new SparkControls()
     activeSparkControlsRuntime.attach(controls, 'desktop', { sourceSyncEnabled: true })
   })
 
   it('suppresses sync for position on SparkControls', () => {
-    const controls = new SparkControls()
     const txs: GuardTransaction[] = [makeTransaction(controls, 'position')]
     guardScrollAnimatorTransactions(txs)
     expect(txs[0].sync).toBeUndefined()
   })
 
   it('suppresses sync for rotation on SparkControls', () => {
-    const controls = new SparkControls()
     const txs: GuardTransaction[] = [makeTransaction(controls, 'rotation')]
     guardScrollAnimatorTransactions(txs)
     expect(txs[0].sync).toBeUndefined()
   })
 
   it('suppresses sync for scale on SparkControls', () => {
-    const controls = new SparkControls()
     const txs: GuardTransaction[] = [makeTransaction(controls, 'scale')]
     guardScrollAnimatorTransactions(txs)
     expect(txs[0].sync).toBeUndefined()
   })
 
   it('allows sync for profileSettings attribute', () => {
-    const controls = new SparkControls()
     const txs: GuardTransaction[] = [makeTransaction(controls, 'profileSettings')]
     guardScrollAnimatorTransactions(txs)
     expect(txs[0].sync).toBeDefined()
   })
 
   it('blocks legacy settings attribute', () => {
-    const controls = new SparkControls()
     const txs: GuardTransaction[] = [makeTransaction(controls, 'settings')]
     guardScrollAnimatorTransactions(txs)
     expect(txs[0].sync).toBeUndefined()
   })
 
   it('blocks individual field names', () => {
-    const controls = new SparkControls()
     const txs: GuardTransaction[] = [
       makeTransaction(controls, 'lodSplatScale'),
       makeTransaction(controls, 'coneFov0'),
@@ -221,14 +217,12 @@ describe('SparkControls transaction guard', () => {
   })
 
   it('blocks non-whitelisted attribute', () => {
-    const controls = new SparkControls()
     const txs: GuardTransaction[] = [makeTransaction(controls, 'someRandomField')]
     guardScrollAnimatorTransactions(txs)
     expect(txs[0].sync).toBeUndefined()
   })
 
   it('blocks nested settings.lodSplatScale', () => {
-    const controls = new SparkControls()
     const txs: GuardTransaction[] = [makeTransaction(controls, 'settings.lodSplatScale')]
     guardScrollAnimatorTransactions(txs)
     expect(txs[0].sync).toBeUndefined()
@@ -236,7 +230,6 @@ describe('SparkControls transaction guard', () => {
 
   it('does not weaken ScrollAnimator guard', () => {
     const animator = new ScrollAnimator()
-    const controls = new SparkControls()
     const txs: GuardTransaction[] = [
       makeTransaction(animator, 'position'),
       makeTransaction(controls, 'position'),
@@ -248,5 +241,13 @@ describe('SparkControls transaction guard', () => {
     expect(txs[1].sync).toBeUndefined() // controls position suppressed
     expect(txs[2].sync).toBeDefined()   // animator keyframes preserved
     expect(txs[3].sync).toBeDefined()   // controls profileSettings preserved
+  })
+
+  it('blocks sync for non-active controller even when active is persistable', () => {
+    // A different SparkControls that is NOT the active controller
+    const otherControls = new SparkControls()
+    const txs: GuardTransaction[] = [makeTransaction(otherControls, 'profileSettings')]
+    guardScrollAnimatorTransactions(txs)
+    expect(txs[0].sync).toBeUndefined() // blocked — not the active controller
   })
 })

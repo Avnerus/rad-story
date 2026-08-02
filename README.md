@@ -9,7 +9,7 @@ A web-based tool for **designing scroll-based stories over Spark 2.x streaming L
 - Scroll-driven camera animation: keyframe camera poses along a scroll axis using the Scroll Animator panel
 - Mobile-aware performance settings (DPR clamping, reduced splat budgets, foveation)
 - RAD URL validation with user-friendly error messages
-- URL preserved in query string for reloadability
+- URL preserved in query string (`?splat_url=...`) for reloadability
 
 ## Sample RAD URL
 

@@ -11,6 +11,7 @@
  * (ad-hoc/dynamic viewer), ALL SparkControls source sync is blocked.
  */
 import { activeSparkControlsRuntime } from '$lib/studio/spark-controls/activeSparkControlsRuntime'
+import type { SparkControls } from '$lib/spark/SparkControls'
 
 /**
  * Narrow structural transaction type for the guard.
@@ -98,8 +99,10 @@ export function guardScrollAnimatorTransactions(
       const sync = tx.sync
       if (!sync) continue
 
-      // If the active controller is non-persistable, block ALL Spark source sync
-      if (!activeSparkControlsRuntime.sourceSyncEnabled) {
+      // Identity-aware check: only allow source sync if this exact controller
+      // is the current active controller AND its registration permits it.
+      // Stale/detached controllers never inherit a newer controller's permission.
+      if (!activeSparkControlsRuntime.canSourceSync(tx.object as SparkControls)) {
         tx.sync = undefined
         continue
       }
