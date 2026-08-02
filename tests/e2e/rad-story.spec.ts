@@ -166,11 +166,21 @@ test.describe('RAD Story', () => {
     expect(initialState.targetY).toBeCloseTo(0, 0)
     expect(initialState.targetZ).toBeCloseTo(0, 0)
 
+    // Intermediate scroll: ~50% progress
+    await page.evaluate(() => { window.scrollTo(0, document.body.scrollHeight * 0.5) })
+    await page.waitForTimeout(800)
+    const midState = await getCameraState(page)
+    expect(midState.progress).toBeGreaterThanOrEqual(30)
+    expect(midState.progress).toBeLessThanOrEqual(70)
+    expect(midState.progress).toBeLessThanOrEqual(100.01)
+
+    // Full scroll: ~100% progress
     await page.evaluate(() => { window.scrollTo(0, document.body.scrollHeight) })
     await page.waitForTimeout(800)
 
     const scrolledState = await getCameraState(page)
-    expect(scrolledState.progress).toBeGreaterThan(0.5)
+    expect(scrolledState.progress).toBeGreaterThan(90)
+    expect(scrolledState.progress).toBeLessThanOrEqual(100.01)
     expect(scrolledState.y).toBeGreaterThan(initialState.y)
     expect(scrolledState.targetX).toBeCloseTo(0, 0)
     expect(scrolledState.targetY).toBeCloseTo(0, 0)
@@ -268,6 +278,7 @@ test.describe('RAD Story', () => {
     const afterJump = await getCameraState(page)
     expect(afterJump.y).toBeGreaterThan(25)
     expect(afterJump.progress).toBeGreaterThan(95)
+    expect(afterJump.progress).toBeLessThanOrEqual(100.01)
   })
 
   test('percentage display updates when scrolling', async ({ page }) => {

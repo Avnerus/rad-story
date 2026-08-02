@@ -58,9 +58,10 @@
   }
 
   // Subscribe to scroll percentage from the shared runtime
+  // scrollAnimatorRuntime.percentage is 0..100; assign directly (no extra scaling)
   $effect(() => {
     const unsub = percentageStore.subscribe((v) => {
-      cameraProgress = v * 100
+      cameraProgress = v
       updateDebugState()
     })
     return unsub

@@ -135,6 +135,7 @@ test.describe('Scene routing', () => {
 
     const state = await getCameraState(page)
     expect(state.progress).toBeGreaterThan(95)
+    expect(state.progress).toBeLessThanOrEqual(100.01)
     expect(state.y).toBeGreaterThan(25)
   })
 

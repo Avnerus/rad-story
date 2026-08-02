@@ -136,6 +136,7 @@ test.describe('Playback mode (/scene/baby_yoda)', () => {
 
     const state = await getCameraState(page)
     expect(state.progress).toBeGreaterThan(95)
+    expect(state.progress).toBeLessThanOrEqual(100.01)
     expect(state.y).toBeGreaterThan(25)
   })
 

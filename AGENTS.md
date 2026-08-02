@@ -355,12 +355,12 @@ Fixed canvas + scrollable document: `<Canvas>` in `.viewer-stage` (`position: fi
 `src/lib/components/CameraDiagnostics.svelte` — Visually hidden `<div class="camera-debug" data-testid="camera-state">` rendered **only in e2e stub builds** (`VITE_E2E_STUB_SPARK=true`). Gated by `{#if import.meta.env.VITE_E2E_STUB_SPARK === 'true'}` in `SceneRuntime.svelte`. The component encapsulates all diagnostic reactive state and per-frame tasks (camera/target world coordinates, scroll progress, active-camera status) so production `SceneRuntime` has zero diagnostic overhead. In production builds, the component is tree-shaken entirely — no diagnostic DOM, no reactive state, no per-frame diagnostic tasks.
 
 Attributes:
-- `data-progress` — ScrollTrigger percentage (subscribed from `scrollAnimatorRuntime.percentage`)
+- `data-progress` — ScrollTrigger percentage `0..100` (assigned directly from `scrollAnimatorRuntime.percentage`, which is `0..100`)
 - `data-x`, `data-y`, `data-z` — Camera **world** position
 - `data-target-x`, `data-target-y`, `data-target-z` — CameraTarget **world** position
 - `data-active` — `"true"` when the app `PerspectiveCamera` is the active Threlte camera (editor camera off), `"false"` otherwise
 
-Unit tests: `tests/unit/cameraDiagnosticsGating.test.ts` — verifies no diagnostic state/tasks in `SceneRuntime`, correct gating with `VITE_E2E_STUB_SPARK`, and complete attribute contract in `CameraDiagnostics`.
+Unit tests: `tests/unit/cameraDiagnosticsGating.test.ts` — verifies no diagnostic state/tasks in `SceneRuntime`, correct gating with `VITE_E2E_STUB_SPARK`, no double-scaling of `data-progress`, and complete attribute contract in `CameraDiagnostics`.
 
 ## Studio Overlay Scroll-Safety
 

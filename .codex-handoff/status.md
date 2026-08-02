@@ -1,64 +1,52 @@
-# Status: Remove test-only diagnostics from production hot paths
+# Status: Fix double-scaled camera diagnostic progress
 
-## Summary
+## Root Cause
 
-Extracted all test-only camera diagnostic state, per-frame tasks, and DOM rendering from `SceneRuntime.svelte` into a new `CameraDiagnostics.svelte` component, gated behind `import.meta.env.VITE_E2E_STUB_SPARK === 'true'`. This uses the existing e2e stub build flag — no new environment variable introduced.
+`CameraDiagnostics.svelte` assigned `cameraProgress = v * 100` where `v` is already a `0..100` percentage from `scrollAnimatorRuntime.percentage`. This produced values up to `10000` in `data-progress`, which passed existing e2e assertions like `progress > 95` because `10000 > 95`.
 
-In production builds, Vite replaces `import.meta.env.VITE_E2E_STUB_SPARK` with `undefined`, the `{#if}` block evaluates to `false`, and Rollup tree-shakes the entire `CameraDiagnostics` import and its reactive state. The production `SceneRuntime` has zero diagnostic overhead.
+## Correction
+
+Changed `cameraProgress = v * 100` to `cameraProgress = v` in `CameraDiagnostics.svelte`. Added a unit test that would fail against the double-scaling pattern.
 
 ## Changed Files
 
 | File | Change |
 |------|--------|
-| `src/lib/components/SceneRuntime.svelte` | Removed all diagnostic reactive state (`cameraProgress`, `cameraWorld*`, `targetWorld*`, `cameraIsActive`), removed `updateDebugState()` calls from ScrollTrigger hot path and per-frame task, removed diagnostic-only `useTask` (cameraIsActive check), removed `_camWorld` scratch vector, removed inline `<div class="camera-debug">`. Added `import` and conditional `<CameraDiagnostics>` render. Camera look-at task now contains only `getWorldPosition` + `lookAt`. |
-| `src/lib/components/CameraDiagnostics.svelte` | **New file.** Encapsulates all diagnostic reactive state, per-frame coordinate updates, scroll percentage subscription from `scrollAnimatorRuntime.percentage`, camera-active check via `useTask`, and the `<div data-testid="camera-state">` element with all `data-*` attributes. |
-| `tests/unit/cameraDiagnosticsGating.test.ts` | **New file.** 9 unit tests verifying: no diagnostic `$state` in SceneRuntime, no `updateDebugState`/`cameraProgress` in ScrollTrigger hot path, exactly one `useTask` (look-at only, no diagnostics), compile-time gate with `VITE_E2E_STUB_SPARK`, no inline `camera-debug` div in SceneRuntime, and complete attribute/reactive state contract in CameraDiagnostics. |
-| `AGENTS.md` | Updated SceneRuntime description (removed "debug state"), added CameraDiagnostics to key files, rewrote "Camera Debug State" section to document the gating contract, new component, tree-shaking behavior, and test references. |
+| `src/lib/components/CameraDiagnostics.svelte` | `cameraProgress = v * 100` → `cameraProgress = v` (with clarifying comment) |
+| `tests/unit/cameraDiagnosticsGating.test.ts` | Added "no double-scaling" assertion: verifies `cameraProgress = v` (not `v * 100`) |
+| `tests/e2e/rad-story.spec.ts` | Added intermediate-scroll assertion (30-70% range) and upper-bound checks (`<= 100.01`) on full-scroll and keyframe-jump progress values |
+| `tests/e2e/scene-routing.spec.ts` | Added upper-bound check (`<= 100.01`) on scroll-100% progress |
+| `tests/e2e/playback-edit.spec.ts` | Added upper-bound check (`<= 100.01`) on scroll-100% progress |
+| `AGENTS.md` | Clarified `data-progress` is `0..100` sourced directly from `scrollAnimatorRuntime.percentage`; noted no-double-scaling unit test |
 
-## What No Longer Runs in Production
+## Strengthened Assertions
 
-1. **No diagnostic reactive state** — `cameraProgress`, `cameraWorldX/Y/Z`, `targetWorldX/Y/Z`, `cameraIsActive` are not declared in `SceneRuntime`
-2. **No diagnostic calls in ScrollTrigger `onUpdate`** — `applyScrollToAllAnimators()` only traverses and applies keyframes; no `cameraProgress` assignment or `updateDebugState()` call
-3. **No diagnostic calls in per-frame task** — The single `useTask` only does `cameraTarget.getWorldPosition()` + `appCamera.lookAt()`; no `updateDebugState()` call
-4. **No diagnostic-only per-frame task** — The `cameraIsActive` identity check `useTask` is not registered
-5. **No diagnostic DOM** — The `<div class="camera-debug">` element is not rendered
-6. **No `getWorldPosition()` for camera coordinates** — The `_camWorld` scratch vector and its `getWorldPosition()` call are removed from `SceneRuntime`
+- **rad-story.spec.ts**: Intermediate scroll at 50% asserts `progress >= 30 && progress <= 70 && progress <= 100.01`. Full scroll asserts `progress > 90 && progress <= 100.01`. Keyframe jump to 100% asserts `progress > 95 && progress <= 100.01`.
+- **scene-routing.spec.ts**: Scroll 100% asserts `progress > 95 && progress <= 100.01`.
+- **playback-edit.spec.ts**: Scroll 100% asserts `progress > 95 && progress <= 100.01`.
+- **cameraDiagnosticsGating.test.ts**: Source-level assertion that `cameraProgress = v` (not `v * 100`).
 
-## What Remains Intact
-
-- Per-frame `cameraTarget.getWorldPosition(_targetWorld)` + `appCamera.lookAt(_targetWorld)` — essential application functionality
-- Scene traversal and `ScrollAnimator.applyScrollPercentage()` on initial setup and every ScrollTrigger update
-- `scrollAnimatorRuntime.updateProgress()` — drives the Studio authoring UI
-- `ScrollTrigger` creation, scrub behavior, and lifecycle
-- SparkControls registration, disposal, and all reload/bridge plumbing
-- All stub-only `window.__spark_stub` hooks (scene UUID, camera UUID, controls registration)
-
-## Tests
+## Tests Run
 
 | Command | Result |
 |---------|--------|
 | `npm run check` | 0 errors, 0 warnings |
-| `npm run test:unit` | 436 passed (27 files), including 9 new gating tests |
-| `npm run test:e2e` | 138 passed (all camera, scroll, routing, playback/edit, Spark controls, capacity reload, and frustum helper specs) |
-| `npm run build` (production, flag unset) | Builds successfully; `CameraDiagnostics` tree-shaken (no `camera-debug` references in output) |
-| `VITE_E2E_STUB_SPARK=true npx vite build` (stub) | Builds successfully; `camera-debug` and `data-testid="camera-state"` present in output |
+| `npm run test:unit` | 437 passed (27 files) |
+| `npm run test:e2e` | 138 passed |
+| `git diff --check` | Clean |
 
 ## Acceptance Criteria Checklist
 
-- [x] Normal dev/prod build does not register diagnostic-only frame task
-- [x] Normal dev/prod build does not update test-only reactive state on scroll
-- [x] Normal dev/prod build does not render hidden `camera-state` test element
-- [x] E2e stub build retains camera diagnostic element and all attributes
-- [x] Production still performs camera look-at every frame
-- [x] Production still applies all ScrollAnimators on setup and ScrollTrigger updates
-- [x] `scrollAnimatorRuntime.updateProgress()` preserved (drives Studio UI)
-- [x] Editor-camera toggle e2e assertions observe correct `data-active` transitions in stub build
-- [x] Scroll-position e2e assertions observe progress, coordinates, and target in stub build
-- [x] Flag is `import.meta.env.VITE_E2E_STUB_SPARK` (compile-time, test tooling only)
-- [x] Focused automated coverage added (9 tests in `cameraDiagnosticsGating.test.ts`)
-- [x] `AGENTS.md` updated with gating contract and source references
-- [x] No per-frame allocations, polling, timers, or additional reactive work introduced
+- [x] `data-progress` within `0..100` for all scroll positions in e2e stub builds
+- [x] At bottom of ScrollTrigger range, `data-progress` ~100 (not 10000)
+- [x] Intermediate scroll assertion demonstrates `data-progress` in expected `0..100` range
+- [x] Compile-time `VITE_E2E_STUB_SPARK` gate intact
+- [x] Normal builds still instantiate no camera diagnostic component
+- [x] Camera coordinates, target coordinates, active-camera, routing, playback/edit unchanged
+- [x] Focused automated tests fail against double-scaling and pass after fix
+- [x] No diagnostic state or calls restored to `SceneRuntime` hot paths
+- [x] `scrollAnimatorRuntime.percentage` unchanged (still `0..100`)
 
 ## Commit
 
-`1c8cd21` — pushed to `main`
+`c8e7155` → `809aca1` → pushed to `main`

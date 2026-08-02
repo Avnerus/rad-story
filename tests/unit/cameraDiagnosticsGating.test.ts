@@ -70,6 +70,12 @@ describe('camera diagnostics gating', () => {
       expect(diagnosticsSource).toContain('cameraProgress')
     })
 
+    it('assigns cameraProgress directly from percentageStore (no double-scaling)', () => {
+      // scrollAnimatorRuntime.percentage is 0..100; CameraDiagnostics must not multiply by 100
+      expect(diagnosticsSource).toMatch(/cameraProgress\s*=\s*v\s*\n/)
+      expect(diagnosticsSource).not.toMatch(/cameraProgress\s*=\s*v\s*\*\s*100/)
+    })
+
     it('updates camera/target world coordinates via reactive state', () => {
       expect(diagnosticsSource).toContain('cameraWorldX = $state')
       expect(diagnosticsSource).toContain('cameraWorldY = $state')
