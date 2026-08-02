@@ -27,8 +27,8 @@ function buildBaseline(overrides: Partial<SparkSettings>): SparkSettings {
 const DESKTOP_BASELINE: SparkSettings = buildBaseline({
   lodSplatScale: 1,
   lodRenderScale: 1,
-  maxStdDev: 8,
-  maxPagedSplats: 16 * SPARK_PAGE_SIZE,
+  maxStdDev: 2.8,
+  maxPagedSplats: 32 * SPARK_PAGE_SIZE,
   coneFov0: 90,
   coneFov: 120,
   coneFoveate: 0.2,
@@ -41,8 +41,8 @@ const DESKTOP_BASELINE: SparkSettings = buildBaseline({
 const MOBILE_BASELINE: SparkSettings = buildBaseline({
   lodSplatScale: 0.5,
   lodRenderScale: 2,
-  maxStdDev: 4,
-  maxPagedSplats: 4 * SPARK_PAGE_SIZE,
+  maxStdDev: 2.8,
+  maxPagedSplats: 16 * SPARK_PAGE_SIZE,
   coneFov0: 70,
   coneFov: 110,
   coneFoveate: 0.4,
