@@ -246,6 +246,25 @@ describe('ActiveSparkControlsRuntime', () => {
     unsub()
   })
 
+  test('same-controller reattach with changed profile name notifies subscribers', () => {
+    const ctrl = makeFakeControls('a')
+    const changes: (typeof ctrl | null)[] = []
+    const unsub = runtime.onChange((c) => changes.push(c))
+
+    runtime.attach(ctrl as never, 'desktop', { sourceSyncEnabled: true })
+    changes.length = 0 // clear initial
+
+    // Re-attach same controller with different profile name, same permission
+    runtime.attach(ctrl as never, 'mobile', { sourceSyncEnabled: true })
+
+    expect(changes).toHaveLength(1)
+    expect(changes[0]).toBe(ctrl)
+    expect(runtime.profileName).toBe('mobile')
+    expect(runtime.sourceSyncEnabled).toBe(true)
+
+    unsub()
+  })
+
   test('stale detach cannot alter newer controller permission', () => {
     const ctrlA = makeFakeControls('a')
     const ctrlB = makeFakeControls('b')

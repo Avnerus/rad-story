@@ -17,7 +17,7 @@ Supports three viewing modes:
 - `src/lib/components/SparkStudioBridge.svelte` — Manages dual SparkRenderer lifecycle via `createSparkStudioRenderer`. Initializes both renderers from the required `sparkControls.settings` effective snapshot using `sparkSettingsToRendererOptions()` (no fallback literals). Subscribes to `SparkControls` settings changes and propagates them to both renderers. On `maxPagedSplats` changes, calls `reconfigureMaxPagedSplats()` and triggers SplatMesh reload via `onMeshReload` callback.
 - `src/lib/router.ts` — Lightweight pathname router for `/scene/{sceneName}` (playback) and `/scene/{sceneName}/edit` (editing). `parseRoute()` returns `SceneRouteMatch` with `mode: 'view' | 'edit'`. Uses `navigateToScene()` (defaults to view) and `navigateToSceneEdit()` with `history.pushState` + `popstate`.
 - `src/lib/scenes/registry.ts` — Static scene discovery via `import.meta.glob('./[a-z0-9_]*.svelte', { eager: true })`. Validates names against `/^[a-z0-9_]+$/`. Maps normalized names to Svelte component default exports.
-- `src/lib/scenes/sceneObjects.ts` — `createSceneObjects(profile, profileName, profileSettings)` factory: creates `PerspectiveCamera`, `CameraTarget`, `ScrollAnimator` (camera + target), `SparkControls` (seeded from global baseline + scene overrides via constructor), and `SplatWrapper`. Re-exports `ProfileSettings` type and `DEFAULT_PROFILE_SETTINGS` from `SparkControls.ts`. Keyframes/settings are authored ONLY in `<T>` attributes (single source of truth).
+- `src/lib/scenes/sceneObjects.ts` — `createSceneObjects(profileName, profileSettings)` factory: creates `PerspectiveCamera`, `CameraTarget`, `ScrollAnimator` (camera + target), `SparkControls` (seeded from global baseline + scene overrides via constructor), and `SplatWrapper`. Re-exports `ProfileSettings` type and `DEFAULT_PROFILE_SETTINGS` from `SparkControls.ts`. Keyframes/settings are authored ONLY in `<T>` attributes (single source of truth).
 - `src/lib/scenes/baby_yoda.svelte` — Example scene: `/scene/baby_yoda`, RAD URL `https://avner.us/baby_yoda-lod.rad`, frustum helper enabled.
 - `src/lib/spark/SparkControls.ts` — Three.js `Object3D` subclass holding all editable Spark 2.1 quality/LOD/foveation settings. Appears as "Spark" in Studio outline. Has a writable `profileSettings` getter/setter (authoritative for source sync and undo/redo) that normalizes both profile parents, merges active profile overrides with stored baseline, updates flat effective `settings`, and emits change signal. Also has writable `settings` getter/setter and individual top-level property getters/setters for each field. `profileName` getter returns the active profile. All values validated against field-specific bounds; constructor input and single-field edits both pass through the same validation path. Exports `ProfileSettings` type, `DEFAULT_PROFILE_SETTINGS`, and `normalizeProfileSettings()`.
 - `src/lib/spark/ScrollAnimator.ts` — Three.js `Object3D` subclass with `keyframes` property, `showChildCameraFrustumWhenSelected` boolean, and `applyScrollPercentage()`.
@@ -104,7 +104,7 @@ Route namespace: `/scene/{sceneName}` (playback) and `/scene/{sceneName}/edit` (
 
 **Scene contract**: Each scene file is a Svelte component that:
 1. Imports `createSceneObjects()` from `./sceneObjects`
-2. Calls `createSceneObjects(profile, profile.profileName)` to create all scene objects (SparkControls seeded from global baseline)
+2. Calls `createSceneObjects(profile.profileName)` to create all scene objects (SparkControls seeded from global baseline)
 3. Renders `<SceneRuntime>` with typed props: `url`, `onReady`, `sparkControls`, `splatWrapper`, `appCamera`, `cameraTarget` (sourceSyncEnabled defaults to `true`)
 4. Declares literal `<T>` nodes inside `SceneRuntime` for Studio source sync (keyframes, showChildCameraFrustumWhenSelected, profileSettings, SplatWrapper transform)
 5. All debug/loading/lifecycle plumbing is in `SceneRuntime` — scene files contain only minimal imports, object construction, RAD URL, and literal `<T>` declarations
@@ -253,7 +253,7 @@ Keyframe mutations use `transactions.buildTransaction()` which derives source me
 
 **Generation-based safety:** Each `attach()` increments a generation counter. `detach()` only clears the active controller if the generation matches and the object identity matches. This prevents an older scene's destroy from clearing a newer scene's controller during remounts.
 
-**Unit tests:** `tests/unit/activeSparkControlsRuntime.test.ts` — attach/detach, stale-detach safety, subscriber notifications, cleanup, remount scenarios, no-controller state, sourceSyncEnabled default/explicit values, canSourceSync identity checks, same-controller reattach with changed permission, stale detach safety for capability, current detach/destroy clearing capability.
+**Unit tests:** `tests/unit/activeSparkControlsRuntime.test.ts` — attach/detach, stale-detach safety, subscriber notifications, cleanup, remount scenarios, no-controller state, sourceSyncEnabled default/explicit values, canSourceSync identity checks, same-controller reattach with changed permission, same-controller reattach with changed profile name, stale detach safety for capability, current detach/destroy clearing capability.
 
 ## SparkReloadCoordinator — Race-Safe Mesh Reload
 

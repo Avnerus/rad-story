@@ -112,13 +112,18 @@ export class ActiveSparkControlsRuntime {
   attach(controls: SparkControls, profileName: DeviceProfileName = 'desktop', options: SparkControlsAttachOptions = {}): () => void {
     const gen = ++this._generation
     const previous = this._active
+    const previousProfileName = this._profileName
     const previousSyncEnabled = this._sourceSyncEnabled
     this._active = controls
     this._profileName = profileName
     this._sourceSyncEnabled = options.sourceSyncEnabled ?? false
 
     // Notify subscribers on controller change OR same-controller metadata change
-    if (previous !== controls || previousSyncEnabled !== this._sourceSyncEnabled) {
+    if (
+      previous !== controls ||
+      previousProfileName !== this._profileName ||
+      previousSyncEnabled !== this._sourceSyncEnabled
+    ) {
       for (const fn of this._listeners) fn(controls)
     }
 
