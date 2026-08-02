@@ -1,111 +1,98 @@
-# Status: unify Spark configuration, scope source sync, rename dynamic URL query parameter
+# Status: close Spark configuration and verification gaps
 
-## 1. Summary of implemented design
+## 1. Summary and changed files
 
-Three coordinated changes:
+Three categories of changes:
 
-1. **One global Spark-settings source**: Removed the duplicated `sparkRenderer` object from `DeviceProfile` and `getDeviceProfile()`. The 22-field `DESKTOP_BASELINE` and `MOBILE_BASELINE` in `deviceProfile.ts` are now the sole global source. `getDeviceProfile()` returns only `{ profileName, dpr }`. `SparkStudioBridge` initializes both SparkRenderer instances from the active `SparkControls.settings` effective snapshot.
+**Remove fallback configuration duplication:**
+- `src/lib/spark/sparkSettingsToRendererOptions.ts` (new) — Pure helper converting `SparkSettings` → `SparkRendererOptions`. Maps `lodSplatCount: null` to `undefined`. No baseline literals.
+- `src/lib/components/SparkStudioBridge.svelte` — Removed all hardcoded fallback values (`lodSplatScale: 1`, `maxStdDev: 2.8`, etc.). `sparkControls` is now required. Renderer options come exclusively from `sparkSettingsToRendererOptions(sparkControls.settings)`.
+- `src/lib/components/SceneRuntime.svelte` — `sparkControls` prop is now required (not optional). Removed null checks around sparkControls usage.
 
-2. **Explicit source-sync capability per controller**: Added `sourceSyncEnabled` to `ActiveSparkControlsRuntime.attach()`. File-backed scenes register with `sourceSyncEnabled: true` (default), ad-hoc `RadStoryScene` registers with `sourceSyncEnabled: false`. The Spark Controls pane skips source-sync transactions for non-persistable controllers and shows a "Session-only" warning. The transaction guard provides defense-in-depth by blocking ALL Spark source sync for non-persistable controllers.
+**Identity-safe source-sync permission:**
+- `src/lib/studio/spark-controls/activeSparkControlsRuntime.ts` — Added `canSourceSync(controls)` method for identity-aware source sync checks. Same-controller re-attach with changed metadata now notifies subscribers.
+- `src/lib/studio/scroll-animator/transactionGuard.ts` — Uses `canSourceSync(tx.object)` instead of global `sourceSyncEnabled` boolean. Stale/detached controllers never inherit a newer controller's permission.
 
-3. **Query parameter rename**: Renamed `?url=` to `?splat_url=` throughout the app. Start button writes `splat_url`, removes legacy `url`, and preserves unrelated parameters like `debug`.
+**Complete the missing tests:**
+- `tests/unit/activeSparkControlsRuntime.test.ts` — Added 14 tests: sourceSyncEnabled default/explicit, canSourceSync identity checks, same-controller reattach notification, stale detach safety, destroy clearing.
+- `tests/unit/sparkSettingsToRendererOptions.test.ts` (new) — 7 tests: all 22 fields mapped, null→undefined, scene overrides in snapshot, inactive profile isolation, no infrastructure options.
+- `tests/unit/transactionGuard.test.ts` — Updated to use shared `controls` instance from `beforeEach`. Added stale/non-active controller test.
+- `tests/unit/profileTransactionGuard.test.ts` — Updated to use shared `controls`. Added stale controller test with new persistable active.
+- `tests/unit/profileSettingsTransaction.test.ts` — Updated guard tests to use shared `controls`.
+- `tests/e2e/rad-story.spec.ts` — Added "Start writes splat_url and preserves unrelated query parameters" test.
 
-## 2. Changed files
+**Documentation:**
+- `AGENTS.md` — Updated: required-controller initialization from `sparkSettingsToRendererOptions()`, identity-aware `canSourceSync()`, same-controller re-attach notification, new test references.
+- `README.md` — Names `splat_url` query parameter.
 
-### Configuration unification
-- `src/lib/types.ts` — Removed `SparkRendererOptions` interface and `sparkRenderer` from `DeviceProfile`. `DeviceProfile` now has only `profileName` and `dpr`.
-- `src/lib/spark/deviceProfile.ts` — Simplified `getDeviceProfile()` to return `{ profileName, dpr }` only. Removed `sparkRenderer` duplication.
-- `src/lib/scenes/sceneObjects.ts` — Simplified `createSceneObjects()` to accept `profileName` (not full `DeviceProfile`).
+## 2. Exact renderer initialization flow
 
-### Source-sync scoping
-- `src/lib/studio/spark-controls/activeSparkControlsRuntime.ts` — Added `SparkControlsAttachOptions` with `sourceSyncEnabled`, `sourceSyncEnabled` getter, and updated `attach()` signature.
-- `src/lib/studio/scroll-animator/transactionGuard.ts` — Added import of `activeSparkControlsRuntime`. Blocks ALL Spark source sync when `sourceSyncEnabled` is false.
-- `src/lib/studio/spark-controls/SparkControlsExtension.svelte` — Tracks `uiState.sourceSyncEnabled`. Skips source-sync transactions for non-persistable controllers. Shows "Session-only" warning for ad-hoc viewer.
-- `src/lib/components/SceneRuntime.svelte` — Added `sourceSyncEnabled` prop (default `true`). Passes to `activeSparkControlsRuntime.attach()`. Removed unused `profile` prop.
-- `src/lib/components/RadStoryScene.svelte` — Passes `sourceSyncEnabled={false}` to `SceneRuntime`. Removed `profile` from `SceneRuntime` props.
-- `src/lib/scenes/baby_yoda.svelte` — Removed `profile` from `SceneRuntime` props (uses default `sourceSyncEnabled: true`).
+1. Scene file calls `createSceneObjects(profileName, profileSettings)` → creates `SparkControls` with `getGlobalBaseline(profileName)` + validated scene overrides.
+2. `SceneRuntime` receives required `sparkControls` prop.
+3. `SparkStudioBridge.onMount()` reads `sparkControls.settings` (complete 22-field validated snapshot).
+4. `sparkSettingsToRendererOptions(settings)` converts to `SparkRendererOptions` (maps `null` → `undefined` for `lodSplatCount`).
+5. Infrastructure options (`renderer`, `onDirty`, `pagedExtSplats`) are spread on top by the bridge.
+6. Both renderers are constructed with these complete options — no fallback literals exist anywhere.
+7. After `attach()`, the `onChange` subscription handles subsequent edits via `applySettings(old, new)`.
 
-### Renderer initialization
-- `src/lib/components/SparkStudioBridge.svelte` — Removed `profile` prop. Initializes SparkRenderer options from `sparkControls.settings` (all 22 fields, including scene overrides). Falls back to hardcoded defaults if `sparkControls` is not yet available.
+## 3. Exact identity-aware source-sync decision flow
 
-### Query parameter rename
-- `src/App.svelte` — Reads `splat_url` instead of `url`. Writes `splat_url`, deletes `url` on Start.
+**Transaction guard (`guardScrollAnimatorTransactions`):**
+1. For each SparkControls transaction, calls `activeSparkControlsRuntime.canSourceSync(tx.object)`.
+2. `canSourceSync(controls)` returns `true` only when:
+   - `controls === this._active` (exact identity match)
+   - `this._sourceSyncEnabled === true` (current registration permits sync)
+3. If `canSourceSync` returns `false`, `tx.sync` is cleared (blocked).
+4. If `true`, only exact-root `profileSettings` attribute passes through. All nested paths and other attributes remain blocked.
 
-### Tests
-- `tests/unit/deviceProfile.test.ts` — Rewritten: tests `getDeviceProfile()` returns `{ profileName, dpr }` without `sparkRenderer`. Added `getGlobalBaseline` tests for correct pager capacities.
-- `tests/unit/profileTransactionGuard.test.ts` — Added `beforeEach` to set persistable controller. Added new "non-persistable controller blocks all sync" test suite.
-- `tests/unit/profileSettingsTransaction.test.ts` — Added `beforeEach` to set persistable controller.
-- `tests/unit/sceneObjects.test.ts` — Updated from `DeviceProfile` to `DeviceProfileName`. Removed `sparkRenderer` from test fixture.
-- `tests/unit/transactionGuard.test.ts` — Added `beforeEach` to set persistable controller for SparkControls guard tests.
-- `tests/e2e/rad-story.spec.ts` — Renamed `?url=` to `?splat_url=`. Changed "source-sync-unavailable" test to "session-only" test for ad-hoc viewer.
-- `tests/e2e/scene-routing.spec.ts` — Renamed `?url=` to `?splat_url=`. Updated assertion from `url=` to `splat_url=`.
+**Pane (`SparkControlsExtension`):**
+1. Tracks `uiState.sourceSyncEnabled` from `activeSparkControlsRuntime.sourceSyncEnabled`.
+2. Skips building/committing source-sync transactions when `!uiState.sourceSyncEnabled`.
+3. Shows "Session-only" warning for ad-hoc viewer.
 
-### Documentation
-- `AGENTS.md` — Updated: `getDeviceProfile` description, `createSceneObjects` signature, `SceneRuntime` props, `activeSparkControlsRuntime.attach()` signature with `sourceSyncEnabled`, source sync policy for file-backed vs ad-hoc, `splat_url` query parameter, SparkStudioBridge initialization from `SparkControls.settings`.
-- `PERFORMANCE.md` — Replaced "App configuration caveat" section with "Spark settings configuration" noting baselines are sole source and renderers initialize from `SparkControls.settings`.
+**Registration:**
+- File-backed edit mode: `attach(controls, profileName, { sourceSyncEnabled: true })`
+- Ad-hoc viewer: `attach(controls, profileName, { sourceSyncEnabled: false })` (explicit in `RadStoryScene`)
+- Same-controller re-attach with changed `sourceSyncEnabled` notifies subscribers (metadata-only change detection).
 
-## 3. Initial renderer settings flow
-
-1. `App.svelte` calls `getDeviceProfile()` once at startup → `{ profileName, dpr }`.
-2. Scene file calls `createSceneObjects(profileName, profileSettings)` which creates `SparkControls` with `getGlobalBaseline(profileName)` + scene overrides.
-3. `SparkControls` constructor validates all overrides through `computeValidatedSettings()` → `_settings` = baseline + validated overrides.
-4. `SceneRuntime` renders `<SparkStudioBridge sparkControls={sparkControls}>`.
-5. `SparkStudioBridge.onMount()` reads `sparkControls.settings` (complete 22-field snapshot) and passes all fields to `SparkRenderer` constructor options.
-6. After `attach()`, `applySettings(initialSettings, initialSettings)` is called (no-op but ensures all live fields are set on the renderer instances).
-7. For ad-hoc viewer: `sparkControls` starts with empty overrides (baseline only). Pane edits apply live via `onChange` → `applySettings(old, new)`.
-
-## 4. Dynamic vs file-backed source sync distinction
-
-**File-backed edit mode** (`/scene/{name}/edit`):
-- `SceneRuntime` defaults `sourceSyncEnabled: true`
-- `activeSparkControlsRuntime.attach(controls, profileName, { sourceSyncEnabled: true })`
-- Spark Controls pane builds and commits `profileSettings` transactions when `vitePluginEnabled && sourceSyncEnabled`
-- Transaction guard allows `profileSettings` root on persistable controllers
-- Studio source sync rewrites the scene file's `profileSettings` literal
-
-**Ad-hoc viewer** (`RadStoryScene`):
-- `SceneRuntime` receives `sourceSyncEnabled={false}`
-- `activeSparkControlsRuntime.attach(controls, profileName, { sourceSyncEnabled: false })`
-- Spark Controls pane skips source-sync transactions (`!uiState.sourceSyncEnabled`)
-- Transaction guard blocks ALL Spark source sync (`!activeSparkControlsRuntime.sourceSyncEnabled`)
-- Pane shows "Session-only — Spark edits apply live but won't persist to source"
-- Settings still apply live to controller and renderers via `onChange`
-
-**Defense in depth**: Even if a transaction originates outside the pane (Inspector, future extension), the transaction guard clears `sync` for any SparkControls transaction when `sourceSyncEnabled` is false.
-
-## 5. Tests added/updated and full commands/results
+## 4. Tests added, with full command results
 
 | Command | Result |
 |---------|--------|
 | `npm run check` | 0 errors, 0 warnings |
 | `npm run lint` | Clean (0 errors, 0 warnings) |
-| `npm run test:unit` | 25 files, 406 tests passed |
-| `npm run test:e2e` | 137 tests passed |
+| `npm run test:unit` | 26 files, 426 tests passed |
+| `npm run test:e2e` | 138 tests passed |
 | `npm run build` | Built successfully |
 | `git diff --check` | Clean |
 
-## 6. Acceptance-criteria checklist
+**New test counts:**
+- `activeSparkControlsRuntime.test.ts`: +14 tests (source sync capability, canSourceSync, same-controller reattach, stale detach)
+- `sparkSettingsToRendererOptions.test.ts`: +7 tests (new file — field mapping, null conversion, scene overrides, inactive isolation)
+- `transactionGuard.test.ts`: +1 test (stale/non-active controller blocked)
+- `profileTransactionGuard.test.ts`: +1 test (stale controller with new persistable active)
+- `rad-story.spec.ts`: +1 e2e test (Start writes splat_url, preserves debug, removes legacy url)
 
-- [x] `DESKTOP_BASELINE` and `MOBILE_BASELINE` are the only global source of all 22 Spark setting values.
-- [x] `DeviceProfile`/`getDeviceProfile()` no longer contains a duplicated `sparkRenderer` settings object.
-- [x] Both initial SparkRenderer instances receive the complete effective `sparkControls.settings` snapshot, including active file-scene overrides, before first use.
-- [x] Changing `maxPagedSplats` still recreates both renderers with the complete current snapshot and reloads the mesh safely.
-- [x] Ad-hoc dynamic URL Spark edits apply live but cannot source-sync any Spark setting or `profileSettings` attribute into source.
-- [x] The transaction guard also blocks externally-originated Spark source sync for the non-persistable controller.
-- [x] File-backed `/scene/{name}/edit` Spark edits still source-sync the exact root `profileSettings` object, preserve the inactive profile, and retain undo/redo.
-- [x] Existing ScrollAnimator source-sync policy is unchanged.
-- [x] `?splat_url=<encoded RAD URL>` pre-fills the landing input and Start writes `splat_url` while preserving unrelated query parameters.
-- [x] The app neither reads nor writes the legacy `url` query parameter, and Start removes it if present.
-- [x] README, PERFORMANCE.md, and AGENTS.md describe the new authoritative configuration and dynamic/file-backed persistence distinction accurately.
-- [x] New and updated tests cover baseline-only initialization, initial scene override application, dynamic source-sync blocking, file-scene source sync preservation, runtime registration metadata/lifecycle, and the `splat_url` rename.
+## 5. Acceptance checklist
+
+- [x] No Spark setting fallback literals remain in `SparkStudioBridge` or new conversion helper; global values come only from the two baselines.
+- [x] Both renderers start from the complete effective settings snapshot, including active scene overrides and null-to-undefined conversion.
+- [x] Spark source-sync permission is evaluated for the exact transaction controller identity via `canSourceSync(controls)`.
+- [x] Same-controller metadata re-registration notifies subscribers (tested). Stale detach is safe and tested.
+- [x] Dynamic/session-only edits remain live; file-backed exact-root `profileSettings` persistence remains enabled.
+- [x] Tests explicitly cover runtime capability (14 new), initial renderer snapshot (7 new), stale transaction identity (2 new), `splat_url` with unrelated query preservation (1 new e2e).
+- [x] README names `splat_url`; AGENTS.md accurately describes identity-aware source-sync and required-controller initialization.
 - [x] `npm run check`, `npm run lint`, `npm run test:unit`, `npm run test:e2e`, and `npm run build` pass.
 
-## 7. Residual risks and follow-up
+## 6. Optional real `buildTransaction` import
 
-- The `SparkStudioBridge` initialization uses hardcoded fallback defaults if `sparkControls` is not yet available at mount. This is a safety net — in practice `sparkControls` is always available because it's created before `SceneRuntime` renders.
-- The `SparkRendererOptions` type from `@sparkjsdev/spark` uses `lodSplatCount?: number` (not `number | null`). The bridge maps `null` to `undefined` for the constructor. This is consistent with existing behavior.
-- The `createSceneObjects()` signature change is a breaking API change for any future scene files. All existing scene files have been updated.
+Not used. The existing `studioBuildTransaction.test.ts` from the previous mission uses `resolvePropertyPath` from `@threlte/core` and replicates the exact Studio write callback semantics. The internal `buildTransaction` import path (`@threlte/studio/dist/...`) is not exposed in package exports and would require a test-only relative path coupled to the pinned Studio 0.4.3 internal layout. The accepted replica is sufficient and stable.
+
+## 7. Residual risks
+
+- The `sparkSettingsToRendererOptions` helper is a small centralized mapping. If Spark adds new constructor options in a future version, the helper must be updated. The `SparkSettings` interface and `SETTINGS_KEYS` constant serve as the authoritative field list.
+- The `canSourceSync` identity check depends on object identity. If a scene somehow creates and registers a new `SparkControls` instance mid-session (not the current design), the old instance's pending transactions would be blocked. This is the intended safety behavior.
 
 ## 8. Final commit hash
 
-`f4eda32` on `main` at `github.com:Avnerus/rad-story`
+`caed4f7` on `main` at `github.com:Avnerus/rad-story`
