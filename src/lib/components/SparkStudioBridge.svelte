@@ -2,19 +2,17 @@
   import { useThrelte } from '@threlte/core'
   import { onMount, onDestroy } from 'svelte'
   import { createSparkStudioRenderer } from '$lib/spark/createSparkStudioRenderer'
-  import type { DeviceProfile } from '$lib/types'
   import type { SparkRendererOptions } from '@sparkjsdev/spark'
   import type { SparkControls, SparkSettings } from '$lib/spark/SparkControls'
 
   interface Props {
-    profile: DeviceProfile
     sparkControls?: SparkControls | null
     radUrl?: string
     /** Callback to trigger SplatMesh reload from SparkSplats. */
     onMeshReload?: (url: string) => Promise<void>
   }
 
-  let { profile, sparkControls = null, radUrl = '', onMeshReload }: Props = $props()
+  let { sparkControls = null, radUrl = '', onMeshReload }: Props = $props()
 
   const threlte = useThrelte()
   let handle = $state<{
@@ -54,18 +52,36 @@
     const { scene, renderer, invalidate } = threlte
     if (!scene || !renderer) return
 
+    // Use SparkControls settings as the authoritative initial renderer options.
+    // If sparkControls is not yet available, fall back to the global baseline.
+    const initialSettings = sparkControls?.settings
+
     const sparkOptions: SparkRendererOptions = {
       renderer,
       onDirty: invalidate,
       pagedExtSplats: true,
-      lodSplatScale: profile.sparkRenderer.lodSplatScale as number,
-      lodRenderScale: profile.sparkRenderer.lodRenderScale as number,
-      maxStdDev: profile.sparkRenderer.maxStdDev as number,
-      maxPagedSplats: profile.sparkRenderer.maxPagedSplats as number,
-      coneFov0: profile.sparkRenderer.coneFov0 as number,
-      coneFov: profile.sparkRenderer.coneFov as number,
-      coneFoveate: profile.sparkRenderer.coneFoveate as number,
-      behindFoveate: profile.sparkRenderer.behindFoveate as number,
+      lodSplatScale: initialSettings?.lodSplatScale ?? 1,
+      lodRenderScale: initialSettings?.lodRenderScale ?? 1,
+      maxStdDev: initialSettings?.maxStdDev ?? 2.8,
+      maxPagedSplats: initialSettings?.maxPagedSplats ?? 16 * 65536,
+      coneFov0: initialSettings?.coneFov0 ?? 90,
+      coneFov: initialSettings?.coneFov ?? 120,
+      coneFoveate: initialSettings?.coneFoveate ?? 0.4,
+      behindFoveate: initialSettings?.behindFoveate ?? 0.2,
+      minPixelRadius: initialSettings?.minPixelRadius,
+      maxPixelRadius: initialSettings?.maxPixelRadius,
+      minAlpha: initialSettings?.minAlpha,
+      preBlurAmount: initialSettings?.preBlurAmount,
+      blurAmount: initialSettings?.blurAmount,
+      falloff: initialSettings?.falloff,
+      clipXY: initialSettings?.clipXY,
+      focalAdjustment: initialSettings?.focalAdjustment,
+      sortRadial: initialSettings?.sortRadial,
+      minSortIntervalMs: initialSettings?.minSortIntervalMs,
+      enableLod: initialSettings?.enableLod,
+      enableLodFetching: initialSettings?.enableLodFetching,
+      lodSplatCount: initialSettings?.lodSplatCount ?? undefined,
+      lodInflate: initialSettings?.lodInflate,
     }
 
     const studioHandle = createSparkStudioRenderer(sparkOptions)
@@ -83,9 +99,10 @@
       },
     }
 
-    if (sparkControls) {
-      const initialSettings = sparkControls.settings
+    if (sparkControls && initialSettings) {
       lastSettings = initialSettings
+      // Apply the complete effective settings snapshot (including scene overrides)
+      // so the renderers start with the correct values from the first frame.
       studioHandle.applySettings(initialSettings, initialSettings)
 
       const unsubscribe = sparkControls.onChange((changed) => {

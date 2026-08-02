@@ -14,7 +14,7 @@
 import { PerspectiveCamera, Object3D } from 'three'
 import { ScrollAnimator } from '$lib/spark/ScrollAnimator'
 import { SparkControls, DEFAULT_PROFILE_SETTINGS, type ProfileSettings } from '$lib/spark/SparkControls'
-import type { DeviceProfile, DeviceProfileName } from '$lib/types'
+import type { DeviceProfileName } from '$lib/types'
 import { getGlobalBaseline } from '$lib/spark/deviceProfile'
 
 /**
@@ -51,12 +51,10 @@ export interface SceneObjects {
  * SparkControls is constructed with the detected profile name, scene
  * overrides, and the device profile baseline.
  *
- * @param profile - Device profile for initial renderer construction.
  * @param profileName - Active device profile name (from App.svelte).
  * @param profileSettings - Scene-local profile overrides (from scene literal).
  */
 export function createSceneObjects(
-  profile: DeviceProfile,
   profileName: DeviceProfileName = 'desktop',
   profileSettings: ProfileSettings = DEFAULT_PROFILE_SETTINGS,
 ): SceneObjects {

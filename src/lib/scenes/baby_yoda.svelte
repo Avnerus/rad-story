@@ -14,18 +14,14 @@
 
   const RAD_URL = 'https://avner.us/baby_yoda-lod.rad'
 
-  // untrack() explicitly captures the initial profile value — scene objects
-  // are created once at startup and profile is immutable after that
+  // untrack() explicitly captures the initial profile name — scene objects
+  // are created once at startup and profile name is immutable after that
   const { camera, cameraTarget, cameraAnimator, targetAnimator, sparkControls, splatWrapper } =
-    createSceneObjects(
-      untrack(() => profile),
-      untrack(() => profile.profileName),
-    )
+    createSceneObjects(untrack(() => profile.profileName))
 </script>
 
 <SceneRuntime
   url={RAD_URL}
-  {profile}
   {onReady}
   {sparkControls}
   {splatWrapper}

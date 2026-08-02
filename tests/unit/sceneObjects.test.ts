@@ -1,26 +1,14 @@
 import { describe, it, expect } from 'vitest'
 import { Object3D, PerspectiveCamera } from 'three'
 import { createSceneObjects } from '$lib/scenes/sceneObjects'
-import type { DeviceProfile } from '$lib/types'
+import type { DeviceProfileName } from '$lib/types'
 
-/** Minimal device profile for testing. */
-const testProfile: DeviceProfile = {
-  dpr: 2,
-  sparkRenderer: {
-    lodSplatScale: 1,
-    lodRenderScale: 1,
-    maxStdDev: 8,
-    maxPagedSplats: 16 * 65536,
-    coneFov0: 90,
-    coneFov: 120,
-    coneFoveate: 0.4,
-    behindFoveate: 0.2,
-  },
-}
+/** Active profile name for testing. */
+const testProfileName: DeviceProfileName = 'desktop'
 
 describe('createSceneObjects', () => {
   it('returns all required fields', () => {
-    const objs = createSceneObjects(testProfile)
+    const objs = createSceneObjects(testProfileName)
     expect(objs.camera).toBeDefined()
     expect(objs.cameraTarget).toBeDefined()
     expect(objs.cameraAnimator).toBeDefined()
@@ -30,29 +18,29 @@ describe('createSceneObjects', () => {
   })
 
   it('camera is a PerspectiveCamera', () => {
-    const objs = createSceneObjects(testProfile)
+    const objs = createSceneObjects(testProfileName)
     expect(objs.camera instanceof PerspectiveCamera).toBe(true)
   })
 
   it('cameraTarget is an Object3D with name CameraTarget', () => {
-    const objs = createSceneObjects(testProfile)
+    const objs = createSceneObjects(testProfileName)
     expect(objs.cameraTarget instanceof Object3D).toBe(true)
     expect(objs.cameraTarget.name).toBe('CameraTarget')
   })
 
   it('animators are ScrollAnimators', () => {
-    const objs = createSceneObjects(testProfile)
+    const objs = createSceneObjects(testProfileName)
     expect(objs.cameraAnimator.isScrollAnimator).toBe(true)
     expect(objs.targetAnimator.isScrollAnimator).toBe(true)
   })
 
   it('sparkControls is a SparkControls instance', () => {
-    const objs = createSceneObjects(testProfile)
+    const objs = createSceneObjects(testProfileName)
     expect(objs.sparkControls.isSparkControls).toBe(true)
   })
 
   it('splatWrapper is an Object3D with name SplatWrapper', () => {
-    const objs = createSceneObjects(testProfile)
+    const objs = createSceneObjects(testProfileName)
     expect(objs.splatWrapper instanceof Object3D).toBe(true)
     expect(objs.splatWrapper.name).toBe('SplatWrapper')
   })
@@ -60,40 +48,40 @@ describe('createSceneObjects', () => {
 
 describe('createSceneObjects isolation', () => {
   it('two calls produce distinct wrappers', () => {
-    const a = createSceneObjects(testProfile)
-    const b = createSceneObjects(testProfile)
+    const a = createSceneObjects(testProfileName)
+    const b = createSceneObjects(testProfileName)
     expect(a.splatWrapper).not.toBe(b.splatWrapper)
   })
 
   it('two calls produce distinct cameras', () => {
-    const a = createSceneObjects(testProfile)
-    const b = createSceneObjects(testProfile)
+    const a = createSceneObjects(testProfileName)
+    const b = createSceneObjects(testProfileName)
     expect(a.camera).not.toBe(b.camera)
     expect(a.camera.uuid).not.toBe(b.camera.uuid)
   })
 
   it('two calls produce distinct camera targets', () => {
-    const a = createSceneObjects(testProfile)
-    const b = createSceneObjects(testProfile)
+    const a = createSceneObjects(testProfileName)
+    const b = createSceneObjects(testProfileName)
     expect(a.cameraTarget).not.toBe(b.cameraTarget)
   })
 
   it('two calls produce distinct animators', () => {
-    const a = createSceneObjects(testProfile)
-    const b = createSceneObjects(testProfile)
+    const a = createSceneObjects(testProfileName)
+    const b = createSceneObjects(testProfileName)
     expect(a.cameraAnimator).not.toBe(b.cameraAnimator)
     expect(a.targetAnimator).not.toBe(b.targetAnimator)
   })
 
   it('two calls produce distinct SparkControls', () => {
-    const a = createSceneObjects(testProfile)
-    const b = createSceneObjects(testProfile)
+    const a = createSceneObjects(testProfileName)
+    const b = createSceneObjects(testProfileName)
     expect(a.sparkControls).not.toBe(b.sparkControls)
   })
 
   it('mutating settings on one does not affect the other', () => {
-    const a = createSceneObjects(testProfile)
-    const b = createSceneObjects(testProfile)
+    const a = createSceneObjects(testProfileName)
+    const b = createSceneObjects(testProfileName)
 
     a.sparkControls.blurAmount = 0.9
     expect(a.sparkControls.blurAmount).toBe(0.9)
@@ -101,8 +89,8 @@ describe('createSceneObjects isolation', () => {
   })
 
   it('mutating keyframes on one animator does not affect the other', () => {
-    const a = createSceneObjects(testProfile)
-    const b = createSceneObjects(testProfile)
+    const a = createSceneObjects(testProfileName)
+    const b = createSceneObjects(testProfileName)
 
     ;(a.cameraAnimator as unknown as { keyframes: unknown[] }).keyframes = [
       { scroll: 50, position: [1, 2, 3], rotation: [0, 0, 0] },
@@ -112,8 +100,8 @@ describe('createSceneObjects isolation', () => {
   })
 
   it('mutating wrapper position does not affect another wrapper', () => {
-    const a = createSceneObjects(testProfile)
-    const b = createSceneObjects(testProfile)
+    const a = createSceneObjects(testProfileName)
+    const b = createSceneObjects(testProfileName)
 
     a.splatWrapper.position.set(7, 13, 21)
     expect(a.splatWrapper.position.x).toBe(7)
@@ -123,7 +111,7 @@ describe('createSceneObjects isolation', () => {
 
 describe('SparkControls exactly-once disposal', () => {
   it('dispose clears listeners and is idempotent', () => {
-    const objs = createSceneObjects(testProfile)
+    const objs = createSceneObjects(testProfileName)
     const ctrl = objs.sparkControls
 
     let callCount = 0

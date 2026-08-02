@@ -202,20 +202,17 @@ application camera drives LoD selection and paging; the editor renderer shares
 those LoD instances. This is desirable for authoring because moving the editor
 camera cannot evict or fetch pages unrelated to the authored story camera.
 
-## App configuration caveat
+## Spark settings configuration
 
-There are currently two different sources of profile values in
-`src/lib/spark/deviceProfile.ts`: renderer-construction values returned by
-`getDeviceProfile()` and the global baselines used by `SparkControls` source
-sync. Notably, pager capacities and `maxStdDev` differ between those two sets.
-Because changing `maxPagedSplats` recreates both renderers and reloads the mesh,
-do not assume a source-sync baseline is the current pager capacity without
-checking it. These values should eventually be aligned so authored profiles,
-the Studio pane, and cold playback start from the same effective settings.
+`DESKTOP_BASELINE` and `MOBILE_BASELINE` in `src/lib/spark/deviceProfile.ts`
+are the sole global source of all 22 Spark settings. Both initial SparkRenderer
+instances receive the complete effective `SparkControls.settings` snapshot
+(baseline + file-backed scene overrides) before their first meaningful render.
+File-backed scenes persist `profileSettings` via source sync; the ad-hoc
+dynamic URL viewer applies edits live but does not persist them.
 
-Also note that `maxStdDev` is a direct standard-deviation extent. A value of 8
-is not Spark's documented `sqrt(8)` default. Prefer approximately 2.8 as the
-quality baseline and approximately 2.24 as the first performance experiment.
+`maxStdDev` is a direct standard-deviation extent. Prefer approximately 2.8 as
+the quality baseline and approximately 2.24 as the first performance experiment.
 
 ## Tuning and validation procedure
 

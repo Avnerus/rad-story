@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { SPARK_PAGE_SIZE } from '$lib/spark/SparkControls'
 
 describe('getDeviceProfile', () => {
   const originalNavigator = globalThis.navigator
@@ -15,7 +16,7 @@ describe('getDeviceProfile', () => {
     vi.unstubAllGlobals()
   })
 
-  it('returns mobile profile when UA indicates mobile', async () => {
+  it('returns mobile profile name when UA indicates mobile', async () => {
     Object.defineProperty(globalThis, 'navigator', {
       value: { userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)' },
       writable: true,
@@ -24,16 +25,13 @@ describe('getDeviceProfile', () => {
     const { getDeviceProfile } = await import('$lib/spark/deviceProfile')
     const profile = getDeviceProfile()
 
-    expect(profile.isMobile).toBe(true)
+    expect(profile.profileName).toBe('mobile')
     expect(profile.dpr).toBe(1)
-    expect(profile.sparkRenderer.maxPagedSplats).toBe(16 * 65_536) // 1_048_576 = 16 * SPARK_PAGE_SIZE (mobile baseline)
-    expect(profile.sparkRenderer.lodSplatScale).toBe(0.5)
-    // Cone angles are in degrees (Spark 2.1 API)
-    expect(profile.sparkRenderer.coneFov0).toBe(70)
-    expect(profile.sparkRenderer.coneFov).toBe(110)
+    // No sparkRenderer — settings come from getGlobalBaseline()
+    expect(profile).not.toHaveProperty('sparkRenderer')
   })
 
-  it('returns desktop profile when UA is desktop', async () => {
+  it('returns desktop profile name when UA is desktop', async () => {
     Object.defineProperty(globalThis, 'navigator', {
       value: { userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
       writable: true,
@@ -44,13 +42,10 @@ describe('getDeviceProfile', () => {
     const { getDeviceProfile } = await import('$lib/spark/deviceProfile')
     const profile = getDeviceProfile()
 
-    expect(profile.isMobile).toBe(false)
+    expect(profile.profileName).toBe('desktop')
     expect(profile.dpr).toBeLessThanOrEqual(2)
-    expect(profile.sparkRenderer.maxPagedSplats).toBe(32 * 65_536) // 2_097_152 = 32 * SPARK_PAGE_SIZE (desktop baseline)
-    expect(profile.sparkRenderer.lodSplatScale).toBe(1)
-    // Cone angles are in degrees (Spark 2.1 API), matching Spark defaults
-    expect(profile.sparkRenderer.coneFov0).toBe(90)
-    expect(profile.sparkRenderer.coneFov).toBe(120)
+    // No sparkRenderer — settings come from getGlobalBaseline()
+    expect(profile).not.toHaveProperty('sparkRenderer')
   })
 
   it('clamps DPR to 2 on desktop', async () => {
@@ -67,29 +62,58 @@ describe('getDeviceProfile', () => {
     expect(profile.dpr).toBe(2)
   })
 
-  it('mobile profile has stronger foveation than desktop', async () => {
-    // Mobile
+  it('mobile baseline has stronger foveation than desktop baseline', async () => {
     Object.defineProperty(globalThis, 'navigator', {
-      value: { userAgent: 'Mozilla/5.0 (Linux; Android 13)' },
+      value: { userAgent: 'Mozilla/5.0 (Windows)' },
       writable: true,
     })
+    vi.stubGlobal('devicePixelRatio', 2)
 
-    const { getDeviceProfile: getProfileMobile } = await import('$lib/spark/deviceProfile')
-    const mobileProfile = getProfileMobile()
+    const { getGlobalBaseline } = await import('$lib/spark/deviceProfile')
+    const mobileBaseline = getGlobalBaseline('mobile')
+    const desktopBaseline = getGlobalBaseline('desktop')
 
+    expect(mobileBaseline.coneFoveate).toBeGreaterThan(desktopBaseline.coneFoveate)
+    expect(mobileBaseline.behindFoveate).toBeGreaterThan(desktopBaseline.behindFoveate)
+  })
+})
+
+describe('getGlobalBaseline', () => {
+  const originalNavigator = globalThis.navigator
+
+  beforeEach(() => {
     vi.resetModules()
+  })
 
+  afterEach(() => {
     Object.defineProperty(globalThis, 'navigator', {
-      value: { userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+      value: originalNavigator,
       writable: true,
     })
-    vi.stubGlobal('devicePixelRatio', 1)
+    vi.unstubAllGlobals()
+  })
 
-    const { getDeviceProfile: getProfileDesktop } = await import('$lib/spark/deviceProfile')
-    const desktopProfile = getProfileDesktop()
+  it('desktop baseline has correct pager capacity', async () => {
+    Object.defineProperty(globalThis, 'navigator', {
+      value: { userAgent: 'Mozilla/5.0 (Windows)' },
+      writable: true,
+    })
+    vi.stubGlobal('devicePixelRatio', 2)
+    const { getGlobalBaseline } = await import('$lib/spark/deviceProfile')
+    const baseline = getGlobalBaseline('desktop')
+    expect(baseline.maxPagedSplats).toBe(32 * SPARK_PAGE_SIZE)
+    expect(baseline.maxStdDev).toBe(2.8)
+  })
 
-    expect(mobileProfile.sparkRenderer.coneFoveate).toBeGreaterThan(
-      desktopProfile.sparkRenderer.coneFoveate as number,
-    )
+  it('mobile baseline has correct pager capacity', async () => {
+    Object.defineProperty(globalThis, 'navigator', {
+      value: { userAgent: 'Mozilla/5.0 (Windows)' },
+      writable: true,
+    })
+    vi.stubGlobal('devicePixelRatio', 2)
+    const { getGlobalBaseline } = await import('$lib/spark/deviceProfile')
+    const baseline = getGlobalBaseline('mobile')
+    expect(baseline.maxPagedSplats).toBe(16 * SPARK_PAGE_SIZE)
+    expect(baseline.maxStdDev).toBe(2.8)
   })
 })

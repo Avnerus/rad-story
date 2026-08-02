@@ -14,37 +14,9 @@ export interface ErrorResult {
   error: string
 }
 
-/** Spark renderer performance profile options */
-export interface SparkRendererOptions {
-  lodSplatScale: number
-  lodRenderScale: number
-  maxStdDev: number
-  maxPagedSplats: number
-  coneFov0: number
-  coneFov: number
-  coneFoveate: number
-  behindFoveate: number
-  minPixelRadius?: number
-  maxPixelRadius?: number
-  minAlpha?: number
-  preBlurAmount?: number
-  blurAmount?: number
-  falloff?: number
-  clipXY?: number
-  focalAdjustment?: number
-  sortRadial?: boolean
-  minSortIntervalMs?: number
-  enableLod?: boolean
-  enableLodFetching?: boolean
-  lodSplatCount?: number | null
-  lodInflate?: boolean
-}
-
-/** Device profile for Spark / renderer settings */
+/** Device profile: detection and Canvas DPR only. */
 export interface DeviceProfile {
   /** Named profile identifier — the single source of truth for profile detection. */
   profileName: DeviceProfileName
-  isMobile: boolean
   dpr: number
-  sparkRenderer: SparkRendererOptions
 }

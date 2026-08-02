@@ -177,9 +177,9 @@ test.describe('RAD Story', () => {
     expect(scrolledState.targetZ).toBeCloseTo(0, 0)
   })
 
-  test('URL in query string pre-fills the input', async ({ page }) => {
+  test('splat_url in query string pre-fills the input', async ({ page }) => {
     const encodedUrl = encodeURIComponent(SAMPLE_URL)
-    await page.goto(`/?url=${encodedUrl}`)
+    await page.goto(`/?splat_url=${encodedUrl}`)
     expect(await page.getByLabel('RAD file URL').inputValue()).toBe(SAMPLE_URL)
   })
 
@@ -941,9 +941,9 @@ test.describe('RAD Story', () => {
     }
   })
 
-  test('Spark pane shows source-sync-unavailable warning in stub build', async ({ page }) => {
+  test('Spark pane shows session-only warning in ad-hoc viewer', async ({ page }) => {
     await selectSparkAndOpenPane(page)
-    await expect(page.getByTestId('spark-sync-warning')).toBeVisible()
+    await expect(page.getByTestId('spark-session-only')).toBeVisible()
   })
 
   test('Spark pane numeric edit updates controller state', async ({ page }) => {

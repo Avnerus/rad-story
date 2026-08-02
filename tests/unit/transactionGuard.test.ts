@@ -1,7 +1,8 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { isScrollAnimator, isSparkControls, guardScrollAnimatorTransactions, type GuardTransaction } from '$lib/studio/scroll-animator/transactionGuard'
 import { ScrollAnimator } from '$lib/spark/ScrollAnimator'
 import { SparkControls } from '$lib/spark/SparkControls'
+import { activeSparkControlsRuntime } from '$lib/studio/spark-controls/activeSparkControlsRuntime'
 
 describe('isScrollAnimator', () => {
   it('returns true for ScrollAnimator instances', () => {
@@ -163,6 +164,11 @@ describe('SparkControls transaction guard', () => {
       sync: { attributeName },
     }
   }
+
+  beforeEach(() => {
+    const controls = new SparkControls()
+    activeSparkControlsRuntime.attach(controls, 'desktop', { sourceSyncEnabled: true })
+  })
 
   it('suppresses sync for position on SparkControls', () => {
     const controls = new SparkControls()

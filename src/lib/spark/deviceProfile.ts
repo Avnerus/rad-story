@@ -119,35 +119,17 @@ export function computeOverrides(
   return _computeOverrides(effectiveSettings, baseline)
 }
 
-// ---------------------------------------------------------------------------
-// Legacy compatibility — DeviceProfile for renderer construction
-// ---------------------------------------------------------------------------
-
 /**
- * Return device-appropriate Spark / renderer settings.
- * Used by SparkStudioBridge for initial renderer construction.
- *
- * The eight profile-specific sparkRenderer fields are derived from the
- * canonical GLOBAL_BASELINES table to avoid duplication.
+ * Return device-appropriate detection and Canvas DPR.
+ * Spark settings are not duplicated here — the canonical source is
+ * `GLOBAL_BASELINES` accessed via `getGlobalBaseline()`.
  */
 export function getDeviceProfile(): DeviceProfile {
   const mobile = detectMobile()
   const profileName: DeviceProfileName = mobile ? 'mobile' : 'desktop'
-  const baseline = GLOBAL_BASELINES[profileName]
 
   return {
     profileName,
-    isMobile: mobile,
     dpr: mobile ? 1 : Math.min(window.devicePixelRatio, 2),
-    sparkRenderer: {
-      lodSplatScale: baseline.lodSplatScale,
-      lodRenderScale: baseline.lodRenderScale,
-      maxStdDev: baseline.maxStdDev,
-      maxPagedSplats: baseline.maxPagedSplats,
-      coneFov0: baseline.coneFov0,
-      coneFov: baseline.coneFov,
-      coneFoveate: baseline.coneFoveate,
-      behindFoveate: baseline.behindFoveate,
-    },
   }
 }

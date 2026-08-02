@@ -7,14 +7,12 @@
   import { isScrollAnimator } from '$lib/studio/scroll-animator/transactionGuard'
   import { scrollAnimatorRuntime } from '$lib/studio/scroll-animator/scrollAnimatorRuntime'
   import { activeSparkControlsRuntime } from '$lib/studio/spark-controls/activeSparkControlsRuntime'
-  import type { DeviceProfile } from '$lib/types'
   import type { SparkControls } from '$lib/spark/SparkControls'
   import SparkStudioBridge from './SparkStudioBridge.svelte'
   import SparkSplats from './SparkSplats.svelte'
 
   interface Props {
     url: string
-    profile: DeviceProfile
     onReady?: () => void
     /** Scene-specific SparkControls instance for the bridge. */
     sparkControls?: SparkControls | null
@@ -24,10 +22,12 @@
     appCamera: PerspectiveCamera
     /** The CameraTarget Object3D — always used for look-at and debug. */
     cameraTarget: Object3D
+    /** Whether source sync should be enabled for this scene's SparkControls. */
+    sourceSyncEnabled?: boolean
     children?: Snippet
   }
 
-  let { url, profile, onReady, sparkControls = null, splatWrapper, appCamera, cameraTarget, children }: Props = $props()
+  let { url, onReady, sparkControls = null, splatWrapper, appCamera, cameraTarget, sourceSyncEnabled = true, children }: Props = $props()
 
   // Camera debug state for e2e tests (world-space)
   let cameraProgress = $state(0)
@@ -117,7 +117,9 @@
     // Register SparkControls with the active-controller runtime
     // Use the profile name from the SparkControls itself (set at construction)
     if (sparkControls) {
-      detachSparkControls = activeSparkControlsRuntime.attach(sparkControls, sparkControls.profileName)
+      detachSparkControls = activeSparkControlsRuntime.attach(sparkControls, sparkControls.profileName, {
+        sourceSyncEnabled,
+      })
     }
 
     // Stub-only: expose scene UUID, app camera UUID, and register SparkControls
@@ -197,7 +199,7 @@
 <SparkSplats bind:this={splatsRef} {url} wrapper={splatWrapper} onStatusChange={handleReloadStatus} pagerIdentity={getPagerIdentity} triggerUpdate={triggerRendererUpdate} />
 
 <!-- SparkStudioBridge: manages dual SparkRenderer lifecycle -->
-<SparkStudioBridge bind:this={bridgeRef} {profile} {sparkControls} radUrl={url} onMeshReload={splatsRef?.reload} />
+<SparkStudioBridge bind:this={bridgeRef} {sparkControls} radUrl={url} onMeshReload={splatsRef?.reload} />
 
 <!-- Scene-specific content: camera animators, target animator, SparkControls, splats -->
 {#if children}

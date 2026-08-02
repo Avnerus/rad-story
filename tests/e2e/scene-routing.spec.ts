@@ -110,7 +110,7 @@ test.describe('Scene routing', () => {
     await page.goto('/scene/baby_yoda')
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
     const url = page.url()
-    expect(url).not.toContain('url=')
+    expect(url).not.toContain('splat_url=')
   })
 
   test('baby_yoda scene scroll 0% camera position', async ({ page }) => {
@@ -168,11 +168,11 @@ test.describe('Scene routing', () => {
     await expect(page.getByRole('button', { name: 'Start' })).toBeVisible()
   })
 
-  test('query-string URL parameter still pre-fills landing input', async ({ page }) => {
+  test('query-string splat_url parameter pre-fills landing input', async ({ page }) => {
     const SAMPLE_URL =
       'https://storage.googleapis.com/forge-dev-public/asundqui/rad/260217/cozy-spaceship_2-lod.rad'
     const encodedUrl = encodeURIComponent(SAMPLE_URL)
-    await page.goto(`/?url=${encodedUrl}`)
+    await page.goto(`/?splat_url=${encodedUrl}`)
     expect(await page.getByLabel('RAD file URL').inputValue()).toBe(SAMPLE_URL)
   })
 })

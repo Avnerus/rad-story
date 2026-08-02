@@ -8,8 +8,12 @@
  * active controller if this registration is still the current one, so
  * an older scene's destroy cannot clear a newer scene's controller.
  *
+ * Each registration declares whether source sync is enabled:
+ * - File-backed scene edit mode: `sourceSyncEnabled: true` (persist profileSettings)
+ * - Ad-hoc/dynamic URL viewer: `sourceSyncEnabled: false` (session-only)
+ *
  * Usage:
- *   const detach = activeSparkControlsRuntime.attach(sparkControls, profileName)
+ *   const detach = activeSparkControlsRuntime.attach(sparkControls, profileName, { sourceSyncEnabled: true })
  *   onDestroy(detach)
  *
  * The SparkControlsExtension subscribes to `activeController` and edits
@@ -18,6 +22,14 @@
  */
 import type { SparkControls } from '$lib/spark/SparkControls'
 import type { DeviceProfileName } from '$lib/types'
+
+/**
+ * Attach options for registering a SparkControls instance.
+ */
+export interface SparkControlsAttachOptions {
+  /** Whether source sync should be enabled for this controller. Defaults to false. */
+  sourceSyncEnabled?: boolean
+}
 
 /**
  * Callback type for active controller changes.
@@ -37,6 +49,7 @@ export type ActiveControllerChangeListener = (controls: SparkControls | null) =>
 export class ActiveSparkControlsRuntime {
   private _active: SparkControls | null = null
   private _profileName: DeviceProfileName = 'desktop'
+  private _sourceSyncEnabled = false
   private _generation = 0
   private _listeners: ActiveControllerChangeListener[] = []
 
@@ -56,6 +69,14 @@ export class ActiveSparkControlsRuntime {
   }
 
   /**
+   * Whether source sync is enabled for the active controller.
+   * File-backed edit mode: true. Ad-hoc viewer: false.
+   */
+  get sourceSyncEnabled(): boolean {
+    return this._sourceSyncEnabled
+  }
+
+  /**
    * Attach a SparkControls instance as the active controller.
    *
    * Returns a detach function that clears the registration only if
@@ -63,12 +84,17 @@ export class ActiveSparkControlsRuntime {
    *
    * If a controller was already active, it is replaced and subscribers
    * are notified.
+   *
+   * @param controls - The SparkControls instance.
+   * @param profileName - Active device profile name.
+   * @param options - Attach options including source sync capability.
    */
-  attach(controls: SparkControls, profileName: DeviceProfileName = 'desktop'): () => void {
+  attach(controls: SparkControls, profileName: DeviceProfileName = 'desktop', options: SparkControlsAttachOptions = {}): () => void {
     const gen = ++this._generation
     const previous = this._active
     this._active = controls
     this._profileName = profileName
+    this._sourceSyncEnabled = options.sourceSyncEnabled ?? false
 
     if (previous !== controls) {
       for (const fn of this._listeners) fn(controls)
@@ -78,6 +104,7 @@ export class ActiveSparkControlsRuntime {
     return () => {
       if (this._generation === gen && this._active === controls) {
         this._active = null
+        this._sourceSyncEnabled = false
         for (const fn of this._listeners) fn(null)
       }
     }
@@ -100,6 +127,7 @@ export class ActiveSparkControlsRuntime {
    */
   destroy(): void {
     this._active = null
+    this._sourceSyncEnabled = false
     this._listeners.length = 0
   }
 }

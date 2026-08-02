@@ -33,12 +33,12 @@
   // Debug flag derived from query string
   let debugMode = $state(false)
 
-  // Check for URL in query string on mount
+  // Check for splat_url in query string on mount
   onMount(() => {
     const params = new URLSearchParams(window.location.search)
-    const urlParam = params.get('url')
-    if (urlParam) {
-      const result = validateRadUrl(urlParam)
+    const splatUrlParam = params.get('splat_url')
+    if (splatUrlParam) {
+      const result = validateRadUrl(splatUrlParam)
       if (result.ok) {
         urlInput = result.url
       }
@@ -99,7 +99,9 @@
 
     // Update URL in address bar for reloadability
     const url = new URL(window.location.href)
-    url.searchParams.set('url', activeUrl)
+    url.searchParams.set('splat_url', activeUrl)
+    // Remove legacy 'url' parameter if present
+    url.searchParams.delete('url')
     window.history.replaceState({}, '', url.toString())
   }
 

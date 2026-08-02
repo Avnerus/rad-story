@@ -67,6 +67,7 @@
     profileName: 'desktop' as DeviceProfileName,
     reloading: false,
     reloadError: '' as string,
+    sourceSyncEnabled: false as boolean,
   })
 
   // Local draft values for editing
@@ -150,6 +151,7 @@
       uiState.controls = current
       uiState.settings = current.settings
       uiState.profileName = profileName
+      uiState.sourceSyncEnabled = activeSparkControlsRuntime.sourceSyncEnabled
       subscribeToReloadStatus(current)
       subscribeToSettings(current)
       initDrafts(current.settings)
@@ -166,12 +168,14 @@
         uiState.controls = controls
         uiState.settings = controls.settings
         uiState.profileName = activeSparkControlsRuntime.profileName
+        uiState.sourceSyncEnabled = activeSparkControlsRuntime.sourceSyncEnabled
         subscribeToReloadStatus(controls)
         subscribeToSettings(controls)
         initDrafts(controls.settings)
       } else {
         uiState.controls = null
         uiState.settings = {} as SparkSettings
+        uiState.sourceSyncEnabled = false
         unsubscribeFromSettings()
         unsubscribeFromReloadStatus()
       }
@@ -244,8 +248,9 @@
     // Check if any field actually changed
     if (historicSettings[key] === newSettings[key]) return
 
-    // If source sync is available, commit as a transaction on profileSettings
-    if (transactions.vitePluginEnabled) {
+    // If source sync is available AND this controller is persistable,
+    // commit as a transaction on profileSettings
+    if (transactions.vitePluginEnabled && uiState.sourceSyncEnabled) {
       const newProfileOverrides = buildNewProfileOverrides(controls, newSettings)
       const tx = transactions.buildTransaction({
         object: controls,
@@ -280,8 +285,9 @@
     // Check if any field actually changed
     if (historicSettings[key] === newSettings[key]) return
 
-    // If source sync is available, commit as a transaction on profileSettings
-    if (transactions.vitePluginEnabled) {
+    // If source sync is available AND this controller is persistable,
+    // commit as a transaction on profileSettings
+    if (transactions.vitePluginEnabled && uiState.sourceSyncEnabled) {
       const newProfileOverrides = buildNewProfileOverrides(controls, newSettings)
       const tx = transactions.buildTransaction({
         object: controls,
@@ -329,7 +335,9 @@
         </span>
       </div>
 
-      {#if !transactions.vitePluginEnabled}
+      {#if !uiState.sourceSyncEnabled}
+        <div class="sc-warning" data-testid="spark-session-only">Session-only — Spark edits apply live but won't persist to source</div>
+      {:else if !transactions.vitePluginEnabled}
         <div class="sc-warning" data-testid="spark-sync-warning">Studio source sync unavailable — edits apply live but won't persist</div>
       {/if}
 

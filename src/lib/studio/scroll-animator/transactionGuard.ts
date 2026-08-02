@@ -6,7 +6,11 @@
  *
  * For Studio 0.4.3, `onTransaction` callbacks fire before sync requests are
  * enqueued. We clear `transaction.sync` for any non-whitelisted attribute.
+ *
+ * Additionally, if the active SparkControls is marked as non-persistable
+ * (ad-hoc/dynamic viewer), ALL SparkControls source sync is blocked.
  */
+import { activeSparkControlsRuntime } from '$lib/studio/spark-controls/activeSparkControlsRuntime'
 
 /**
  * Narrow structural transaction type for the guard.
@@ -73,6 +77,10 @@ function isSparkControlAttribute(attributeName: string): boolean {
  * or whose object is a SparkControls and the attribute is not in the
  * explicit settings whitelist.
  *
+ * Additionally, if the active SparkControls in the runtime is marked as
+ * non-persistable (ad-hoc/dynamic viewer), ALL SparkControls source sync
+ * is blocked regardless of attribute name.
+ *
  * Mutates the transaction array in place (called from onTransaction callbacks).
  */
 export function guardScrollAnimatorTransactions(
@@ -88,7 +96,16 @@ export function guardScrollAnimatorTransactions(
     }
     if (isSparkControls(tx.object)) {
       const sync = tx.sync
-      if (sync && !isSparkControlAttribute(sync.attributeName)) {
+      if (!sync) continue
+
+      // If the active controller is non-persistable, block ALL Spark source sync
+      if (!activeSparkControlsRuntime.sourceSyncEnabled) {
+        tx.sync = undefined
+        continue
+      }
+
+      // Only allow exact-root profileSettings
+      if (!isSparkControlAttribute(sync.attributeName)) {
         tx.sync = undefined
       }
     }

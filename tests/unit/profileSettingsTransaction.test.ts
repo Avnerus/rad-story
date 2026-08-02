@@ -1,12 +1,17 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { SparkControls, SPARK_PAGE_SIZE, type SparkSettings } from '$lib/spark/SparkControls'
 import { buildProfileSettingsTransaction } from '$lib/studio/spark-controls/sparkSettingsTransaction'
 import { getGlobalBaseline } from '$lib/spark/deviceProfile'
 import { computeOverrides } from '$lib/spark/profileResolution'
 import { guardScrollAnimatorTransactions, type GuardTransaction } from '$lib/studio/scroll-animator/transactionGuard'
+import { activeSparkControlsRuntime } from '$lib/studio/spark-controls/activeSparkControlsRuntime'
 import type { ProfileSettings } from '$lib/spark/SparkControls'
 
 describe('profile-aware Spark settings transaction', () => {
+  beforeEach(() => {
+    const controls = new SparkControls()
+    activeSparkControlsRuntime.attach(controls, 'desktop', { sourceSyncEnabled: true })
+  })
   it('builds correct profileSettings transaction shape', () => {
     const controls = new SparkControls()
     const historic: ProfileSettings = { desktop: {}, mobile: {} }
