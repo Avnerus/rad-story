@@ -11,7 +11,8 @@ Supports three viewing modes:
 
 **Key files:**
 - `src/App.svelte` — Root component. Landing screen ↔ viewer/scene/not-found state machine. Pathname router for `/scene/{sceneName}` and `/scene/{sceneName}/edit`. `<Canvas>` wrapping either `RadStoryScene` (ad-hoc, inside `<Studio>`), a dynamic scene component in playback (`/scene/{name}`, no `<Studio>`), or a dynamic scene component in edit mode (`/scene/{name}/edit`, inside `<Studio>`).
-- `src/lib/components/SceneRuntime.svelte` — Reusable scene runtime: ScrollTrigger creation/attachment, scene-wide `ScrollAnimator` playback via `scene.traverse`, per-frame camera look-at (always on app camera, never editor camera), debug state, Spark bridge, reload lifecycle, SparkControls disposal, and **active SparkControls registration** (calls `activeSparkControlsRuntime.attach(sparkControls, sparkControls.profileName, { sourceSyncEnabled })` on mount, identity-safe detach on destroy). Editor-agnostic — does not mount `CameraFrustumHelper` (moved to `ScrollAnimatorExtension`). Receives scene-specific `<T>` declarations via a `children` snippet. Typed props: `appCamera: PerspectiveCamera`, `cameraTarget: Object3D`, `splatWrapper: Object3D`, `sourceSyncEnabled: boolean` (default `true`).
+- `src/lib/components/SceneRuntime.svelte` — Reusable scene runtime: ScrollTrigger creation/attachment, scene-wide `ScrollAnimator` playback via `scene.traverse`, per-frame camera look-at (always on app camera, never editor camera), Spark bridge, reload lifecycle, SparkControls disposal, and **active SparkControls registration** (calls `activeSparkControlsRuntime.attach(sparkControls, sparkControls.profileName, { sourceSyncEnabled })` on mount, identity-safe detach on destroy). Editor-agnostic — does not mount `CameraFrustumHelper` (moved to `ScrollAnimatorExtension`). Receives scene-specific `<T>` declarations via a `children` snippet. Camera diagnostics delegated to `CameraDiagnostics.svelte`. Typed props: `appCamera: PerspectiveCamera`, `cameraTarget: Object3D`, `splatWrapper: Object3D`, `sourceSyncEnabled: boolean` (default `true`).
+- `src/lib/components/CameraDiagnostics.svelte` — E2e-only camera diagnostic component. Rendered only when `VITE_E2E_STUB_SPARK=true`. Provides `<div data-testid="camera-state">` with live camera/target coordinates, scroll progress, and `data-active` status. Encapsulates all diagnostic reactive state and per-frame tasks so production `SceneRuntime` has zero diagnostic overhead. Tree-shaken in production builds.
 - `src/lib/components/RadStoryScene.svelte` — Ad-hoc URL scene. Uses `createSceneObjects()` helper + `SceneRuntime`. Literal `<T>` nodes for camera/target animators, SparkControls, and SplatWrapper.
 - `src/lib/components/SparkSplats.svelte` — SplatMesh lifecycle inside a scene-provided `wrapper` Object3D. The wrapper is created by the scene file and declared via a literal `<T>` for Studio source sync. SparkSplats manages the internal `SplatMesh` child and reload coordination. Exports `reload(url)` for `SparkStudioBridge` to call. Uses `SparkReloadCoordinator` for race-safe reload coordination.
 - `src/lib/components/SparkStudioBridge.svelte` — Manages dual SparkRenderer lifecycle via `createSparkStudioRenderer`. Initializes both renderers from the required `sparkControls.settings` effective snapshot using `sparkSettingsToRendererOptions()` (no fallback literals). Subscribes to `SparkControls` settings changes and propagates them to both renderers. On `maxPagedSplats` changes, calls `reconfigureMaxPagedSplats()` and triggers SplatMesh reload via `onMeshReload` callback.
@@ -349,15 +350,17 @@ Free navigation (checkbox, keyboard/mouse/wheel listeners, RAF loop, pure helper
 
 Fixed canvas + scrollable document: `<Canvas>` in `.viewer-stage` (`position: fixed; inset: 0`), `.scroll-spacer` (400vh) in document flow.
 
-## Camera Debug State
+## Camera Debug State (E2E Diagnostics)
 
-Visually hidden `<div class="camera-debug" data-testid="camera-state">` rendered **outside** `<Canvas>` in each scene file (DOM elements inside `<Canvas>` are Three.js overlays). Debug state is pushed from `SceneRuntime` to the scene file via an `onDebugState` callback.
+`src/lib/components/CameraDiagnostics.svelte` — Visually hidden `<div class="camera-debug" data-testid="camera-state">` rendered **only in e2e stub builds** (`VITE_E2E_STUB_SPARK=true`). Gated by `{#if import.meta.env.VITE_E2E_STUB_SPARK === 'true'}` in `SceneRuntime.svelte`. The component encapsulates all diagnostic reactive state and per-frame tasks (camera/target world coordinates, scroll progress, active-camera status) so production `SceneRuntime` has zero diagnostic overhead. In production builds, the component is tree-shaken entirely — no diagnostic DOM, no reactive state, no per-frame diagnostic tasks.
 
 Attributes:
-- `data-progress` — ScrollTrigger percentage
+- `data-progress` — ScrollTrigger percentage (subscribed from `scrollAnimatorRuntime.percentage`)
 - `data-x`, `data-y`, `data-z` — Camera **world** position
 - `data-target-x`, `data-target-y`, `data-target-z` — CameraTarget **world** position
 - `data-active` — `"true"` when the app `PerspectiveCamera` is the active Threlte camera (editor camera off), `"false"` otherwise
+
+Unit tests: `tests/unit/cameraDiagnosticsGating.test.ts` — verifies no diagnostic state/tasks in `SceneRuntime`, correct gating with `VITE_E2E_STUB_SPARK`, and complete attribute contract in `CameraDiagnostics`.
 
 ## Studio Overlay Scroll-Safety
 

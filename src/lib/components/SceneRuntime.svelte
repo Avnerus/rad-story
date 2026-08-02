@@ -10,6 +10,7 @@
   import type { SparkControls } from '$lib/spark/SparkControls'
   import SparkStudioBridge from './SparkStudioBridge.svelte'
   import SparkSplats from './SparkSplats.svelte'
+  import CameraDiagnostics from './CameraDiagnostics.svelte'
 
   interface Props {
     url: string
@@ -29,26 +30,13 @@
 
   let { url, onReady, sparkControls, splatWrapper, appCamera, cameraTarget, sourceSyncEnabled = true, children }: Props = $props()
 
-  // Camera debug state for e2e tests (world-space)
-  let cameraProgress = $state(0)
-  let cameraWorldX = $state(0)
-  let cameraWorldY = $state(0)
-  let cameraWorldZ = $state(0)
-  let targetWorldX = $state(0)
-  let targetWorldY = $state(0)
-  let targetWorldZ = $state(0)
-
-  // Diagnostic: whether the app camera is currently the active Threlte camera
-  let cameraIsActive = $state(false)
-
   let loaded = $state(false)
   let scrollTrigger: ReturnType<typeof ScrollTrigger.create> | null = null
 
   const threlte = useThrelte()
 
-  // Reusable scratch vectors for look-at and debug (avoid per-frame allocation)
+  // Reusable scratch vector for look-at (avoid per-frame allocation)
   const _targetWorld = new Vector3()
-  const _camWorld = new Vector3()
 
   // Mesh reload callback — wired from SparkSplats to SparkStudioBridge
   let splatsRef = $state<{ reload: (url: string) => Promise<void>; getWrapper: () => Object3D } | null>(null)
@@ -78,34 +66,13 @@
         (object as unknown as { applyScrollPercentage: (p: number) => void }).applyScrollPercentage(percent)
       }
     })
-    cameraProgress = percent
-    updateDebugState()
   }
 
-  function updateDebugState(): void {
-    // Always use the app camera (not threlte.camera.current)
-    appCamera.getWorldPosition(_camWorld)
-    cameraWorldX = _camWorld.x
-    cameraWorldY = _camWorld.y
-    cameraWorldZ = _camWorld.z
-
-    cameraTarget.getWorldPosition(_targetWorld)
-    targetWorldX = _targetWorld.x
-    targetWorldY = _targetWorld.y
-    targetWorldZ = _targetWorld.z
-  }
-
-  // Threlte task: update camera look-at and debug state every frame
+  // Threlte task: update camera look-at every frame
   // Always uses the app camera — never forces the editor camera
   useTask(() => {
     cameraTarget.getWorldPosition(_targetWorld)
     appCamera.lookAt(_targetWorld)
-    updateDebugState()
-  }, { autoInvalidate: false })
-
-  // Diagnostic: check if the app camera is the active Threlte camera
-  useTask(() => {
-    cameraIsActive = threlte.camera.current === appCamera
   }, { autoInvalidate: false })
 
   // Register SparkControls with the active-controller runtime
@@ -200,20 +167,10 @@
   {@render children()}
 {/if}
 
-<!-- Visually hidden debug element for e2e tests -->
-<div
-  class="camera-debug"
-  data-testid="camera-state"
-  data-progress={cameraProgress.toFixed(3)}
-  data-x={cameraWorldX.toFixed(3)}
-  data-y={cameraWorldY.toFixed(3)}
-  data-z={cameraWorldZ.toFixed(3)}
-  data-target-x={targetWorldX.toFixed(3)}
-  data-target-y={targetWorldY.toFixed(3)}
-  data-target-z={targetWorldZ.toFixed(3)}
-  data-active={cameraIsActive}
-  aria-hidden="true"
-></div>
+<!-- Camera diagnostics for e2e tests — only rendered in stub builds -->
+{#if import.meta.env.VITE_E2E_STUB_SPARK === 'true'}
+  <CameraDiagnostics {appCamera} {cameraTarget} percentageStore={scrollAnimatorRuntime.percentage} />
+{/if}
 
 {#if !loaded}
   <div class="scroll-hint">Scroll to change view</div>
