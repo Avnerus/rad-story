@@ -126,41 +126,28 @@ export function computeOverrides(
 /**
  * Return device-appropriate Spark / renderer settings.
  * Used by SparkStudioBridge for initial renderer construction.
+ *
+ * The eight profile-specific sparkRenderer fields are derived from the
+ * canonical GLOBAL_BASELINES table to avoid duplication.
  */
 export function getDeviceProfile(): DeviceProfile {
   const mobile = detectMobile()
-
-  if (mobile) {
-    return {
-      profileName: 'mobile',
-      isMobile: true,
-      dpr: 1,
-      sparkRenderer: {
-        lodSplatScale: 0.5,
-        lodRenderScale: 2,
-        maxStdDev: 2.8,
-        maxPagedSplats: 1_048_576,
-        coneFov0: 70,
-        coneFov: 110,
-        coneFoveate: 0.4,
-        behindFoveate: 0.3,
-      },
-    }
-  }
+  const profileName: DeviceProfileName = mobile ? 'mobile' : 'desktop'
+  const baseline = GLOBAL_BASELINES[profileName]
 
   return {
-    profileName: 'desktop',
-    isMobile: false,
-    dpr: Math.min(window.devicePixelRatio, 2),
+    profileName,
+    isMobile: mobile,
+    dpr: mobile ? 1 : Math.min(window.devicePixelRatio, 2),
     sparkRenderer: {
-      lodSplatScale: 1,
-      lodRenderScale: 1,
-      maxStdDev: 2.8,
-      maxPagedSplats: 2_621_440,
-      coneFov0: 90,
-      coneFov: 120,
-      coneFoveate: 0.2,
-      behindFoveate: 0.1,
+      lodSplatScale: baseline.lodSplatScale,
+      lodRenderScale: baseline.lodRenderScale,
+      maxStdDev: baseline.maxStdDev,
+      maxPagedSplats: baseline.maxPagedSplats,
+      coneFov0: baseline.coneFov0,
+      coneFov: baseline.coneFov,
+      coneFoveate: baseline.coneFoveate,
+      behindFoveate: baseline.behindFoveate,
     },
   }
 }

@@ -62,7 +62,7 @@ describe('profile resolution', () => {
       }
       // Check profile-specific fields
       expect(baseline.lodSplatScale).toBe(1)
-      expect(baseline.maxPagedSplats).toBe(16 * SPARK_PAGE_SIZE)
+      expect(baseline.maxPagedSplats).toBe(32 * SPARK_PAGE_SIZE)
       expect(baseline.coneFov0).toBe(90)
       expect(baseline.coneFov).toBe(120)
       expect(baseline.coneFoveate).toBe(0.2)
@@ -85,7 +85,7 @@ describe('profile resolution', () => {
 
       expect(Object.keys(baseline).length).toBe(22)
       expect(baseline.lodSplatScale).toBe(0.5)
-      expect(baseline.maxPagedSplats).toBe(4 * SPARK_PAGE_SIZE)
+      expect(baseline.maxPagedSplats).toBe(16 * SPARK_PAGE_SIZE)
       expect(baseline.coneFov0).toBe(70)
       expect(baseline.coneFov).toBe(110)
       expect(baseline.coneFoveate).toBe(0.4)
@@ -207,10 +207,10 @@ describe('profile resolution', () => {
       const computeOverrides = await getComputeOverrides()
       const { getGlobalBaseline } = await import('$lib/spark/deviceProfile')
       const baseline = getGlobalBaseline('desktop')
-      const modified = { ...baseline, blurAmount: 0.7, maxStdDev: 2.8 }
+      const modified = { ...baseline, blurAmount: 0.7, maxStdDev: 16 }
       const overrides = computeOverrides(modified, baseline)
       expect(overrides.blurAmount).toBe(0.7)
-      expect(overrides.maxStdDev).toBe(2.8)
+      expect(overrides.maxStdDev).toBe(16)
       expect('lodSplatScale' in overrides).toBe(false)
       expect(Object.keys(overrides).length).toBe(2)
     })
@@ -275,7 +275,7 @@ describe('profile resolution', () => {
 
       const baseline = getGlobalBaseline('desktop')
       const inputOverrides = {
-        desktop: { blurAmount: 0.7, maxStdDev: 2.8, sortRadial: false },
+        desktop: { blurAmount: 0.7, maxStdDev: 16, sortRadial: false },
         mobile: {},
       }
       const effective = computeEffectiveSettings('desktop', inputOverrides)
@@ -328,7 +328,7 @@ describe('profile resolution', () => {
 
       expect(desktopEffective.blurAmount).toBe(0.7)
       expect(mobileEffective.blurAmount).toBe(0.3) // mobile baseline
-      expect(desktopEffective.maxPagedSplats).toBe(16 * SPARK_PAGE_SIZE) // desktop baseline
+      expect(desktopEffective.maxPagedSplats).toBe(32 * SPARK_PAGE_SIZE) // desktop baseline
       expect(mobileEffective.maxPagedSplats).toBe(2 * SPARK_PAGE_SIZE)
     })
   })

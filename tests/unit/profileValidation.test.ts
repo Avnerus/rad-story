@@ -164,7 +164,7 @@ describe('SparkControls profile validation', () => {
       ctrl.onChange((keys) => { notified = keys })
 
       ctrl.profileSettings = {
-        desktop: { blurAmount: 0.7, maxStdDev: 2.8 },
+        desktop: { blurAmount: 0.7, maxStdDev: 16 },
         mobile: {},
       }
 

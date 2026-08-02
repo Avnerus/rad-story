@@ -26,7 +26,7 @@ describe('getDeviceProfile', () => {
 
     expect(profile.isMobile).toBe(true)
     expect(profile.dpr).toBe(1)
-    expect(profile.sparkRenderer.maxPagedSplats).toBe(262_144)
+    expect(profile.sparkRenderer.maxPagedSplats).toBe(16 * 65_536) // 1_048_576 = 16 * SPARK_PAGE_SIZE (mobile baseline)
     expect(profile.sparkRenderer.lodSplatScale).toBe(0.5)
     // Cone angles are in degrees (Spark 2.1 API)
     expect(profile.sparkRenderer.coneFov0).toBe(70)
@@ -46,7 +46,7 @@ describe('getDeviceProfile', () => {
 
     expect(profile.isMobile).toBe(false)
     expect(profile.dpr).toBeLessThanOrEqual(2)
-    expect(profile.sparkRenderer.maxPagedSplats).toBe(1_048_576)
+    expect(profile.sparkRenderer.maxPagedSplats).toBe(32 * 65_536) // 2_097_152 = 32 * SPARK_PAGE_SIZE (desktop baseline)
     expect(profile.sparkRenderer.lodSplatScale).toBe(1)
     // Cone angles are in degrees (Spark 2.1 API), matching Spark defaults
     expect(profile.sparkRenderer.coneFov0).toBe(90)
