@@ -108,10 +108,12 @@ does not contain them. Add focused tests for:
      controller is persistable.
 4. Query-string behavior:
    - `?splat_url=` pre-fills;
-   - legacy `?url=` is ignored;
-   - Start writes `splat_url`, deletes a pre-existing `url`, preserves
-     `debug=true` and unrelated parameters, and the value is present after
-     reload/navigation as intended.
+   - Start writes `splat_url`, preserves `debug=true` and unrelated parameters,
+     and the value is present after reload/navigation as intended.
+
+No dedicated test is required for ignoring or removing the legacy `url`
+parameter. Keep that implementation cleanup, but test the current public
+`splat_url` behavior rather than removed compatibility.
 
 The existing ad-hoc pane e2e tests already cover the session-only warning and a
 live numeric edit. Keep them. Do not add a test that mutates real project source
@@ -150,8 +152,8 @@ This bypasses the package `exports` map and is coupled to the pinned Studio
 - [ ] Dynamic/session-only edits remain live; file-backed exact-root
       `profileSettings` persistence remains enabled.
 - [ ] Tests explicitly cover the runtime capability, initial renderer snapshot,
-      stale transaction identity, legacy query rejection/removal, unrelated
-      query preservation, and `splat_url` reloadability.
+      stale transaction identity, unrelated query preservation, and
+      `splat_url` reloadability.
 - [ ] README names `splat_url`; AGENTS.md accurately describes the final
       identity-aware source-sync and initialization flow.
 - [ ] `npm run check`, `npm run lint`, `npm run test:unit`,
