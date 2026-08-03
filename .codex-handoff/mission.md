@@ -1,88 +1,82 @@
-# Follow-up mission: make the typing cleanup genuinely sound
+# Follow-up mission: finish the sound-typing cleanup
 
 ## Objective
 
-Correct the first typing-cleanup pass so it removes the underlying unsafety, not only the literal `as unknown` spelling. The implementation must use honest boundary types, sound type predicates, key/value-correlated settings writes, and narrow test seams. Make the occurrence audit and completion report accurate.
+Resolve the remaining soundness defects in the second pass. Do not rename or relocate unsafe assertions and then describe them as narrow typing. The final code and report must match the actual contracts.
 
-## Verification findings to address
+## Remaining verification findings
 
-1. The required raw audit still has four matches under `src/` and `tests/`; comments were not exempt from the mission.
-2. `tests/unit/noDoubleAssertions.test.ts` is self-defeating: it excludes itself, filters comments, and `execSync('rg ...')` throws when the desired state (no matches) is reached because `rg` exits 1. It also depends on an external binary during unit tests.
-3. `tests/unit/createSparkStudioRenderer.test.ts` and `tests/unit/sparkStudioSettings.test.ts` replaced double assertions with `Partial<T> as T`, including `{}` presented as full `SplatMesh`/`SparkRenderer`. This explicitly violates the original narrow-test-double constraint.
-4. `tests/unit/scrollAnimatorTypeGuard.test.ts` introduces `as any` and constructs a fake full `Object3D` shape. The report's claim of zero `as any` is therefore false.
-5. `isScrollAnimator(unknown): obj is ScrollAnimatorLike` is unsound: it returns true for a plain object containing only a brand and function, while `ScrollAnimatorLike extends Object3D` and promises `keyframes`. Consumers then rely on properties the predicate never establishes. Several consumers still add redundant assertions after the guard.
-6. `registry.ts` casts the whole `import.meta.glob` result instead of supplying Vite's generic or validating the runtime module shape.
-7. `createDefaultSettings()` and `buildBaseline()` use union-valued record assertions. `setRendererField()` accepts an uncorrelated union key and union value. These compile by widening the relationship rather than proving the correct value type for each key—the exact pitfall called out in the original mission.
-8. `SparkRendererWithSettings extends SparkRenderer, SparkSettings` asserts that every domain setting has the same runtime property contract. In particular, conversions such as `lodSplatCount: null -> undefined` show that the contracts are not identical. Model the real installed public renderer API rather than declaring a convenient intersection.
-9. `AGENTS.md` currently blesses `Partial<T> as T`, says comment matches are acceptable, and recommends the unsound intersection/generic setter patterns. Those rules must be corrected.
-10. `.codex-handoff/status.md` reports lint failure but checks “all verification commands pass.” The next report must be internally consistent and include the exact lint failure if one remains.
+1. `tests/unit/testHelpers.ts` is not narrow:
+   - `MockWebGLRenderer extends THREE.WebGLRenderer` and `MockScene extends THREE.Scene`, so both still promise the complete heavyweight class contracts.
+   - Their factories return partial object literals via `as MockWebGLRenderer` / `as MockScene`.
+   - `makeMockSplatMesh()` and `makeMockSparkRenderer()` still return `{}` asserted as full Spark classes.
+   This is precisely the fabricated-full-class pattern the mission and updated `AGENTS.md` prohibit.
+2. The `unknown` overload of `isScrollAnimator` is unsound. A `uuid` property does not establish an `Object3D`; `transactionGuard.test.ts` explicitly expects a plain `{ uuid, brand, method, keyframes }` object to narrow to an interface extending `Object3D`.
+3. `makeFakeScrollAnimator()` still ends in `obj as ScrollAnimatorLike`, even though it starts with a real `Object3D`. The type model/factory should make the augmentation honest without a whole-domain assertion.
+4. `createDefaultSettings()` and `buildBaseline()` still rely on `Object.fromEntries(...) as SparkSettings`; `buildBaseline()` also asserts the spread result again. This does not statically prove that `SETTINGS_KEYS` is complete or that every field definition default is correlated with its key.
+5. `noDoubleAssertions.test.ts` checks only the exact same-line substring assembled as `'as ' + 'unknown'`. It does not enforce the documented rule against unsafe chained assertions generally or across whitespace/newlines, and it would not catch the fabricated single assertions currently in `testHelpers.ts`.
+6. `AGENTS.md` claims the guard is sound and the test doubles are narrow, while the implementation above contradicts those claims.
 
 ## Files likely involved
 
+- `tests/unit/testHelpers.ts`
+- `tests/unit/{createSparkStudioRenderer.test.ts,sparkStudioSettings.test.ts,scrollAnimatorTypeGuard.test.ts,transactionGuard.test.ts,noDoubleAssertions.test.ts}`
 - `src/lib/types/scrollAnimator.ts`
-- `src/lib/components/SceneRuntime.svelte`
-- `src/lib/studio/scroll-animator/{transactionGuard.ts,ScrollAnimatorExtension.svelte,CameraFrustumHelper.svelte}`
-- `src/lib/scenes/registry.ts`
-- `src/lib/spark/{SparkControls.ts,deviceProfile.ts,createSparkStudioRenderer.ts}`
-- Tests around renderer construction/settings, scene traversal, and the guard
-- `tests/unit/noDoubleAssertions.test.ts` (replace or redesign)
+- `src/lib/studio/scroll-animator/transactionGuard.ts`
+- `src/lib/spark/{SparkControls.ts,deviceProfile.ts}` and their focused tests
 - `AGENTS.md`
-- `.codex-handoff/status.md`
 
-Refresh the changed-file list and occurrence inventory before editing. Keep fixes scoped to the findings above.
+Keep the work scoped to these findings and any directly necessary type seams.
 
-## Constraints and implementation guidance
+## Constraints and implementation tips
 
-- Zero raw matches from `rg -n '\bas unknown\b' src tests`; this includes comments and test strings.
-- Zero `as any` introduced by this work. Do not substitute `as never`, chained assertions of another form, broad record/domain casts, non-null assertions, or suppression comments.
-- A type predicate may promise only facts established by its input type plus its runtime checks. A good design here is likely a guard accepting `Object3D` (because traversal/selection already supplies one) and checking the ScrollAnimator brand, callable method, and any additional domain property consumers require. If unknown input support is retained, first establish the full promised shape. Once narrowed, consumers must not re-cast to the predicate's result.
-- Prefer the actual `ScrollAnimator` instances in tests. For HMR structural tests, start from a real `Object3D` and add the minimal branded domain properties through a typed helper whose return type is constructed honestly.
-- Use `import.meta.glob<SceneModule>(pattern, { eager: true })` or validate unknown module values with a runtime guard. Do not assert the returned record wholesale.
-- Preserve key/value correlation for heterogeneous settings. Good options include:
-  - field definitions carrying a typed setter/apply callback;
-  - an exhaustive switch that narrows each key and applies the corresponding correctly typed value;
-  - constructing defaults from a complete typed literal checked with `satisfies SparkSettings`;
-  - a generic callback invoked while `K` remains correlated with `SparkSettings[K]`.
-  A function accepting `keyof SparkSettings` plus `SparkSettings[keyof SparkSettings]` is not correlated.
-- Inspect the installed Spark declarations and model only the renderer fields actually exposed. Keep the `null -> undefined` conversion explicit in an adapter whose input and output types reflect that difference. Do not declare `SparkRenderer & SparkSettings` merely to make indexed writes compile.
-- Test doubles must describe what the unit consumes. Extract or accept narrow structural dependency interfaces where useful, use real lightweight Three objects when practical, and use typed factories/`satisfies` for minimal mocks. Do not claim a partial object is a complete heavyweight class.
-- A regression rule must pass when there are genuinely zero occurrences, must not hide comments or its own file, and should not require `rg` at unit-test runtime. Prefer an ESLint AST restriction if it can cover TS and Svelte; otherwise implement a small filesystem-based test/check whose forbidden token is assembled without containing the token itself. It should detect chained double assertions, including across whitespace/newlines, without flagging documentation accidentally.
-- Preserve all runtime behavior and all existing negative-path test intent. Do not relax compiler/linter settings or remove tests.
-- Do not fix unrelated lint problems. If lint fails outside this diff, record the exact file/rule and mark that acceptance item honestly rather than claiming success.
+- A “narrow” interface should use `Pick<>` or explicitly declare only consumed members; it must not extend the full class it is meant to avoid mocking.
+- Prefer real lightweight Three instances (`new Scene()`, `new Object3D()`) and spies on real methods where practical.
+- For an external constructor that requires a heavyweight concrete type, create a deliberate dependency seam or one localized adapter at that third-party boundary. Tests should inject a typed fake through that seam. Do not scatter full-class assertions through fixtures.
+- For identity-only values, reuse real instances already created by the test, use a legitimate lightweight subclass/instance, or change the internal test seam to an honest identity type. Never return `{}` as `SplatMesh`/`SparkRenderer`.
+- Make `isScrollAnimator` sound in one of these ways:
+  - accept `Object3D` only, since scene traversal and Studio selection provide it, and make the transaction type reflect Studio's public object contract; or
+  - separate an unknown structural predicate from the Object3D predicate so the unknown version promises only the properties it actually validates; or
+  - fully establish the required Object3D contract before promising `ScrollAnimatorLike`.
+  A `uuid` string alone is not an Object3D check. Tests must reject lookalike plain objects and remove the current expectation that they pass.
+- Build HMR fixtures with a small real subclass of `Object3D` implementing the branded fields, which naturally satisfies the interface without asserting the finished object.
+- For settings defaults, make completeness and key/value correlation compiler-checked. Prefer a complete typed literal or a generic field-definition model such as `{ [K in keyof SparkSettings]: FieldDef<SparkSettings[K]> }` plus one well-explained standard-library conversion helper. A bare `Object.fromEntries(...) as SparkSettings` at each call site is not sufficient proof. Remove redundant assertions from spreads.
+- Regression enforcement must align with the documented rule. Prefer an ESLint AST restriction for chained TS assertions and add focused tests for the custom rule/check if needed. A textual fallback must handle arbitrary whitespace/newlines and more than one laundering intermediate type; it must not exempt its own violations. Separately enforce the project-specific ban on fabricated test-class assertions through reviewable typed seams rather than pretending a token check proves semantic soundness.
+- Preserve runtime behavior. Do not weaken compiler/linter settings, change dependencies, or remove behavioral/negative tests.
 
 ## AGENTS.md update
 
-Correct the TypeScript best-practices section so it:
+Update the typing section to describe only the final implementation:
 
-- prohibits unsafe chained assertions generally, not just one spelling;
-- does not recommend `Partial<T> as T`, uncorrelated generic setters, or domain intersections that are not true runtime contracts;
-- documents the final sound guard, registry, renderer adapter, settings construction/mutation, globals, and test-double patterns with source references;
-- states the exact regression command and zero-match expectation;
-- remains concise fresh-session documentation, not an implementation log.
+- the actual narrow test/dependency seams and where they live;
+- the exact contract of each ScrollAnimator predicate;
+- the compiler-checked settings default construction;
+- what the regression rule really detects and its limitations;
+- continued prohibition on fabricated class mocks and unsafe chained assertions.
+
+Keep it concise and useful in a fresh session.
 
 ## Acceptance criteria
 
-- The raw command `rg -n '\bas unknown\b' src tests` prints nothing and exits with no code matches expected.
-- No unsafe substitutes exist in the changed solution: `as any`, unjustified `as never`, chained assertions, fabricated full-class mocks, broad domain-record casts, or new suppression directives.
-- `isScrollAnimator` is a sound predicate; every property promised follows from its parameter type or is runtime-validated. All post-guard assertions are removed.
-- Guard tests use real `Object3D`/`ScrollAnimator` values or honestly typed factories and cover malformed branded objects.
-- Scene registry typing is established through the glob generic or runtime validation, not a wholesale result assertion.
-- Default/baseline construction is complete and checked without union-valued record assertions.
-- Every settings mutation preserves its key/value relationship.
-- The Spark renderer adapter reflects the actual installed Spark property types, including the automatic `lodSplatCount` representation.
-- Renderer/scene/mesh tests use narrow seams, real instances, or honest factories—never `Partial<T> as T`.
-- The regression enforcement succeeds in the true zero-match state and cannot exempt its own violation.
-- `AGENTS.md` documents only the final sound patterns.
-- Reported verification and checklist results are mutually consistent.
-- Re-check every acceptance item before finalizing.
+- No test helper interface extends a full Three/Spark class while claiming to be narrow.
+- No partial object or `{}` is asserted as `WebGLRenderer`, `Scene`, `SplatMesh`, `SparkRenderer`, or an alias extending those types.
+- Test fixtures use real instances, legitimate subclasses, or honest narrow dependency seams.
+- No predicate narrows a plain uuid-bearing object to `Object3D`/`ScrollAnimatorLike`.
+- Plain lookalike objects are rejected; real/HMR-safe Object3D-derived animators are accepted without post-construction domain assertions.
+- Settings defaults are compiler-checked for all keys and correct per-key value types; redundant result assertions are removed.
+- The regression mechanism enforces the rule it claims to enforce and passes when the repository is clean.
+- Raw `rg -n '\bas unknown\b' src tests` remains empty; no `as any`, new unjustified `as never`, new chained assertion, broad domain-record cast, or suppression workaround is introduced.
+- `AGENTS.md` matches the real solution.
+- All reported checks and the final checklist are consistent.
+- Re-check each acceptance item before finalizing.
 
 ## Tests to run
 
-Add or update focused tests for the sound guard, malformed objects, typed settings adapters, and regression enforcement. Then run:
+Add/update focused tests for plain-object rejection, legitimate Object3D-derived HMR fixtures, settings completeness/correlation, dependency seams, and regression enforcement. Run:
 
 ```sh
 rg -n '\bas unknown\b' src tests
-rg -n '\bas any\b|\bas never\b|Partial<[^>]+>\s+as\s+' src tests
+rg -n '\bas any\b|Partial<[^>]+>\s+as\s+|\{\}\s+as\s+' src tests
 npm run check
 npm run lint
 npm run test:unit
@@ -91,27 +85,27 @@ npm run test:e2e
 git diff --check
 ```
 
-The first two audits should produce no relevant unsafe-code matches. Explain any legitimate pre-existing result precisely rather than filtering it away.
+Report exact outcomes. If an audit has a legitimate match, explain it precisely and do not mark that criterion passed without reconciling it.
 
 ## Things Pi must not change
 
-- Do not change scene/routing/camera behavior, Spark defaults or validation, profile resolution, source-sync rules, renderer/reload semantics, e2e diagnostic behavior, or dependencies.
-- Do not weaken public types solely for mocks.
-- Do not delete negative tests or reduce their assertions.
-- Do not modify unrelated files or `.codex-handoff/mission.md`.
+- Do not change scene/routing/camera behavior, Spark defaults/validation, source-sync rules, renderer/reload semantics, diagnostics, or dependencies.
+- Do not weaken production APIs merely to make incomplete mocks compile.
+- Do not delete negative tests, reduce assertions, or modify unrelated files.
+- Do not modify `.codex-handoff/mission.md`.
 
 ## Expected completion report format
 
 Write `.codex-handoff/status.md` with:
 
-1. Summary of the corrected type-boundary design.
-2. Changed files grouped by production, tests, and documentation.
-3. Each verification finding above mapped to its fix.
-4. Raw occurrence/unsafe-substitute audit outputs.
-5. Tests added or changed and what they prove.
-6. Exact verification commands and honest outcomes, including the exact lint blocker if any.
-7. Itemized acceptance checklist with no contradictory claims.
+1. Summary of the final type-boundary design.
+2. Changed files grouped by production seams/types, tests, and documentation.
+3. Each numbered finding mapped to concrete code changes.
+4. Audit outputs, including any matches and their disposition.
+5. Focused tests and what they prove.
+6. Exact verification commands/results.
+7. Itemized acceptance checklist consistent with those results.
 8. Remaining risks/follow-ups or `None`.
-9. Pushed commit hashes and subjects.
+9. Pushed commits.
 
-Re-check all acceptance criteria immediately before finalizing. Always write `status.md` as the last action before committing and pushing. After the final push, perform no more verification or modifications. Push the implementation and report to the current branch.
+Re-check every acceptance item before finalizing. Write `status.md` as the last action before committing and pushing, then perform no further verification or modification after the push. Push the implementation and report to the current branch.
