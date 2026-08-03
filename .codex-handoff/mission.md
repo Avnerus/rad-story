@@ -1,82 +1,117 @@
-# Follow-up mission: finish the sound-typing cleanup
+# Final follow-up mission: align the implementation with its typing claims
 
 ## Objective
 
-Resolve the remaining soundness defects in the second pass. Do not rename or relocate unsafe assertions and then describe them as narrow typing. The final code and report must match the actual contracts.
+Fix the remaining four discrepancies in the latest sound-typing pass. Keep the changes small and make the report describe the implementation honestly; a justified, localized third-party test adapter is acceptable, but it must not be described as assertion-free.
 
-## Remaining verification findings
+## Findings to fix
 
-1. `tests/unit/testHelpers.ts` is not narrow:
-   - `MockWebGLRenderer extends THREE.WebGLRenderer` and `MockScene extends THREE.Scene`, so both still promise the complete heavyweight class contracts.
-   - Their factories return partial object literals via `as MockWebGLRenderer` / `as MockScene`.
-   - `makeMockSplatMesh()` and `makeMockSparkRenderer()` still return `{}` asserted as full Spark classes.
-   This is precisely the fabricated-full-class pattern the mission and updated `AGENTS.md` prohibit.
-2. The `unknown` overload of `isScrollAnimator` is unsound. A `uuid` property does not establish an `Object3D`; `transactionGuard.test.ts` explicitly expects a plain `{ uuid, brand, method, keyframes }` object to narrow to an interface extending `Object3D`.
-3. `makeFakeScrollAnimator()` still ends in `obj as ScrollAnimatorLike`, even though it starts with a real `Object3D`. The type model/factory should make the augmentation honest without a whole-domain assertion.
-4. `createDefaultSettings()` and `buildBaseline()` still rely on `Object.fromEntries(...) as SparkSettings`; `buildBaseline()` also asserts the spread result again. This does not statically prove that `SETTINGS_KEYS` is complete or that every field definition default is correlated with its key.
-5. `noDoubleAssertions.test.ts` checks only the exact same-line substring assembled as `'as ' + 'unknown'`. It does not enforce the documented rule against unsafe chained assertions generally or across whitespace/newlines, and it would not catch the fabricated single assertions currently in `testHelpers.ts`.
-6. `AGENTS.md` claims the guard is sound and the test doubles are narrow, while the implementation above contradicts those claims.
+1. `makeMockRenderer()` still returns a multiline partial object asserted as `MockWebGLRenderer & THREE.WebGLRenderer`. This is still a partial object presented as the full class and directly contradicts the report/checklist. The `rg '\{\}\s+as'` audit cannot detect this multiline form.
+2. Settings defaults are not compiler-correlated as claimed:
+   - `SparkControls.createDefaultSettings()` has 22 `as number` / `as boolean` / `as number | null` assertions.
+   - `deviceProfile.buildBaseline()` duplicates those assertions, then adds `as SparkSettings` to both the literal and spread result.
+   - `FIELD_DEFS` still uses one non-generic `FieldDef.default: number | boolean | null`, which is why the assertions are necessary.
+3. `noDoubleAssertions.test.ts` excludes its own file, skips comments, scans one line at a time, and uses a narrow regex. It therefore does not enforce chained assertions across whitespace/newlines or the no-self-exemption rule stated in the mission. `AGENTS.md` documents the exemption rather than fixing it.
+4. `isScrollAnimator(Object3D)` still casts the domain object to `Record<string, unknown>`, contrary to the documented preference. TypeScript's `in` narrowing can inspect each branded property without a broad record cast.
 
 ## Files likely involved
 
-- `tests/unit/testHelpers.ts`
-- `tests/unit/{createSparkStudioRenderer.test.ts,sparkStudioSettings.test.ts,scrollAnimatorTypeGuard.test.ts,transactionGuard.test.ts,noDoubleAssertions.test.ts}`
+- `src/lib/spark/SparkControls.ts`
+- `src/lib/spark/deviceProfile.ts`
 - `src/lib/types/scrollAnimator.ts`
-- `src/lib/studio/scroll-animator/transactionGuard.ts`
-- `src/lib/spark/{SparkControls.ts,deviceProfile.ts}` and their focused tests
+- `tests/unit/testHelpers.ts` and its callers
+- `tests/unit/noDoubleAssertions.test.ts`
+- Focused settings/guard/regression tests
 - `AGENTS.md`
 
-Keep the work scoped to these findings and any directly necessary type seams.
+## Constraints and concrete implementation guidance
 
-## Constraints and implementation tips
+### Typed field definitions and defaults
 
-- A “narrow” interface should use `Pick<>` or explicitly declare only consumed members; it must not extend the full class it is meant to avoid mocking.
-- Prefer real lightweight Three instances (`new Scene()`, `new Object3D()`) and spies on real methods where practical.
-- For an external constructor that requires a heavyweight concrete type, create a deliberate dependency seam or one localized adapter at that third-party boundary. Tests should inject a typed fake through that seam. Do not scatter full-class assertions through fixtures.
-- For identity-only values, reuse real instances already created by the test, use a legitimate lightweight subclass/instance, or change the internal test seam to an honest identity type. Never return `{}` as `SplatMesh`/`SparkRenderer`.
-- Make `isScrollAnimator` sound in one of these ways:
-  - accept `Object3D` only, since scene traversal and Studio selection provide it, and make the transaction type reflect Studio's public object contract; or
-  - separate an unknown structural predicate from the Object3D predicate so the unknown version promises only the properties it actually validates; or
-  - fully establish the required Object3D contract before promising `ScrollAnimatorLike`.
-  A `uuid` string alone is not an Object3D check. Tests must reject lookalike plain objects and remove the current expectation that they pass.
-- Build HMR fixtures with a small real subclass of `Object3D` implementing the branded fields, which naturally satisfies the interface without asserting the finished object.
-- For settings defaults, make completeness and key/value correlation compiler-checked. Prefer a complete typed literal or a generic field-definition model such as `{ [K in keyof SparkSettings]: FieldDef<SparkSettings[K]> }` plus one well-explained standard-library conversion helper. A bare `Object.fromEntries(...) as SparkSettings` at each call site is not sufficient proof. Remove redundant assertions from spreads.
-- Regression enforcement must align with the documented rule. Prefer an ESLint AST restriction for chained TS assertions and add focused tests for the custom rule/check if needed. A textual fallback must handle arbitrary whitespace/newlines and more than one laundering intermediate type; it must not exempt its own violations. Separately enforce the project-specific ban on fabricated test-class assertions through reviewable typed seams rather than pretending a token check proves semantic soundness.
-- Preserve runtime behavior. Do not weaken compiler/linter settings, change dependencies, or remove behavioral/negative tests.
+Make field definitions key-correlated at their declaration, for example:
+
+```ts
+interface FieldDef<T extends number | boolean | null> {
+  // validation metadata...
+  default: T
+}
+
+type FieldDefs = {
+  [K in keyof SparkSettings]: FieldDef<SparkSettings[K]>
+}
+
+export const FIELD_DEFS = {
+  // all 22 definitions
+} satisfies FieldDefs
+```
+
+Then define one shared complete defaults literal using the now-correlated `.default` values and `satisfies SparkSettings`. Export a copy-returning helper or readonly constant as appropriate. Both `createDefaultSettings()` and `buildBaseline()` must reuse it; do not duplicate 22 fields or add result assertions. `{ ...DEFAULTS, ...overrides }` should infer as `SparkSettings` naturally.
+
+Update validation helpers to accept the appropriate generic/union field definition without reintroducing chained/broad assertions. Add a compile-time-oriented test or `satisfies` fixture proving a boolean default cannot be assigned to a numeric field and all keys are required, if feasible without expected-error clutter.
+
+### ScrollAnimator guard
+
+Since the parameter is already `Object3D`, use successive property checks:
+
+```ts
+return (
+  'isScrollAnimator' in obj && obj.isScrollAnimator === true &&
+  'applyScrollPercentage' in obj && typeof obj.applyScrollPercentage === 'function' &&
+  'keyframes' in obj && Array.isArray(obj.keyframes)
+)
+```
+
+Adapt to actual compiler behavior, but do not cast the full domain object to a broad record.
+
+### Test renderer boundary
+
+Use an explicit narrow `MockWebGLRenderer` object and one clearly named adapter at the unavoidable `SparkRendererOptions.renderer` boundary, such as `asWebGLRendererForSparkTest(mock)`. Keep the single assertion contained inside that adapter, explain why jsdom cannot construct a real GPU renderer, and return `THREE.WebGLRenderer` rather than an intersection that falsely says the object satisfies both full contracts.
+
+All tests should otherwise use the narrow mock type. If a small dependency injection seam cleanly eliminates even this adapter without weakening production types, prefer it. A real `THREE.Scene` needs no asserted intersection; return the real scene and retain spies separately or rely on Vitest's spy handles.
+
+The final report/checklist must explicitly acknowledge the one localized test-boundary assertion if retained. Do not claim “zero unsafe assertions of any form.”
+
+### Regression enforcement
+
+Use TypeScript AST parsing rather than line regexes for `.ts` files: a chained assertion is an `AsExpression` whose expression is another `AsExpression` (account for parenthesized forms). Parse Svelte `<script>` contents similarly, using an existing project parser/compiler or a careful extraction passed to the TypeScript parser. AST parsing naturally ignores comments and string literals, so the test can scan itself without exemption.
+
+Add focused fixtures/cases proving the detector catches:
+
+- same-line and multiline chained assertions;
+- different intermediate types, including generics;
+- parenthesized chained assertions;
+
+and does not flag comments, strings, or a legitimate single boundary assertion. Do not add dependencies just for this—the `typescript` package is already installed.
 
 ## AGENTS.md update
 
-Update the typing section to describe only the final implementation:
+Document:
 
-- the actual narrow test/dependency seams and where they live;
-- the exact contract of each ScrollAnimator predicate;
-- the compiler-checked settings default construction;
-- what the regression rule really detects and its limitations;
-- continued prohibition on fabricated class mocks and unsafe chained assertions.
+- the generic `FieldDefs` and single shared defaults source;
+- the cast-free Object3D guard;
+- the one named third-party test adapter, if retained, as a narrow documented exception;
+- AST-based chained-assertion enforcement with no self-exclusion.
 
-Keep it concise and useful in a fresh session.
+Remove claims that are not literally true.
 
 ## Acceptance criteria
 
-- No test helper interface extends a full Three/Spark class while claiming to be narrow.
-- No partial object or `{}` is asserted as `WebGLRenderer`, `Scene`, `SplatMesh`, `SparkRenderer`, or an alias extending those types.
-- Test fixtures use real instances, legitimate subclasses, or honest narrow dependency seams.
-- No predicate narrows a plain uuid-bearing object to `Object3D`/`ScrollAnimatorLike`.
-- Plain lookalike objects are rejected; real/HMR-safe Object3D-derived animators are accepted without post-construction domain assertions.
-- Settings defaults are compiler-checked for all keys and correct per-key value types; redundant result assertions are removed.
-- The regression mechanism enforces the rule it claims to enforce and passes when the repository is clean.
-- Raw `rg -n '\bas unknown\b' src tests` remains empty; no `as any`, new unjustified `as never`, new chained assertion, broad domain-record cast, or suppression workaround is introduced.
-- `AGENTS.md` matches the real solution.
-- All reported checks and the final checklist are consistent.
-- Re-check each acceptance item before finalizing.
+- `FIELD_DEFS` statically correlates every key with `SparkSettings[K]`.
+- Exactly one shared complete defaults definition exists; both consumers reuse it without per-field or result assertions.
+- `isScrollAnimator` uses no broad record/domain cast.
+- No helper return type falsely intersects a partial mock with a full Three/Spark class.
+- Any unavoidable WebGLRenderer assertion exists only inside one named third-party test adapter and is accurately documented.
+- Real `Scene` fixtures require no asserted intersection.
+- Regression detection uses syntax structure, catches multiline/parenthesized/generic chained assertions, ignores comments/strings, and scans its own file.
+- Raw `rg -n '\bas unknown\b' src tests` remains empty; no `as any`, new unjustified `as never`, broad domain-record cast, or suppression workaround is introduced.
+- `AGENTS.md`, status narrative, audit output, and checklist agree with the actual code.
+- All reported verification passes, and every criterion is re-checked before finalizing.
 
 ## Tests to run
 
-Add/update focused tests for plain-object rejection, legitimate Object3D-derived HMR fixtures, settings completeness/correlation, dependency seams, and regression enforcement. Run:
-
 ```sh
 rg -n '\bas unknown\b' src tests
-rg -n '\bas any\b|Partial<[^>]+>\s+as\s+|\{\}\s+as\s+' src tests
+rg -n '\bas any\b|Partial<[^>]+>\s+as\s+' src tests
 npm run check
 npm run lint
 npm run test:unit
@@ -85,27 +120,26 @@ npm run test:e2e
 git diff --check
 ```
 
-Report exact outcomes. If an audit has a legitimate match, explain it precisely and do not mark that criterion passed without reconciling it.
+Also run the focused regression-detector, settings, renderer, and ScrollAnimator guard tests. Report exact outcomes without overstating what text audits prove.
 
 ## Things Pi must not change
 
-- Do not change scene/routing/camera behavior, Spark defaults/validation, source-sync rules, renderer/reload semantics, diagnostics, or dependencies.
-- Do not weaken production APIs merely to make incomplete mocks compile.
-- Do not delete negative tests, reduce assertions, or modify unrelated files.
+- Do not change runtime behavior, settings values/validation, scene/camera/routing behavior, renderer/reload semantics, source sync, diagnostics, or dependencies.
+- Do not weaken production APIs for tests or add unrelated refactors.
 - Do not modify `.codex-handoff/mission.md`.
 
 ## Expected completion report format
 
 Write `.codex-handoff/status.md` with:
 
-1. Summary of the final type-boundary design.
-2. Changed files grouped by production seams/types, tests, and documentation.
-3. Each numbered finding mapped to concrete code changes.
-4. Audit outputs, including any matches and their disposition.
+1. Summary.
+2. Changed files by production typing, tests, and docs.
+3. Each of the four findings mapped to its concrete fix.
+4. Honest assertion inventory, explicitly naming any retained test adapter.
 5. Focused tests and what they prove.
-6. Exact verification commands/results.
-7. Itemized acceptance checklist consistent with those results.
-8. Remaining risks/follow-ups or `None`.
+6. Exact verification results.
+7. Consistent itemized acceptance checklist.
+8. Risks/follow-ups or `None`.
 9. Pushed commits.
 
-Re-check every acceptance item before finalizing. Write `status.md` as the last action before committing and pushing, then perform no further verification or modification after the push. Push the implementation and report to the current branch.
+Re-check every acceptance criterion before finalizing. Write `status.md` as the final action before committing and pushing; after the push, perform no further verification or modification. Push the implementation and report to the current branch.
