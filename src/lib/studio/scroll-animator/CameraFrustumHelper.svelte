@@ -79,8 +79,8 @@
     // Only create helper for opted-in ScrollAnimators
     if (!isScrollAnimator(obj)) return
 
-    const animator = obj as unknown as { showChildCameraFrustumWhenSelected?: boolean }
-    if (!animator.showChildCameraFrustumWhenSelected) return
+    // obj is narrowed to ScrollAnimatorLike by isScrollAnimator above
+    if (!obj.showChildCameraFrustumWhenSelected) return
 
     // Exact-one contract: resolve ALL descendant cameras
     const cameras = findAllDescendantCameras(obj)
@@ -111,9 +111,9 @@
     // Remove diagnostic on destroy only if it still points to this instance
     // so an old instance cannot delete a newer instance's diagnostic
     if (typeof window !== 'undefined') {
-      const current = (window as unknown as Record<string, unknown>).__camera_frustum_helper_diagnostic
+      const current = window.__camera_frustum_helper_diagnostic
       if (current === exposeHelperDiagnostic) {
-        delete (window as unknown as Record<string, unknown>).__camera_frustum_helper_diagnostic
+        delete window.__camera_frustum_helper_diagnostic
       }
     }
   })
@@ -163,8 +163,8 @@
   }
 
   // Install diagnostic only in stub builds
-  if (typeof window !== 'undefined' && (window as unknown as Record<string, unknown>).__spark_stub === true) {
-    ;(window as unknown as Record<string, unknown>).__camera_frustum_helper_diagnostic = exposeHelperDiagnostic
+  if (typeof window !== 'undefined' && window.__spark_stub === true) {
+    window.__camera_frustum_helper_diagnostic = exposeHelperDiagnostic
   }
 </script>
 

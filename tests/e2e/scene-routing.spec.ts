@@ -32,7 +32,7 @@ async function waitForDebugElement(page: import('@playwright/test').Page) {
  */
 async function getHelperDiagnostic(page: import('@playwright/test').Page) {
   return page.evaluate(() => {
-    const fn = (window as unknown as Record<string, unknown>).__camera_frustum_helper_diagnostic
+    const fn = window.__camera_frustum_helper_diagnostic
     if (typeof fn !== 'function') return null
     return (fn as () => {
       ownedHelperCount: number
@@ -50,14 +50,14 @@ async function getHelperDiagnostic(page: import('@playwright/test').Page) {
 /** Helper: get stub scene UUID from SceneRuntime diagnostic */
 async function getStubSceneUuid(page: import('@playwright/test').Page): Promise<string | null> {
   return page.evaluate(() => {
-    return (window as unknown as Record<string, unknown>).__stub_scene_uuid as string | null
+    return window.__stub_scene_uuid as string | null
   })
 }
 
 /** Helper: get stub app camera UUID from SceneRuntime diagnostic */
 async function getStubAppCameraUuid(page: import('@playwright/test').Page): Promise<string | null> {
   return page.evaluate(() => {
-    return (window as unknown as Record<string, unknown>).__stub_app_camera_uuid as string | null
+    return window.__stub_app_camera_uuid as string | null
   })
 }
 
@@ -135,6 +135,7 @@ test.describe('Scene routing', () => {
 
     const state = await getCameraState(page)
     expect(state.progress).toBeGreaterThan(95)
+    expect(state.progress).toBeLessThanOrEqual(100.01)
     expect(state.y).toBeGreaterThan(25)
   })
 
@@ -410,7 +411,7 @@ test.describe('Baby Yoda SplatWrapper', () => {
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
     const sourceInfo = await page.evaluate(() => {
-      const d = (window as unknown as Record<string, unknown>).__spark_stub_diagnostics as {
+      const d = window.__spark_stub_diagnostics as {
         wrapper: { userData: Record<string, unknown> } | null
       }
       const wrapper = d.wrapper
@@ -449,7 +450,7 @@ test.describe('Baby Yoda SplatWrapper', () => {
 
     // Set unmistakable non-default wrapper transform
     const wrapperTransform = await page.evaluate(() => {
-      const d = (window as unknown as Record<string, unknown>).__spark_stub_diagnostics as {
+      const d = window.__spark_stub_diagnostics as {
         wrapper: { position: { set: (x: number, y: number, z: number) => void; x: number; y: number; z: number }; rotation: { set: (x: number, y: number, z: number) => void; x: number; y: number; z: number }; scale: { set: (x: number, y: number, z: number) => void; x: number; y: number; z: number } } | null
       }
       const wrapper = d.wrapper
@@ -470,7 +471,7 @@ test.describe('Baby Yoda SplatWrapper', () => {
     await page.waitForTimeout(3000)
 
     const wrapperAfter = await page.evaluate(() => {
-      const d = (window as unknown as Record<string, unknown>).__spark_stub_diagnostics as {
+      const d = window.__spark_stub_diagnostics as {
         wrapper: { position: { x: number; y: number; z: number }; rotation: { x: number; y: number; z: number }; scale: { x: number; y: number; z: number } } | null
       }
       const w = d.wrapper!
@@ -490,7 +491,7 @@ test.describe('Baby Yoda SplatWrapper', () => {
 
     // Assert the declarative identity transform from baby_yoda.svelte
     const wrapperBefore = await page.evaluate(() => {
-      const d = (window as unknown as Record<string, unknown>).__spark_stub_diagnostics as {
+      const d = window.__spark_stub_diagnostics as {
         wrapper: { position: { x: number; y: number; z: number }; rotation: { x: number; y: number; z: number }; scale: { x: number; y: number; z: number } } | null
       }
       const w = d.wrapper!
@@ -509,7 +510,7 @@ test.describe('Baby Yoda SplatWrapper', () => {
 
     // Assert the same declarative transform values after remount
     const wrapperAfter = await page.evaluate(() => {
-      const d = (window as unknown as Record<string, unknown>).__spark_stub_diagnostics as {
+      const d = window.__spark_stub_diagnostics as {
         wrapper: { position: { x: number; y: number; z: number }; rotation: { x: number; y: number; z: number }; scale: { x: number; y: number; z: number } } | null
       }
       const w = d.wrapper!
@@ -535,7 +536,7 @@ test.describe('SparkControls disposal', () => {
 
     // Capture initial disposal state and the registered controls ID
     const initialData = await page.evaluate(() => {
-      const d = (window as unknown as Record<string, unknown>).__spark_stub_diagnostics as {
+      const d = window.__spark_stub_diagnostics as {
         sparkControlsDisposals: Record<string, number>
       }
       const disposals = { ...d.sparkControlsDisposals }
@@ -553,7 +554,7 @@ test.describe('SparkControls disposal', () => {
 
     // The old SparkControls should have been disposed exactly once
     const afterUnmount = await page.evaluate((id) => {
-      const d = (window as unknown as Record<string, unknown>).__spark_stub_diagnostics as {
+      const d = window.__spark_stub_diagnostics as {
         sparkControlsDisposals: Record<string, number>
       }
       return { count: d.sparkControlsDisposals[id] ?? -1, all: { ...d.sparkControlsDisposals } }
@@ -569,7 +570,7 @@ test.describe('SparkControls disposal', () => {
 
     // New SparkControls registered with 0 disposals, old one still at 1
     const afterRemount = await page.evaluate((oldId) => {
-      const d = (window as unknown as Record<string, unknown>).__spark_stub_diagnostics as {
+      const d = window.__spark_stub_diagnostics as {
         sparkControlsDisposals: Record<string, number>
       }
       const all = { ...d.sparkControlsDisposals }

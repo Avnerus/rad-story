@@ -1,6 +1,6 @@
 import type { DeviceProfile, DeviceProfileName } from '$lib/types'
 import type { SparkSettings } from './SparkControls'
-import { SPARK_PAGE_SIZE, FIELD_DEFS } from './SparkControls'
+import { SPARK_PAGE_SIZE, buildSparkDefaults } from './SparkControls'
 import { computeEffectiveSettings as _computeEffectiveSettings, computeOverrides as _computeOverrides, type ProfileSettings } from './profileResolution'
 
 // ---------------------------------------------------------------------------
@@ -13,11 +13,7 @@ import { computeEffectiveSettings as _computeEffectiveSettings, computeOverrides
  * comparisons always use all 22 effective fields.
  */
 function buildBaseline(overrides: Partial<SparkSettings>): SparkSettings {
-  const baseline = {} as SparkSettings
-  for (const [key, def] of Object.entries(FIELD_DEFS)) {
-    ;(baseline as unknown as Record<string, unknown>)[key] = def.default
-  }
-  return { ...baseline, ...overrides } as SparkSettings
+  return { ...buildSparkDefaults(), ...overrides }
 }
 
 /**

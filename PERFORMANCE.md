@@ -74,12 +74,14 @@ application API and must not be relied on.
 ## Foveation for this camera path
 
 `coneFov0` and `coneFov` are full-width angular cones around the current view
-direction; they are not exact rectangular-frustum tests:
+direction; they are not exact rectangular-frustum tests. Their corresponding
+angles away from the view axis are half of the configured values:
 
-- From the view direction through `coneFov0`, LoD detail scale is 1.0.
-- From `coneFov0` through `coneFov`, it falls smoothly to `coneFoveate`.
-- From `coneFov` through 180 degrees behind the camera, it falls smoothly to
-  `behindFoveate`.
+- Inside the `coneFov0` cone, LoD detail scale is 1.0.
+- Between the `coneFov0` and `coneFov` cone boundaries, it falls smoothly to
+  `coneFoveate`.
+- Outside `coneFov`, it falls smoothly from `coneFoveate` to
+  `behindFoveate` at 180 degrees from the view direction.
 
 For a perspective camera, a useful lower bound for `coneFov0` is the diagonal
 field of view rather than only the vertical field of view:
@@ -123,8 +125,11 @@ edges, disoccluded surfaces, and the area around the fixed target.
 
 ## Controls exposed by RAD Story
 
-The Spark Controls Studio pane writes profile-specific scene overrides. The
-following controls matter most for perceived loading, in priority order:
+The Spark Controls Studio pane exposes the same 22 effective settings in both
+authoring contexts. In a file-backed edit route it writes profile-specific
+scene overrides. In the ad-hoc URL viewer, edits are live but session-only and
+are not written to source. The following controls matter most for perceived
+loading, in priority order:
 
 | Control | Loading/refinement effect | Guidance |
 | --- | --- | --- |
@@ -202,14 +207,51 @@ application camera drives LoD selection and paging; the editor renderer shares
 those LoD instances. This is desirable for authoring because moving the editor
 camera cannot evict or fetch pages unrelated to the authored story camera.
 
-## Spark settings configuration
+## Spark settings configuration and persistence
 
 `DESKTOP_BASELINE` and `MOBILE_BASELINE` in `src/lib/spark/deviceProfile.ts`
-are the sole global source of all 22 Spark settings. Both initial SparkRenderer
-instances receive the complete effective `SparkControls.settings` snapshot
-(baseline + file-backed scene overrides) before their first meaningful render.
-File-backed scenes persist `profileSettings` via source sync; the ad-hoc
-dynamic URL viewer applies edits live but does not persist them.
+are the sole global source of all 22 Spark settings. `DeviceProfile` contains
+only the detected profile name and Canvas DPR; it does not carry a second
+renderer-settings object.
+
+The current performance-oriented baseline values are:
+
+| Setting | Desktop | Mobile |
+| --- | ---: | ---: |
+| `lodSplatScale` | 1 | 0.5 |
+| `lodRenderScale` | 1 | 2 |
+| `maxStdDev` | 2.8 | 2.8 |
+| `maxPagedSplats` | 2,097,152 (32 pages) | 1,048,576 (16 pages) |
+| `coneFov0` | 90° | 70° |
+| `coneFov` | 120° | 110° |
+| `coneFoveate` | 0.2 | 0.4 |
+| `behindFoveate` | 0.1 | 0.3 |
+
+The other 14 fields are filled from the canonical definitions in
+`SparkControls.ts`. Each `SparkControls` combines the selected baseline with
+the active profile's scene overrides and exposes the complete validated result
+through `settings`.
+
+`SparkStudioBridge` requires that controller and passes its complete initial
+snapshot through `sparkSettingsToRendererOptions()`. Both SparkRenderer
+instances are therefore constructed from the same effective values before
+their first meaningful render. There are no renderer fallback literals;
+`lodSplatCount: null` is mapped to Spark's automatic `undefined` form.
+
+Persistence depends on how the scene was opened:
+
+- File-backed `/scene/{name}/edit` routes enable Spark source sync. The scene's
+  literal `profileSettings={{ desktop: {...}, mobile: {...} }}` stores only
+  deltas from each baseline. Playback uses that same literal without Studio.
+- The ad-hoc viewer loaded from the landing page or `?splat_url=...` explicitly
+  disables Spark source sync. Pane edits still propagate to both renderers,
+  including controlled pager recreation for `maxPagedSplats`, but disappear
+  when the scene is remounted or the page is reloaded. They never modify
+  `RadStoryScene.svelte` or either global baseline.
+
+The transaction guard checks source-sync permission against the exact active
+`SparkControls` identity. A stale, detached, or session-only controller cannot
+inherit permission from a newer file-backed scene.
 
 `maxStdDev` is a direct standard-deviation extent. Prefer approximately 2.8 as
 the quality baseline and approximately 2.24 as the first performance experiment.
@@ -250,5 +292,6 @@ Track separately:
 - Installed implementation: `node_modules/@sparkjsdev/spark` 2.1.0
 - App integration: `src/lib/components/SparkSplats.svelte`,
   `src/lib/components/SparkStudioBridge.svelte`,
+  `src/lib/spark/sparkSettingsToRendererOptions.ts`,
   `src/lib/spark/createSparkStudioRenderer.ts`, and
   `src/lib/spark/deviceProfile.ts`

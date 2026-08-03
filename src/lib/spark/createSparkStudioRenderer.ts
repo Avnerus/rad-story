@@ -84,6 +84,50 @@ const LIVE_FIELDS = new Set<keyof SparkSettings>([
 // ---------------------------------------------------------------------------
 
 /**
+ * Exhaustive per-field setters for SparkRenderer.
+ * Each entry correlates a SparkSettings key with its correct value type
+ * and handles the lodSplatCount null → undefined conversion.
+ */
+const RENDERER_SETTERS: {
+  [K in keyof SparkSettings]: (r: SparkRenderer, v: SparkSettings[K]) => void
+} = {
+  lodSplatScale:       (r, v) => { r.lodSplatScale = v },
+  lodRenderScale:      (r, v) => { r.lodRenderScale = v },
+  maxStdDev:           (r, v) => { r.maxStdDev = v },
+  maxPagedSplats:      (r, v) => { r.maxPagedSplats = v },
+  coneFov0:            (r, v) => { r.coneFov0 = v },
+  coneFov:             (r, v) => { r.coneFov = v },
+  coneFoveate:         (r, v) => { r.coneFoveate = v },
+  behindFoveate:       (r, v) => { r.behindFoveate = v },
+  minPixelRadius:      (r, v) => { r.minPixelRadius = v },
+  maxPixelRadius:      (r, v) => { r.maxPixelRadius = v },
+  minAlpha:            (r, v) => { r.minAlpha = v },
+  preBlurAmount:       (r, v) => { r.preBlurAmount = v },
+  blurAmount:          (r, v) => { r.blurAmount = v },
+  falloff:             (r, v) => { r.falloff = v },
+  clipXY:              (r, v) => { r.clipXY = v },
+  focalAdjustment:     (r, v) => { r.focalAdjustment = v },
+  sortRadial:          (r, v) => { r.sortRadial = v },
+  minSortIntervalMs:   (r, v) => { r.minSortIntervalMs = v },
+  enableLod:           (r, v) => { r.enableLod = v },
+  enableLodFetching:   (r, v) => { r.enableLodFetching = v },
+  lodSplatCount:       (r, v) => { r.lodSplatCount = v === null ? undefined : v },
+  lodInflate:          (r, v) => { r.lodInflate = v },
+}
+
+/**
+ * Set a single SparkSettings field on a SparkRenderer.
+ * Uses the exhaustive setter map to preserve key/value correlation.
+ */
+function setRendererField<K extends keyof SparkSettings>(
+  renderer: SparkRenderer,
+  key: K,
+  value: SparkSettings[K],
+): void {
+  RENDERER_SETTERS[key](renderer, value)
+}
+
+/**
  * Apply only the changed fields from `newSettings` to a SparkRenderer,
  * comparing against `oldSettings`. Returns the set of ChangeKinds that
  * were triggered.
@@ -101,16 +145,8 @@ export function applyChangedSettings(
     const newVal = newSettings[key]
     if (oldVal === newVal) continue
 
-    const k = key as keyof SparkRenderer
     const kind = FIELD_KINDS[key]
-
-    // Handle lodSplatCount: null → undefined (automatic), number → number
-    if (key === 'lodSplatCount') {
-      ;(renderer as unknown as Record<string, unknown>)[k] = newVal === null ? undefined : newVal
-    } else {
-      ;(renderer as unknown as Record<string, unknown>)[k] = newVal
-    }
-
+    setRendererField(renderer, key, newVal)
     kinds.add(kind)
   }
 
@@ -342,14 +378,7 @@ export function createSparkStudioRenderer(
   function applyLiveSettingsToRenderer(r: SparkRenderer, settings: SparkSettings): void {
     for (const key of SETTINGS_KEYS) {
       if (!LIVE_FIELDS.has(key)) continue
-      const val = settings[key]
-      const k = key as keyof SparkRenderer
-
-      if (key === 'lodSplatCount') {
-        ;(r as unknown as Record<string, unknown>)[k] = val === null ? undefined : val
-      } else {
-        ;(r as unknown as Record<string, unknown>)[k] = val
-      }
+      setRendererField(r, key, settings[key])
     }
   }
 

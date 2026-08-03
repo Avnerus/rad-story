@@ -99,7 +99,7 @@ describe('profile-aware Spark settings transaction', () => {
   it('coupled invariant edit persists both fields in overrides', () => {
     const controls = new SparkControls()
     // Edit via individual setter (triggers invariant)
-    ;(controls as unknown as Record<string, unknown>).coneFov0 = 150
+    controls.coneFov0 = 150
     const newSettings = controls.settings
     const baseline = getGlobalBaseline('desktop')
     const overrides = computeOverrides(newSettings, baseline)

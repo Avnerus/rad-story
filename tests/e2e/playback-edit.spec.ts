@@ -31,7 +31,7 @@ async function waitForDebugElement(page: import('@playwright/test').Page) {
  */
 async function getCurrentSparkSettings(page: import('@playwright/test').Page) {
   return page.evaluate(() => {
-    const d = (window as unknown as Record<string, unknown>).__spark_stub_diagnostics as {
+    const d = window.__spark_stub_diagnostics as {
       sparkControlsSettings: Record<string, Record<string, unknown>>
       sparkControlsDisposals: Record<string, number>
     }
@@ -98,7 +98,7 @@ test.describe('Playback mode (/scene/baby_yoda)', () => {
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
     const hasDiagnostic = await page.evaluate(() =>
-      typeof (window as unknown as Record<string, unknown>).__camera_frustum_helper_diagnostic === 'function'
+      typeof window.__camera_frustum_helper_diagnostic === 'function'
     )
     expect(hasDiagnostic, 'no frustum helper diagnostic in playback').toBe(false)
   })
@@ -136,6 +136,7 @@ test.describe('Playback mode (/scene/baby_yoda)', () => {
 
     const state = await getCameraState(page)
     expect(state.progress).toBeGreaterThan(95)
+    expect(state.progress).toBeLessThanOrEqual(100.01)
     expect(state.y).toBeGreaterThan(25)
   })
 
@@ -144,7 +145,7 @@ test.describe('Playback mode (/scene/baby_yoda)', () => {
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
     const wrapper = await page.evaluate(() => {
-      const d = (window as unknown as Record<string, unknown>).__spark_stub_diagnostics as {
+      const d = window.__spark_stub_diagnostics as {
         wrapper: { position: { x: number; y: number; z: number }; rotation: { x: number; y: number; z: number }; scale: { x: number; y: number; z: number } } | null
       }
       const w = d.wrapper!
@@ -308,7 +309,7 @@ test.describe('Edit mode (/scene/baby_yoda/edit)', () => {
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
     const hasDiagnostic = await page.evaluate(() =>
-      typeof (window as unknown as Record<string, unknown>).__camera_frustum_helper_diagnostic === 'function'
+      typeof window.__camera_frustum_helper_diagnostic === 'function'
     )
     expect(hasDiagnostic, 'frustum helper diagnostic exists in edit mode').toBe(true)
 
@@ -316,7 +317,7 @@ test.describe('Edit mode (/scene/baby_yoda/edit)', () => {
     await page.waitForTimeout(500)
 
     const diag = await page.evaluate(() => {
-      const fn = (window as unknown as Record<string, unknown>).__camera_frustum_helper_diagnostic
+      const fn = window.__camera_frustum_helper_diagnostic
       if (typeof fn !== 'function') return null
       return (fn as () => { helperExists: boolean; ownedHelperCount: number })()
     })
@@ -330,7 +331,7 @@ test.describe('Edit mode (/scene/baby_yoda/edit)', () => {
     await expect(page.locator('#app canvas')).toBeVisible({ timeout: 15_000 })
 
     const sourceInfo = await page.evaluate(() => {
-      const d = (window as unknown as Record<string, unknown>).__spark_stub_diagnostics as {
+      const d = window.__spark_stub_diagnostics as {
         wrapper: { userData: Record<string, unknown> } | null
       }
       const wrapper = d.wrapper
@@ -396,7 +397,7 @@ test.describe('Persisted Spark settings', () => {
     // Assert representative values on the live driving renderer
     // Use fields from the device profile (seeded in SparkControls constructor and propagated to renderers)
     const rendererValues = await page.evaluate(() => {
-      const d = (window as unknown as Record<string, unknown>).__spark_stub_diagnostics as {
+      const d = window.__spark_stub_diagnostics as {
         renderers: { maxPagedSplats: number; lodSplatScale: number; coneFov0: number; coneFoveate: number; pager: { maxSplats: number } | undefined }[]
       }
       const driving = d.renderers.find((r: { enableDriveLod: boolean }) => r.enableDriveLod)
@@ -429,7 +430,7 @@ test.describe('Persisted Spark settings', () => {
     expect(controller!.settings).not.toBeNull()
 
     const rendererValues = await page.evaluate(() => {
-      const d = (window as unknown as Record<string, unknown>).__spark_stub_diagnostics as {
+      const d = window.__spark_stub_diagnostics as {
         renderers: { maxPagedSplats: number; lodSplatScale: number; coneFov0: number; coneFoveate: number; pager: { maxSplats: number } | undefined }[]
       }
       const driving = d.renderers.find((r: { enableDriveLod: boolean }) => r.enableDriveLod)
@@ -679,7 +680,7 @@ test.describe('Spark Controls pane external settings sync', () => {
 
     // Change the controller's settings programmatically via evaluate
     await page.evaluate(() => {
-      const d = (window as unknown as Record<string, unknown>).__spark_stub_diagnostics as {
+      const d = window.__spark_stub_diagnostics as {
         sparkControlsSettings: Record<string, Record<string, unknown>>
         sparkControlsDisposals: Record<string, number>
       }
@@ -688,7 +689,7 @@ test.describe('Spark Controls pane external settings sync', () => {
       if (!id) return
       // We need to access the actual controller, not just the settings snapshot
       // Use the stub's controls reference
-      const controls = (window as unknown as Record<string, unknown>).__spark_stub_active_controls
+      const controls = window.__spark_stub_active_controls
       if (controls && 'lodSplatScale' in controls) {
         (controls as Record<string, unknown>).lodSplatScale = 5
       }
@@ -711,7 +712,7 @@ test.describe('Spark Controls pane external settings sync', () => {
 
     // Set coneFov0 to a value > coneFov, which should raise coneFov
     await page.evaluate(() => {
-      const controls = (window as unknown as Record<string, unknown>).__spark_stub_active_controls
+      const controls = window.__spark_stub_active_controls
       if (controls) {
         (controls as Record<string, unknown>).coneFov0 = 170
       }

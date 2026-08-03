@@ -1,13 +1,16 @@
 import { describe, it, expect, vi } from 'vitest'
 import { Object3D } from 'three'
 import { isScrollAnimator } from '$lib/studio/scroll-animator/transactionGuard'
+import type { ScrollKeyframe } from '$lib/spark/scrollAnimation'
 
 /**
  * Minimal HMR-safe ScrollAnimator stand-in for testing.
  * Extends Object3D so that traverse visits it.
+ * Includes all properties validated by the sound type guard.
  */
 class FakeScrollAnimator extends Object3D {
   declare isScrollAnimator: boolean
+  keyframes: ScrollKeyframe[] = []
   applyScrollPercentage = vi.fn()
   constructor() {
     super()
@@ -36,10 +39,10 @@ describe('scene-wide ScrollAnimator traversal', () => {
     scene.add(animator2)
     scene.add(ordinary)
 
-    // Simulate the scene.traverse pattern used in RadStoryScene
+    // Simulate the scene.traverse pattern used in SceneRuntime
     scene.traverse((object) => {
       if (isScrollAnimator(object)) {
-        ;(object as unknown as { applyScrollPercentage: (p: number) => void }).applyScrollPercentage(50)
+        object.applyScrollPercentage(50)
       }
     })
 
@@ -57,7 +60,7 @@ describe('scene-wide ScrollAnimator traversal', () => {
 
     scene.traverse((object) => {
       if (isScrollAnimator(object)) {
-        ;(object as unknown as { applyScrollPercentage: (p: number) => void }).applyScrollPercentage(75)
+        object.applyScrollPercentage(75)
       }
     })
 

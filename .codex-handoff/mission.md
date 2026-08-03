@@ -1,111 +1,96 @@
-# Final follow-up mission: metadata notification and documentation accuracy
+# Minimal follow-up mission: remove the final double assertion
 
 ## Objective
 
-Close three small verification issues without changing the completed Spark
-configuration/source-sync design:
+Finish the typing cleanup by removing the newly reintroduced chained assertion from the WebGL test adapter and making the regression test scan every maintained file without allowlisting. Preserve the now-correct production typing work.
 
-1. Same-controller reattachment must notify subscribers when `profileName`
-   changes, not only when `sourceSyncEnabled` changes.
-2. Remove stale `createSceneObjects(profile, profileName, ...)` documentation
-   from AGENTS.md.
-3. Make the final status report accurate: the last diff added 11 runtime
-   capability tests, not 14.
+## Verified remaining issue
+
+`tests/unit/testHelpers.ts` currently contains:
+
+```ts
+return mock as unknown as THREE.WebGLRenderer
+```
+
+This is the exact original anti-pattern. The prior mission allowed one localized **single assertion** at the unavoidable third-party test boundary; it did not allow a chained assertion. `tests/unit/noDoubleAssertions.test.ts` then hides the violation by excluding the entire helper path. Its comments and test fixture strings also contain the raw forbidden token, so `rg -n '\bas unknown\b' src tests` is no longer empty. The status report acknowledges these matches while incorrectly checking the raw-zero criterion as passed.
 
 ## Files likely involved
 
-- `src/lib/studio/spark-controls/activeSparkControlsRuntime.ts`
-- `tests/unit/activeSparkControlsRuntime.test.ts`
+- `tests/unit/testHelpers.ts`
+- `tests/unit/noDoubleAssertions.test.ts`
 - `AGENTS.md`
 - `.codex-handoff/status.md`
 
-## Constraints
+Do not touch the completed production settings, renderer setters, registry, globals, or ScrollAnimator guard unless compilation reveals a directly related issue.
 
-- Capture the previous profile name before updating registration state, and
-  notify when controller identity, profile name, or source-sync capability
-  changes.
-- Add a focused unit test that reattaches the same controller with a different
-  profile name and unchanged source-sync permission, then verifies one
-  notification and the new `profileName` value.
-- Correct both stale AGENTS.md references:
-  - key-file summary must say
-    `createSceneObjects(profileName, profileSettings)`;
-  - scene-contract example must call
-    `createSceneObjects(profile.profileName)` (or the exact current equivalent),
-    not the removed full-profile argument.
-- Correct test-count claims in the final report. Prefer describing covered
-  cases over fragile numeric counts, but any number stated must match the diff.
-- Pi's replicated `buildTransaction` write test remains accepted. Do not revisit
-  the internal import.
-- No dedicated tests for removed legacy query parameters are required.
+## Constraints and implementation tips
 
-Critical implementation shape:
+- Change the named adapter to one direct, localized assertion if TypeScript accepts the structural overlap:
 
 ```ts
-const previousProfileName = this._profileName
-// update active registration
-if (
-  previous !== controls ||
-  previousProfileName !== this._profileName ||
-  previousSyncEnabled !== this._sourceSyncEnabled
-) {
-  // notify
-}
+return mock as THREE.WebGLRenderer
 ```
 
-Use the project's actual formatting and names.
-
-## Acceptance criteria
-
-- [ ] Same-controller profile-name-only reattachment notifies subscribers.
-- [ ] Existing controller replacement, permission-change notification, and
-      stale-detach behavior remain unchanged.
-- [ ] A focused unit test covers the profile-name-only metadata change.
-- [ ] AGENTS.md contains no obsolete `createSceneObjects(profile,
-      profileName, ...)` call/signature.
-- [ ] The completion report accurately describes changed tests and results.
-- [ ] `npm run check`, `npm run lint`, `npm run test:unit`, and
-      `git diff --check` pass. Run broader tests only if these small changes
-      unexpectedly touch broader behavior.
-
-Re-check every acceptance item before finalizing.
-
-## Tests to run
-
-- Add the focused runtime unit test described above.
-- Run `npm run check`.
-- Run `npm run lint`.
-- Run `npm run test:unit`.
-- Run `git diff --check`.
-
-Trust existing reported e2e/build results for the unchanged feature behavior;
-rerun them only if necessary because of an unexpected wider edit.
-
-## Things Pi must not change
-
-- Do not change baseline values, renderer option mapping, source-sync policy,
-  query behavior, scene files, camera behavior, or persistence format.
-- Do not add/remove legacy-query tests.
-- Do not alter the accepted transaction-write test.
-- Do not refactor runtime listener signatures or unrelated tests.
-- Do not modify dependencies or `node_modules`.
+- If TypeScript rejects that direct assertion, improve the narrow mock type so its consumed members are expressed as a `Pick<THREE.WebGLRenderer, ...>` plus any test-specific overrides, creating legitimate structural overlap. Do not route through `unknown`, `any`, `never`, a second assertion, or an asserted intersection.
+- Retain the named adapter and its boundary explanation. A single direct assertion there is the documented exception.
+- Remove `allowedAdapterPaths`; the AST regression must scan `tests/unit/testHelpers.ts` and every other collected file. A single assertion is not a chained `AsExpression`, so no allowlist is needed.
+- Rewrite comments and AST fixture source strings so the raw forbidden token never appears contiguously in `src/` or `tests/`. Assemble test input from fragments at runtime, e.g. `['const x = value as', 'unknown as Result'].join(' ')`, while still proving the AST detector catches it.
+- Keep tests for same-line, multiline, parenthesized, and generic chained assertions, plus comments/strings and legitimate single assertions.
+- Do not weaken or remove AST detection.
 
 ## AGENTS.md update
 
-Keep AGENTS.md concise and fresh-session useful. Only correct the obsolete
-`createSceneObjects` signature/call and, if needed, clarify that same-controller
-profile or permission metadata changes notify subscribers.
+State precisely that:
 
-## Expected completion report
+- one named **single** assertion exists in `asWebGLRendererForSparkTest()`;
+- chained assertions are prohibited without path exemptions;
+- the AST regression scans all maintained TS/Svelte files;
+- the raw audit must return zero matches, including test fixtures/comments.
+
+Keep the rest of the typing guidance unchanged.
+
+## Acceptance criteria
+
+- `rg -n '\bas unknown\b' src tests` returns no matches at all.
+- `asWebGLRendererForSparkTest()` contains at most one direct assertion and no laundering intermediate type.
+- No `as any`, new `as never`, asserted full-class intersection, or suppression workaround is introduced.
+- The AST regression has no path/file exemptions and scans itself plus `testHelpers.ts`.
+- Focused detector tests still prove same-line, multiline, parenthesized, and generic chained assertions are rejected while comments, strings, and a single assertion are accepted.
+- `AGENTS.md` and the final report accurately describe the single-assertion exception.
+- All verification results and checklist statements are consistent.
+- Re-check each criterion before finalizing.
+
+## Tests to run
+
+```sh
+rg -n '\bas unknown\b' src tests
+rg -n '\bas any\b|Partial<[^>]+>\s+as\s+' src tests
+npm run check
+npm run lint
+npm run test:unit
+npm run build
+npm run test:e2e
+git diff --check
+```
+
+Also run the focused `noDoubleAssertions` test. Report exact outcomes.
+
+## Things Pi must not change
+
+- Do not change runtime production behavior or the completed production typing refactors.
+- Do not add dependencies, weaken configs, remove detector cases, or edit unrelated files.
+- Do not modify `.codex-handoff/mission.md`.
+
+## Expected completion report format
 
 Write `.codex-handoff/status.md` with:
 
-1. Exact runtime condition changed.
-2. Documentation corrections.
-3. Focused test added and command results.
-4. Acceptance checklist.
-5. Final commit hash and pushed branch.
+1. Exact adapter change.
+2. Regression-test and documentation changes.
+3. Raw audit output.
+4. Exact verification results.
+5. Itemized acceptance checklist.
+6. Risks/follow-ups or `None`.
+7. Pushed commit.
 
-Complete code, tests, documentation, and acceptance review first. Write
-`status.md` as the last action before the final commit/push, then perform no
-further verification or modification after pushing.
+Re-check every acceptance criterion first. Write `status.md` as the final action before committing and pushing; perform no verification or modification after the push. Push the implementation and report to the current branch.

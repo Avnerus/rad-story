@@ -4,34 +4,7 @@ import { SparkRenderer } from '@sparkjsdev/spark'
 import type { SparkRendererOptions } from '@sparkjsdev/spark'
 import { createSparkStudioRenderer, applyChangedSettings, markLodDirty, markSortDirty, markDirty, ChangeKind } from '$lib/spark/createSparkStudioRenderer'
 import { SparkControls, type SparkSettings } from '$lib/spark/SparkControls'
-
-/** Build a minimal mock WebGLRenderer. */
-function makeMockRenderer(): THREE.WebGLRenderer {
-  return {
-    render: vi.fn(),
-    domElement: {} as HTMLCanvasElement,
-    setSize: vi.fn(),
-    setPixelRatio: vi.fn(),
-    setClearColor: vi.fn(),
-    setScissorTest: vi.fn(),
-    setScissor: vi.fn(),
-    setViewport: vi.fn(),
-    getDrawingBufferSize: vi.fn(() => ({ width: 800, height: 600 }) as THREE.Vector2),
-    info: { render: { frame: 0 } },
-    capabilities: { maxTextureSize: 4096 },
-    xr: { isPresenting: false },
-    setDirty: vi.fn(),
-  } as unknown as THREE.WebGLRenderer
-}
-
-/** Build a minimal mock scene. */
-function makeMockScene(): THREE.Scene {
-  return {
-    add: vi.fn(),
-    remove: vi.fn(),
-    children: [],
-  } as unknown as THREE.Scene
-}
+import { makeMockRenderer, makeMockScene } from './testHelpers'
 
 /** Base Spark options used by most tests. */
 function makeBaseOptions(renderer: THREE.WebGLRenderer): SparkRendererOptions {

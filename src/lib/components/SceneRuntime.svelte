@@ -10,6 +10,7 @@
   import type { SparkControls } from '$lib/spark/SparkControls'
   import SparkStudioBridge from './SparkStudioBridge.svelte'
   import SparkSplats from './SparkSplats.svelte'
+  import CameraDiagnostics from './CameraDiagnostics.svelte'
 
   interface Props {
     url: string
@@ -29,26 +30,13 @@
 
   let { url, onReady, sparkControls, splatWrapper, appCamera, cameraTarget, sourceSyncEnabled = true, children }: Props = $props()
 
-  // Camera debug state for e2e tests (world-space)
-  let cameraProgress = $state(0)
-  let cameraWorldX = $state(0)
-  let cameraWorldY = $state(0)
-  let cameraWorldZ = $state(0)
-  let targetWorldX = $state(0)
-  let targetWorldY = $state(0)
-  let targetWorldZ = $state(0)
-
-  // Diagnostic: whether the app camera is currently the active Threlte camera
-  let cameraIsActive = $state(false)
-
   let loaded = $state(false)
   let scrollTrigger: ReturnType<typeof ScrollTrigger.create> | null = null
 
   const threlte = useThrelte()
 
-  // Reusable scratch vectors for look-at and debug (avoid per-frame allocation)
+  // Reusable scratch vector for look-at (avoid per-frame allocation)
   const _targetWorld = new Vector3()
-  const _camWorld = new Vector3()
 
   // Mesh reload callback — wired from SparkSplats to SparkStudioBridge
   let splatsRef = $state<{ reload: (url: string) => Promise<void>; getWrapper: () => Object3D } | null>(null)
@@ -75,37 +63,16 @@
     if (!scene) return
     scene.traverse((object: Object3D) => {
       if (isScrollAnimator(object)) {
-        (object as unknown as { applyScrollPercentage: (p: number) => void }).applyScrollPercentage(percent)
+        object.applyScrollPercentage(percent)
       }
     })
-    cameraProgress = percent
-    updateDebugState()
   }
 
-  function updateDebugState(): void {
-    // Always use the app camera (not threlte.camera.current)
-    appCamera.getWorldPosition(_camWorld)
-    cameraWorldX = _camWorld.x
-    cameraWorldY = _camWorld.y
-    cameraWorldZ = _camWorld.z
-
-    cameraTarget.getWorldPosition(_targetWorld)
-    targetWorldX = _targetWorld.x
-    targetWorldY = _targetWorld.y
-    targetWorldZ = _targetWorld.z
-  }
-
-  // Threlte task: update camera look-at and debug state every frame
+  // Threlte task: update camera look-at every frame
   // Always uses the app camera — never forces the editor camera
   useTask(() => {
     cameraTarget.getWorldPosition(_targetWorld)
     appCamera.lookAt(_targetWorld)
-    updateDebugState()
-  }, { autoInvalidate: false })
-
-  // Diagnostic: check if the app camera is the active Threlte camera
-  useTask(() => {
-    cameraIsActive = threlte.camera.current === appCamera
   }, { autoInvalidate: false })
 
   // Register SparkControls with the active-controller runtime
@@ -122,14 +89,14 @@
 
     // Stub-only: expose scene UUID, app camera UUID, and register SparkControls
     // for disposal tracking — all for e2e identity assertions
-    if ((window as unknown as Record<string, unknown>).__spark_stub === true) {
+    if (window.__spark_stub === true) {
       const scene = threlte.scene
-      ;(window as unknown as Record<string, unknown>).__stub_scene_uuid = scene?.uuid ?? null
-      ;(window as unknown as Record<string, unknown>).__stub_app_camera_uuid = appCamera.uuid
-      const register = (window as unknown as Record<string, unknown>).__spark_stub_register_controls
+      window.__stub_scene_uuid = scene?.uuid ?? null
+      window.__stub_app_camera_uuid = appCamera.uuid
+      const register = window.__spark_stub_register_controls
       if (typeof register === 'function') register(sparkControls)
       // Expose the active controller for e2e external-setter tests
-      ;(window as unknown as Record<string, unknown>).__spark_stub_active_controls = sparkControls
+      window.__spark_stub_active_controls = sparkControls
     }
 
     // Register GSAP ScrollTrigger
@@ -173,16 +140,16 @@
     detachSparkControls = null
     // Stub-only: identity-safe clear of active controls reference
     // (only delete if it still points to this scene's sparkControls)
-    if ((window as unknown as Record<string, unknown>).__spark_stub === true) {
-      const current = (window as unknown as Record<string, unknown>).__spark_stub_active_controls
+    if (window.__spark_stub === true) {
+      const current = window.__spark_stub_active_controls
       if (current === sparkControls) {
-        delete (window as unknown as Record<string, unknown>).__spark_stub_active_controls
+        delete window.__spark_stub_active_controls
       }
     }
     // Dispose SparkControls on scene unmount (single owner)
     // Stub-only: record disposal for e2e lifecycle assertions
-    if ((window as unknown as Record<string, unknown>).__spark_stub === true) {
-      const record = (window as unknown as Record<string, unknown>).__spark_stub_record_controls_disposal
+    if (window.__spark_stub === true) {
+      const record = window.__spark_stub_record_controls_disposal
       if (typeof record === 'function') record(sparkControls)
     }
     sparkControls.dispose()
@@ -200,20 +167,10 @@
   {@render children()}
 {/if}
 
-<!-- Visually hidden debug element for e2e tests -->
-<div
-  class="camera-debug"
-  data-testid="camera-state"
-  data-progress={cameraProgress.toFixed(3)}
-  data-x={cameraWorldX.toFixed(3)}
-  data-y={cameraWorldY.toFixed(3)}
-  data-z={cameraWorldZ.toFixed(3)}
-  data-target-x={targetWorldX.toFixed(3)}
-  data-target-y={targetWorldY.toFixed(3)}
-  data-target-z={targetWorldZ.toFixed(3)}
-  data-active={cameraIsActive}
-  aria-hidden="true"
-></div>
+<!-- Camera diagnostics for e2e tests — only rendered in stub builds -->
+{#if import.meta.env.VITE_E2E_STUB_SPARK === 'true'}
+  <CameraDiagnostics {appCamera} {cameraTarget} percentageStore={scrollAnimatorRuntime.percentage} />
+{/if}
 
 {#if !loaded}
   <div class="scroll-hint">Scroll to change view</div>

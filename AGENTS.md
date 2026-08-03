@@ -11,7 +11,8 @@ Supports three viewing modes:
 
 **Key files:**
 - `src/App.svelte` — Root component. Landing screen ↔ viewer/scene/not-found state machine. Pathname router for `/scene/{sceneName}` and `/scene/{sceneName}/edit`. `<Canvas>` wrapping either `RadStoryScene` (ad-hoc, inside `<Studio>`), a dynamic scene component in playback (`/scene/{name}`, no `<Studio>`), or a dynamic scene component in edit mode (`/scene/{name}/edit`, inside `<Studio>`).
-- `src/lib/components/SceneRuntime.svelte` — Reusable scene runtime: ScrollTrigger creation/attachment, scene-wide `ScrollAnimator` playback via `scene.traverse`, per-frame camera look-at (always on app camera, never editor camera), debug state, Spark bridge, reload lifecycle, SparkControls disposal, and **active SparkControls registration** (calls `activeSparkControlsRuntime.attach(sparkControls, sparkControls.profileName, { sourceSyncEnabled })` on mount, identity-safe detach on destroy). Editor-agnostic — does not mount `CameraFrustumHelper` (moved to `ScrollAnimatorExtension`). Receives scene-specific `<T>` declarations via a `children` snippet. Typed props: `appCamera: PerspectiveCamera`, `cameraTarget: Object3D`, `splatWrapper: Object3D`, `sourceSyncEnabled: boolean` (default `true`).
+- `src/lib/components/SceneRuntime.svelte` — Reusable scene runtime: ScrollTrigger creation/attachment, scene-wide `ScrollAnimator` playback via `scene.traverse`, per-frame camera look-at (always on app camera, never editor camera), Spark bridge, reload lifecycle, SparkControls disposal, and **active SparkControls registration** (calls `activeSparkControlsRuntime.attach(sparkControls, sparkControls.profileName, { sourceSyncEnabled })` on mount, identity-safe detach on destroy). Editor-agnostic — does not mount `CameraFrustumHelper` (moved to `ScrollAnimatorExtension`). Receives scene-specific `<T>` declarations via a `children` snippet. Camera diagnostics delegated to `CameraDiagnostics.svelte`. Typed props: `appCamera: PerspectiveCamera`, `cameraTarget: Object3D`, `splatWrapper: Object3D`, `sourceSyncEnabled: boolean` (default `true`).
+- `src/lib/components/CameraDiagnostics.svelte` — E2e-only camera diagnostic component. Rendered only when `VITE_E2E_STUB_SPARK=true`. Provides `<div data-testid="camera-state">` with live camera/target coordinates, scroll progress, and `data-active` status. Encapsulates all diagnostic reactive state and per-frame tasks so production `SceneRuntime` has zero diagnostic overhead. Tree-shaken in production builds.
 - `src/lib/components/RadStoryScene.svelte` — Ad-hoc URL scene. Uses `createSceneObjects()` helper + `SceneRuntime`. Literal `<T>` nodes for camera/target animators, SparkControls, and SplatWrapper.
 - `src/lib/components/SparkSplats.svelte` — SplatMesh lifecycle inside a scene-provided `wrapper` Object3D. The wrapper is created by the scene file and declared via a literal `<T>` for Studio source sync. SparkSplats manages the internal `SplatMesh` child and reload coordination. Exports `reload(url)` for `SparkStudioBridge` to call. Uses `SparkReloadCoordinator` for race-safe reload coordination.
 - `src/lib/components/SparkStudioBridge.svelte` — Manages dual SparkRenderer lifecycle via `createSparkStudioRenderer`. Initializes both renderers from the required `sparkControls.settings` effective snapshot using `sparkSettingsToRendererOptions()` (no fallback literals). Subscribes to `SparkControls` settings changes and propagates them to both renderers. On `maxPagedSplats` changes, calls `reconfigureMaxPagedSplats()` and triggers SplatMesh reload via `onMeshReload` callback.
@@ -349,15 +350,17 @@ Free navigation (checkbox, keyboard/mouse/wheel listeners, RAF loop, pure helper
 
 Fixed canvas + scrollable document: `<Canvas>` in `.viewer-stage` (`position: fixed; inset: 0`), `.scroll-spacer` (400vh) in document flow.
 
-## Camera Debug State
+## Camera Debug State (E2E Diagnostics)
 
-Visually hidden `<div class="camera-debug" data-testid="camera-state">` rendered **outside** `<Canvas>` in each scene file (DOM elements inside `<Canvas>` are Three.js overlays). Debug state is pushed from `SceneRuntime` to the scene file via an `onDebugState` callback.
+`src/lib/components/CameraDiagnostics.svelte` — Visually hidden `<div class="camera-debug" data-testid="camera-state">` rendered **only in e2e stub builds** (`VITE_E2E_STUB_SPARK=true`). Gated by `{#if import.meta.env.VITE_E2E_STUB_SPARK === 'true'}` in `SceneRuntime.svelte`. The component encapsulates all diagnostic reactive state and per-frame tasks (camera/target world coordinates, scroll progress, active-camera status) so production `SceneRuntime` has zero diagnostic overhead. In production builds, the component is tree-shaken entirely — no diagnostic DOM, no reactive state, no per-frame diagnostic tasks.
 
 Attributes:
-- `data-progress` — ScrollTrigger percentage
+- `data-progress` — ScrollTrigger percentage `0..100` (assigned directly from `scrollAnimatorRuntime.percentage`, which is `0..100`)
 - `data-x`, `data-y`, `data-z` — Camera **world** position
 - `data-target-x`, `data-target-y`, `data-target-z` — CameraTarget **world** position
 - `data-active` — `"true"` when the app `PerspectiveCamera` is the active Threlte camera (editor camera off), `"false"` otherwise
+
+Unit tests: `tests/unit/cameraDiagnosticsGating.test.ts` — verifies no diagnostic state/tasks in `SceneRuntime`, correct gating with `VITE_E2E_STUB_SPARK`, no double-scaling of `data-progress`, and complete attribute contract in `CameraDiagnostics`.
 
 ## Studio Overlay Scroll-Safety
 
@@ -471,6 +474,51 @@ Verify the profile by checking `navigator.userAgent` or the profile badge: `play
 - `tests/unit/profileValidation.test.ts` — constructor validation of active profile overrides (clamping, page rounding, coupled invariants, NaN/Infinity fallback, malformed input), `profileSettings` setter validation and normalization, defensive copy on setter input and getter output, coherent notification changed-key set, inactive profile preservation.
 - `tests/unit/sparkControlsTransactions.test.ts` — actual public transaction `write` for commit/undo/redo: forward write updates `profileSettings`/`settings`/notifications, undo restores historic state, redo re-applies, out-of-range persisted values are clamped, inactive profile preserved across all three phases, coupled invariant fields in notification.
 - `tests/unit/studioBuildTransaction.test.ts` — Studio transaction write semantics using `resolvePropertyPath` from `@threlte/core` and the exact write callback pattern from Studio's internal `buildTransaction`. Tests forward write, undo (historicValue), redo, out-of-range validation, inactive profile preservation, coupled invariants, and property path resolution.
+
+## TypeScript Typing Best Practices
+
+### Prohibited patterns
+
+- **No unsafe chained type assertions** (e.g. `as T as Y`, `as any as X`, `Partial<T> as T`) in maintained code. They disguise unsafety.
+- **No `as any`** — use narrow, specific types.
+- **No `@ts-ignore`** — fix the type, don't suppress it.
+- **No broad `Record<string, unknown>` casts** on domain objects — use typed interfaces or key-correlated accessors.
+- **No fabricated full-class mocks** — a `{}` presented as `SplatMesh` or `SparkRenderer` is not a sound test double.
+- **No test helper interfaces extending full Three/Spark classes** — use explicit member declarations only.
+
+### Documented exception
+
+- `tests/unit/testHelpers.ts` contains one named **single** assertion inside `asWebGLRendererForSparkTest()`: a `MockWebGLRenderer` (structured via `Pick<THREE.WebGLRenderer, ...>` for legitimate structural overlap) is asserted as `THREE.WebGLRenderer` because SparkRendererOptions requires a real GPU renderer (unavailable in jsdom). This is the single third-party adapter boundary.
+
+### Preferred patterns
+
+1. **Browser/e2e diagnostic globals:** Use the shared `Window` augmentation in `src/lib/types/spark-stub-globals.d.ts`. All stub globals (`__spark_stub`, `__spark_stub_diagnostics`, `__stub_scene_uuid`, etc.) are declared there with lifecycle-accurate optionality. Access them directly as `window.__spark_stub_diagnostics` — no casts needed.
+
+2. **Branded Three.js objects (ScrollAnimator):** Use the cast-free type guard `isScrollAnimator(obj: Object3D)` from `src/lib/types/scrollAnimator.ts`. It uses `'prop' in obj` narrowing followed by direct property access (Object3D's `userData: Record<string, any>` permits indexed access after `in` checks) — no record cast needed. For Studio transaction objects (`unknown`), use `obj instanceof Object3D && isScrollAnimator(obj)` before calling the guard.
+
+3. **Dynamic scene registry:** Use `import.meta.glob<SceneModule>(pattern, { eager: true })` where `SceneModule` declares `{ default: ComponentType }`. Access `mod.default` directly.
+
+4. **Heterogeneous Spark settings writes:** For `SparkControls`, use the `setSparkField<K extends keyof SparkSettings>()` helper. For `SparkRenderer`, use the exhaustive `RENDERER_SETTERS` map in `createSparkStudioRenderer.ts`.
+
+5. **Default/baseline construction:** Generic `FieldDef<T>` with `satisfies FieldDefs` in `SparkControls.ts`. Single shared `buildSparkDefaults()` function returns `SparkSettings` with compiler-checked key/value correlation. Both `createDefaultSettings()` and `buildBaseline()` reuse it.
+
+6. **Test doubles:** Narrow structural interfaces in `tests/unit/testHelpers.ts`. Real `THREE.Scene` with spied methods. Real `Object3D` subclasses for HMR-safe branded objects. One named adapter `asWebGLRendererForSparkTest()` for the unavoidable WebGLRenderer boundary.
+
+7. **SplatMesh inheritance:** `SplatMesh extends SplatGenerator extends Object3D`. Access `wrapper.children.includes(mesh)` directly.
+
+### Regression enforcement
+
+- `tests/unit/noDoubleAssertions.test.ts` uses TypeScript AST parsing to detect chained `AsExpression` nodes (including multiline and parenthesized forms). AST parsing naturally ignores comments and strings, so the test scans its own file safely. It scans **all** maintained TS/Svelte files in `src/` and `tests/` with no path exemptions — the single assertion in `testHelpers.ts` is not a chained `AsExpression` and is correctly allowed.
+- `npm run check` (svelte-check) and `npm run test:unit` must pass.
+
+### Source references
+
+- `src/lib/types/scrollAnimator.ts` — cast-free `isScrollAnimator(obj: Object3D)` using `in` narrowing
+- `src/lib/types/spark-stub-globals.d.ts` — `Window` augmentation for all e2e stub globals
+- `src/lib/spark/SparkControls.ts` — generic `FieldDef<T>`, `satisfies FieldDefs`, `buildSparkDefaults()`
+- `src/lib/spark/createSparkStudioRenderer.ts` — `RENDERER_SETTERS` exhaustive map
+- `src/lib/studio/spark-controls/SparkControlsExtension.svelte` — `setSparkField()` typed setter helper
+- `tests/unit/testHelpers.ts` — narrow mocks, real Scene, `asWebGLRendererForSparkTest()` adapter
 
 ## CORS Note
 

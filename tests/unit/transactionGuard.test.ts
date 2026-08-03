@@ -1,34 +1,48 @@
 import { describe, it, expect, beforeEach } from 'vitest'
+import { Object3D } from 'three'
 import { isScrollAnimator, isSparkControls, guardScrollAnimatorTransactions, type GuardTransaction } from '$lib/studio/scroll-animator/transactionGuard'
 import { ScrollAnimator } from '$lib/spark/ScrollAnimator'
 import { SparkControls } from '$lib/spark/SparkControls'
 import { activeSparkControlsRuntime } from '$lib/studio/spark-controls/activeSparkControlsRuntime'
+import type { ScrollKeyframe } from '$lib/spark/scrollAnimation'
+
+/** HMR-safe ScrollAnimator stand-in: real Object3D subclass with branded fields. */
+class FakeScrollAnimator extends Object3D {
+  declare isScrollAnimator: boolean
+  keyframes: ScrollKeyframe[] = []
+  applyScrollPercentage(_p: number): void { this.position.set(_p, _p, _p) }
+  constructor() {
+    super()
+    this.isScrollAnimator = true
+  }
+}
 
 describe('isScrollAnimator', () => {
   it('returns true for ScrollAnimator instances', () => {
     expect(isScrollAnimator(new ScrollAnimator())).toBe(true)
   })
 
-  it('returns false for plain objects', () => {
-    expect(isScrollAnimator({})).toBe(false)
-    expect(isScrollAnimator(null)).toBe(false)
-    expect(isScrollAnimator(undefined)).toBe(false)
+  it('returns true for HMR-safe Object3D subclass', () => {
+    expect(isScrollAnimator(new FakeScrollAnimator())).toBe(true)
   })
 
-  it('returns false for objects with isScrollAnimator: false', () => {
-    expect(isScrollAnimator({ isScrollAnimator: false })).toBe(false)
+  it('returns false for plain Object3D', () => {
+    expect(isScrollAnimator(new Object3D())).toBe(false)
   })
 
-  it('returns false for branded objects without applyScrollPercentage', () => {
-    expect(isScrollAnimator({ isScrollAnimator: true })).toBe(false)
+  it('returns false for Object3D with brand but missing keyframes', () => {
+    const obj = new Object3D()
+    Object.defineProperty(obj, 'isScrollAnimator', { value: true })
+    Object.defineProperty(obj, 'applyScrollPercentage', { value: () => {} })
+    expect(isScrollAnimator(obj)).toBe(false)
   })
 
-  it('returns true for structurally matching objects (HMR-safe)', () => {
-    const fake = {
-      isScrollAnimator: true,
-      applyScrollPercentage: () => {},
-    }
-    expect(isScrollAnimator(fake)).toBe(true)
+  it('returns false for Object3D with non-array keyframes', () => {
+    const obj = new Object3D()
+    Object.defineProperty(obj, 'isScrollAnimator', { value: true })
+    Object.defineProperty(obj, 'applyScrollPercentage', { value: () => {} })
+    Object.defineProperty(obj, 'keyframes', { value: 'not-array' })
+    expect(isScrollAnimator(obj)).toBe(false)
   })
 })
 

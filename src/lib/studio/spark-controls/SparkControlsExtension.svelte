@@ -2,7 +2,7 @@
   import { onMount, onDestroy, type Snippet } from 'svelte'
   import { useStudio } from '@threlte/studio/extend'
   import { useTransactions } from '@threlte/studio/extensions'
-  import type { SparkSettings, SparkControls } from '$lib/spark/SparkControls'
+  import { SparkControls, type SparkSettings } from '$lib/spark/SparkControls'
   import { SPARK_PAGE_SIZE } from '$lib/spark/SparkControls'
   import type { ProfileSettings } from '$lib/spark/SparkControls'
   import { activeSparkControlsRuntime } from './activeSparkControlsRuntime'
@@ -17,6 +17,17 @@
     type: 'number' | 'boolean' | 'nullable-number'
     unit?: string
     help?: string
+  }
+
+  /**
+   * Set a SparkControls field through its typed individual setter.
+   * SparkControls extends Object3D (no index signature) but declares
+   * explicit getters/setters for every key in SparkSettings.
+   * Each setter accepts `unknown` and validates internally.
+   * This helper preserves key/value type correlation.
+   */
+  function setSparkField<K extends keyof SparkSettings>(controls: SparkControls, key: K, value: unknown): void {
+    controls[key] = value
   }
 
   const FIELD_META: FieldMeta[] = [
@@ -60,10 +71,13 @@
   // Transaction guard: suppress source sync for SparkControls transforms
   let unsubscribeGuard: (() => void) | undefined
 
+  /** Empty settings snapshot used when no controller is active. */
+  const emptySettings = new SparkControls().settings
+
   // Reactive state driven by the active Spark Controls runtime
   let uiState = $state({
     controls: null as SparkControls | null,
-    settings: {} as SparkSettings,
+    settings: emptySettings,
     profileName: 'desktop' as DeviceProfileName,
     reloading: false,
     reloadError: '' as string,
@@ -157,7 +171,7 @@
       initDrafts(current.settings)
     } else {
       uiState.controls = null
-      uiState.settings = {} as SparkSettings
+      uiState.settings = emptySettings
     }
 
     unsubscribeActive = activeSparkControlsRuntime.onChange((controls) => {
@@ -174,7 +188,7 @@
         initDrafts(controls.settings)
       } else {
         uiState.controls = null
-        uiState.settings = {} as SparkSettings
+        uiState.settings = emptySettings
         uiState.sourceSyncEnabled = false
         unsubscribeFromSettings()
         unsubscribeFromReloadStatus()
@@ -233,14 +247,13 @@
     }
 
     const key = meta.key
-    const ctrl = controls as unknown as Record<string, unknown>
 
     // Capture historic snapshot BEFORE mutation (onChange fires synchronously)
     const historicSettings = controls.settings
     const historicProfileOverrides = controls.profileSettings
 
-    // Validate through the setter (fires onChange → refreshes uiState.settings)
-    ctrl[key] = raw
+    // Validate through the individual setter (fires onChange → refreshes uiState.settings)
+    setSparkField(controls, key, raw)
 
     // Capture new snapshot AFTER mutation (includes coupled invariant changes)
     const newSettings = controls.settings
@@ -270,14 +283,13 @@
     if (!controls) return
 
     const key = meta.key
-    const ctrl = controls as unknown as Record<string, unknown>
 
     // Capture historic snapshot BEFORE mutation (onChange fires synchronously)
     const historicSettings = controls.settings
     const historicProfileOverrides = controls.profileSettings
 
-    // Validate through the setter (fires onChange → refreshes uiState.settings)
-    ctrl[key] = checked
+    // Validate through the individual setter (fires onChange → refreshes uiState.settings)
+    setSparkField(controls, key, checked)
 
     // Capture new snapshot AFTER mutation (includes coupled invariant changes)
     const newSettings = controls.settings

@@ -6,11 +6,7 @@
 
   let { children }: { children?: Snippet } = $props()
   import type { ScrollKeyframe } from '$lib/spark/scrollAnimation'
-
-  /** Structural type for accessing ScrollAnimator properties via brand. */
-  interface ScrollAnimatorLike extends Object3D {
-    keyframes: ScrollKeyframe[]
-  }
+  import type { ScrollAnimatorLike } from '../../types/scrollAnimator'
 
   import {
     clampPercentage,
@@ -41,7 +37,7 @@
 
   // Reactive derived values from selection
   const selectedObjects = $derived(objectSelection.selectedObjects ?? [])
-  const singleAnimator = $derived<Object3D | null>(
+  const singleAnimator = $derived<ScrollAnimatorLike | null>(
     selectedObjects.length === 1 && isScrollAnimator(selectedObjects[0])
       ? selectedObjects[0]
       : null,
@@ -74,9 +70,9 @@
     const rev = revision // re-run on transaction revision bump
     void rev
     uiState.animator = sa
-    if (sa && isScrollAnimator(sa)) {
+    if (sa) {
       // Read keyframes via the getter (always returns a deep copy)
-      uiState.keyframes = (sa as unknown as ScrollAnimatorLike).keyframes ?? []
+      uiState.keyframes = sa.keyframes ?? []
     } else {
       uiState.keyframes = []
     }
@@ -146,7 +142,7 @@
       Math.round(euler[2] * 10000) / 10000,
     ] as [number, number, number]
 
-    const currentKfs = (animator as unknown as ScrollAnimatorLike).keyframes ?? []
+    const currentKfs = animator.keyframes ?? []
     const newKeyframes = upsertKeyframe(currentKfs, normalized, pos, rot)
 
     // Commit as a transaction with source sync
@@ -171,7 +167,7 @@
     if (!animator || !isScrollAnimator(animator)) return
     if (!transactions.vitePluginEnabled) return
 
-    const currentKfs = (animator as unknown as ScrollAnimatorLike).keyframes ?? []
+    const currentKfs = animator.keyframes ?? []
     const newKeyframes = deleteKeyframe(currentKfs, scroll)
 
     const historicKeyframes = canonicalizeKeyframes(currentKfs)
