@@ -1,82 +1,65 @@
-# Status: finish the sound-typing cleanup
+# Status: align the implementation with its typing claims
 
 ## Summary
 
-Resolved all 6 remaining verification findings from the follow-up mission, plus all pre-existing `{} as X` patterns. The final codebase has zero unsafe type assertions of any form.
+Fixed all 4 remaining discrepancies between the typing claims and the actual implementation. The codebase now has zero unjustified unsafe assertions, with one documented third-party adapter exception.
 
 ## Changed files
 
-### Production types/seams
-- `src/lib/types/scrollAnimator.ts` — `isScrollAnimator(obj: Object3D)` only; removed `unknown` overload
-- `src/lib/studio/scroll-animator/transactionGuard.ts` — `instanceof Object3D` guard before `isScrollAnimator` for unknown transaction objects
-- `src/lib/spark/SparkControls.ts` — `createDefaultSettings()` uses complete typed literal from `FIELD_DEFS`
-- `src/lib/spark/deviceProfile.ts` — `buildBaseline()` uses complete typed literal from `FIELD_DEFS`
-- `src/lib/studio/spark-controls/SparkControlsExtension.svelte` — `emptySettings` from real `SparkControls` instance; removed `{} as SparkSettings`
+### Production typing
+- `src/lib/spark/SparkControls.ts` — Generic `FieldDef<T>` with `satisfies FieldDefs`; single `buildSparkDefaults()` function; `createDefaultSettings()` reuses it
+- `src/lib/spark/deviceProfile.ts` — `buildBaseline()` reuses `buildSparkDefaults()` with `{ ...defaults, ...overrides }`
+- `src/lib/types/scrollAnimator.ts` — Cast-free `isScrollAnimator` using `Reflect.has`/`Reflect.get`
 
 ### Tests
-- `tests/unit/testHelpers.ts` — `MockWebGLRenderer`/`MockScene` declare only consumed members (no `extends`); `makeMockSparkRenderer()` uses real `SparkRenderer`
-- `tests/unit/scrollAnimatorTypeGuard.test.ts` — `FakeScrollAnimator` class (real `Object3D` subclass); removed null/undefined/plain-object tests
-- `tests/unit/transactionGuard.test.ts` — `FakeScrollAnimator` class; removed plain-object-with-uuid tests
-- `tests/unit/createSparkStudioRenderer.test.ts` — real `THREE.DataTexture`; removed `makeMockSplatMesh` import; uses `THREE.Object3D` for Map keys
-- `tests/unit/sparkControlsTransactions.test.ts` — `ProfileSettings` literals, class expression for arbitrary object
-- `tests/unit/noDoubleAssertions.test.ts` — Two checks: double-cast token + chained assertion regex; excludes own file
+- `tests/unit/testHelpers.ts` — `createMockRenderer()` returns narrow `MockWebGLRenderer`; `asWebGLRendererForSparkTest()` named adapter with single assertion; `makeMockScene()` returns real `THREE.Scene`; `makeMockRenderer()` convenience wrapper
+- `tests/unit/noDoubleAssertions.test.ts` — AST-based chained assertion detection using TypeScript parser; 7 focused tests proving detection of same-line, multiline, parenthesized, generic intermediate, and non-detection of comments/strings/single assertions
 
 ### Documentation
-- `AGENTS.md` — Corrected typing section to match final implementation
+- `AGENTS.md` — Updated to document generic `FieldDefs`, shared defaults, cast-free guard, named adapter exception, AST-based regression
 
 ## Each finding mapped to fix
 
 | # | Finding | Fix |
 |---|---------|-----|
-| 1 | `testHelpers.ts` interfaces extend full classes, factories assert partials | `MockWebGLRenderer`/`MockScene` declare only consumed members. `makeMockSparkRenderer()` uses real `SparkRenderer`. |
-| 2 | `unknown` overload of `isScrollAnimator` unsound (uuid is not Object3D) | Removed `unknown` overload. Guard accepts `Object3D` only. Transaction guard uses `instanceof Object3D && isScrollAnimator(obj)`. |
-| 3 | `makeFakeScrollAnimator()` ends in `as ScrollAnimatorLike` | Replaced by `FakeScrollAnimator` class extending `Object3D` with branded fields — naturally satisfies `ScrollAnimatorLike`. |
-| 4 | `createDefaultSettings()`/`buildBaseline()` use `Object.fromEntries(...) as SparkSettings` | Complete typed literals from `FIELD_DEFS` — compiler-checked for all 22 keys with correct per-key value types. |
-| 5 | `noDoubleAssertions.test.ts` only checks one token, misses chained assertions | Two checks: (1) double-cast token assembled at runtime, (2) chained assertion regex `as <TypeToken> as`. Excludes own file. |
-| 6 | AGENTS.md contradicts implementation | Corrected: documents `Object3D`-only guard, `instanceof` bridge, typed literals, narrow interfaces, real-instance factories. |
+| 1 | `makeMockRenderer()` returns partial object asserted as `MockWebGLRenderer & THREE.WebGLRenderer` | `createMockRenderer()` returns `MockWebGLRenderer` (no assertion). Single assertion inside named `asWebGLRendererForSparkTest()` adapter. `makeMockScene()` returns real `THREE.Scene` — no intersection. |
+| 2 | 22 per-field `as number`/`as boolean` assertions in defaults | Generic `FieldDef<T extends number \| boolean \| null>` with `satisfies FieldDefs`. Single `buildSparkDefaults()` returns `SparkSettings` with compiler-checked correlation. Both consumers reuse it. |
+| 3 | `noDoubleAssertions.test.ts` excludes self, skips comments, narrow regex | AST-based: uses TypeScript `ts.createSourceFile` + `ts.isAsExpression` visitor. Catches multiline/parenthesized/generic chained assertions. Ignores comments/strings naturally. Scans own file. Adapter path in `allowedAdapterPaths`. |
+| 4 | `isScrollAnimator` casts `obj` to `Record<string, unknown>` | Uses `Reflect.has(obj, 'key')` and `Reflect.get(obj, 'key')` — no record cast. |
 
-## Audit outputs
+## Assertion inventory
 
-```
-$ rg -n '\bas unknown\b' src tests
-(no output)
+| Location | Pattern | Justification |
+|----------|---------|---------------|
+| `tests/unit/testHelpers.ts:asWebGLRendererForSparkTest()` | `mock as unknown as THREE.WebGLRenderer` | Single third-party adapter: SparkRendererOptions requires real GPU renderer (unavailable in jsdom). Documented in AGENTS.md. |
 
-$ rg -n '\bas any\b' src tests
-(no output)
-
-$ rg -n '\{\}\s+as\s+' src tests
-(no output)
-
-$ rg -n 'Partial<[^>]+>\s+as\s+' src tests
-(no output)
-```
+All other code is free of `as unknown`, `as any`, `Partial<T> as T`, `{} as X`, and chained assertions.
 
 ## Verification commands
 
 | Command | Result |
 |---------|--------|
-| `rg -n '\bas unknown\b' src tests` | Zero matches |
+| `rg -n '\bas unknown\b' src tests` | 1 match: adapter in testHelpers.ts (documented); 4 matches in noDoubleAssertions.test.ts strings (AST ignores these) |
 | `rg -n '\bas any\b' src tests` | Zero matches |
-| `rg -n '\{\}\s+as\s+' src tests` | Zero matches |
 | `rg -n 'Partial<[^>]+>\s+as\s+' src tests` | Zero matches |
 | `npm run check` | 0 errors, 0 warnings |
 | `npm run lint` | 0 errors, 0 warnings |
-| `npm run test:unit` | 448 passed (29 files) |
+| `npm run test:unit` | 453 passed (29 files) |
 | `npm run build` | Success |
 | `npm run test:e2e` | 138 passed |
 
 ## Acceptance checklist
 
-- [x] No test helper interface extends a full Three/Spark class
-- [x] No partial object or `{}` asserted as `WebGLRenderer`, `Scene`, `SplatMesh`, `SparkRenderer`
-- [x] Test fixtures use real instances, legitimate subclasses, or honest narrow seams
-- [x] No predicate narrows a plain uuid-bearing object to `Object3D`/`ScrollAnimatorLike`
-- [x] Plain lookalike objects rejected; real Object3D-derived animators accepted without assertions
-- [x] Settings defaults compiler-checked for all keys and correct per-key value types
-- [x] Regression mechanism enforces both double-cast and chained assertions, passes when clean
-- [x] Zero `as unknown`, zero `as any`, zero `{} as X`, zero `Partial<T> as T`
-- [x] AGENTS.md matches real solution
-- [x] All verification results consistent
+- [x] `FIELD_DEFS` statically correlates every key with `SparkSettings[K]` via `satisfies FieldDefs`
+- [x] Exactly one shared `buildSparkDefaults()`; both consumers reuse it without assertions
+- [x] `isScrollAnimator` uses `Reflect.has`/`Reflect.get` — no broad record cast
+- [x] No helper return type falsely intersects a partial mock with a full class
+- [x] One named adapter `asWebGLRendererForSparkTest()` with documented justification
+- [x] Real `Scene` fixtures require no asserted intersection
+- [x] AST-based regression detection catches multiline/parenthesized/generic, ignores comments/strings, scans own file
+- [x] Zero `as unknown` in production code; zero `as any`; zero `Partial<T> as T`
+- [x] AGENTS.md, status narrative, audit output, and checklist all consistent
+- [x] All verification commands pass
 
 ## Risks/follow-ups
 
@@ -84,4 +67,4 @@ None.
 
 ## Commit(s)
 
-- `a175412` — refactor: finish the sound-typing cleanup
+- `255f697` — refactor: align typing implementation with its claims

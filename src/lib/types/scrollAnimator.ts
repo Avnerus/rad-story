@@ -38,10 +38,10 @@ export interface ScrollAnimatorLike extends Object3D {
  * only narrows values that are genuinely Object3D instances.
  */
 export function isScrollAnimator(obj: Object3D): obj is ScrollAnimatorLike {
-  const candidate = obj as Record<string, unknown>
-  return (
-    candidate.isScrollAnimator === true &&
-    typeof candidate.applyScrollPercentage === 'function' &&
-    Array.isArray(candidate.keyframes)
-  )
+  return Reflect.has(obj, 'isScrollAnimator') &&
+    Reflect.get(obj, 'isScrollAnimator') === true &&
+    Reflect.has(obj, 'applyScrollPercentage') &&
+    typeof Reflect.get(obj, 'applyScrollPercentage') === 'function' &&
+    Reflect.has(obj, 'keyframes') &&
+    Array.isArray(Reflect.get(obj, 'keyframes'))
 }

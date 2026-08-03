@@ -1,6 +1,6 @@
 import type { DeviceProfile, DeviceProfileName } from '$lib/types'
 import type { SparkSettings } from './SparkControls'
-import { SPARK_PAGE_SIZE, FIELD_DEFS } from './SparkControls'
+import { SPARK_PAGE_SIZE, buildSparkDefaults } from './SparkControls'
 import { computeEffectiveSettings as _computeEffectiveSettings, computeOverrides as _computeOverrides, type ProfileSettings } from './profileResolution'
 
 // ---------------------------------------------------------------------------
@@ -13,31 +13,7 @@ import { computeEffectiveSettings as _computeEffectiveSettings, computeOverrides
  * comparisons always use all 22 effective fields.
  */
 function buildBaseline(overrides: Partial<SparkSettings>): SparkSettings {
-  const defaults = {
-    lodSplatScale: FIELD_DEFS.lodSplatScale.default as number,
-    lodRenderScale: FIELD_DEFS.lodRenderScale.default as number,
-    maxStdDev: FIELD_DEFS.maxStdDev.default as number,
-    maxPagedSplats: FIELD_DEFS.maxPagedSplats.default as number,
-    coneFov0: FIELD_DEFS.coneFov0.default as number,
-    coneFov: FIELD_DEFS.coneFov.default as number,
-    coneFoveate: FIELD_DEFS.coneFoveate.default as number,
-    behindFoveate: FIELD_DEFS.behindFoveate.default as number,
-    minPixelRadius: FIELD_DEFS.minPixelRadius.default as number,
-    maxPixelRadius: FIELD_DEFS.maxPixelRadius.default as number,
-    minAlpha: FIELD_DEFS.minAlpha.default as number,
-    preBlurAmount: FIELD_DEFS.preBlurAmount.default as number,
-    blurAmount: FIELD_DEFS.blurAmount.default as number,
-    falloff: FIELD_DEFS.falloff.default as number,
-    clipXY: FIELD_DEFS.clipXY.default as number,
-    focalAdjustment: FIELD_DEFS.focalAdjustment.default as number,
-    sortRadial: FIELD_DEFS.sortRadial.default as boolean,
-    minSortIntervalMs: FIELD_DEFS.minSortIntervalMs.default as number,
-    enableLod: FIELD_DEFS.enableLod.default as boolean,
-    enableLodFetching: FIELD_DEFS.enableLodFetching.default as boolean,
-    lodSplatCount: FIELD_DEFS.lodSplatCount.default as number | null,
-    lodInflate: FIELD_DEFS.lodInflate.default as boolean,
-  } as SparkSettings
-  return { ...defaults, ...overrides } as SparkSettings
+  return { ...buildSparkDefaults(), ...overrides }
 }
 
 /**

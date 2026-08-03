@@ -4,10 +4,10 @@
  * Interfaces declare only the members consumed by the unit under test.
  * They do NOT extend the full Three/Spark classes.
  *
- * WebGLRenderer and Scene mocks use real Three.js instances with spied
- * methods where practical. For SparkRendererOptions which requires a
- * concrete THREE.WebGLRenderer (needing a real GPU context unavailable
- * in unit tests), a single adapter bridges the third-party boundary.
+ * The SparkRenderer constructor requires a concrete THREE.WebGLRenderer
+ * (needing a real GPU context unavailable in jsdom). The adapter
+ * `asWebGLRendererForSparkTest()` bridges this single third-party boundary
+ * with one localized assertion. All other test fixtures use real instances.
  */
 import * as THREE from 'three'
 import { SparkRenderer } from '@sparkjsdev/spark'
@@ -30,22 +30,11 @@ export interface MockWebGLRenderer {
   setDirty?: ReturnType<typeof vi.fn>
 }
 
-/** Minimal Scene shape consumed by SparkStudioRendererHandle.attach(). */
-export interface MockScene {
-  add: ReturnType<typeof vi.fn>
-  remove: ReturnType<typeof vi.fn>
-  children: object[]
-}
-
 /**
- * Build a WebGLRenderer mock.
- *
- * SparkRendererOptions requires THREE.WebGLRenderer which needs a real
- * GPU context (unavailable in jsdom unit tests). This adapter constructs
- * a plain object satisfying the MockWebGLRenderer interface and presents
- * it as the required type at this single third-party boundary.
+ * Build a WebGLRenderer mock with only the members the tests consume.
+ * Returns the narrow MockWebGLRenderer type — not a full class.
  */
-export function makeMockRenderer(): MockWebGLRenderer & THREE.WebGLRenderer {
+export function createMockRenderer(): MockWebGLRenderer {
   return {
     render: vi.fn(),
     domElement: document.createElement('canvas'),
@@ -59,19 +48,40 @@ export function makeMockRenderer(): MockWebGLRenderer & THREE.WebGLRenderer {
     info: { render: { frame: 0 } },
     capabilities: { maxTextureSize: 4096 },
     xr: { isPresenting: false },
-  } as MockWebGLRenderer & THREE.WebGLRenderer
+  }
+}
+
+/**
+ * Adapter: present a MockWebGLRenderer as THREE.WebGLRenderer for Spark.
+ *
+ * SparkRendererOptions.renderer requires a real THREE.WebGLRenderer which
+ * needs a GPU context (unavailable in jsdom). This single assertion bridges
+ * that third-party boundary. The mock satisfies all members SparkRenderer
+ * reads during construction and the test exercises.
+ */
+export function asWebGLRendererForSparkTest(mock: MockWebGLRenderer): THREE.WebGLRenderer {
+  return mock as unknown as THREE.WebGLRenderer
+}
+
+/**
+ * Convenience: build a mock renderer ready for SparkRendererOptions.
+ * Internally uses asWebGLRendererForSparkTest() for the single assertion.
+ */
+export function makeMockRenderer(): THREE.WebGLRenderer {
+  return asWebGLRendererForSparkTest(createMockRenderer())
 }
 
 /**
  * Build a mock Scene using a real THREE.Scene with spied methods.
+ * Returns the real Scene — no asserted intersection.
  */
-export function makeMockScene(): MockScene & THREE.Scene {
+export function makeMockScene(): THREE.Scene {
   const scene = new THREE.Scene()
   const origAdd = scene.add.bind(scene)
   scene.add = vi.fn().mockImplementation(origAdd)
   const origRemove = scene.remove.bind(scene)
   scene.remove = vi.fn().mockImplementation(origRemove)
-  return scene as MockScene & THREE.Scene
+  return scene
 }
 
 /**

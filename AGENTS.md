@@ -484,38 +484,41 @@ Verify the profile by checking `navigator.userAgent` or the profile badge: `play
 - **No `@ts-ignore`** — fix the type, don't suppress it.
 - **No broad `Record<string, unknown>` casts** on domain objects — use typed interfaces or key-correlated accessors.
 - **No fabricated full-class mocks** — a `{}` presented as `SplatMesh` or `SparkRenderer` is not a sound test double.
-- **No test helper interfaces extending full Three/Spark classes** — use `Pick<>` or explicit member declarations only.
+- **No test helper interfaces extending full Three/Spark classes** — use explicit member declarations only.
+
+### Documented exception
+
+- `tests/unit/testHelpers.ts` contains one localized assertion inside `asWebGLRendererForSparkTest()`: a `MockWebGLRenderer` is asserted as `THREE.WebGLRenderer` because SparkRendererOptions requires a real GPU renderer (unavailable in jsdom). This is the single third-party adapter boundary.
 
 ### Preferred patterns
 
 1. **Browser/e2e diagnostic globals:** Use the shared `Window` augmentation in `src/lib/types/spark-stub-globals.d.ts`. All stub globals (`__spark_stub`, `__spark_stub_diagnostics`, `__stub_scene_uuid`, etc.) are declared there with lifecycle-accurate optionality. Access them directly as `window.__spark_stub_diagnostics` — no casts needed.
 
-2. **Branded Three.js objects (ScrollAnimator):** Use the sound type guard `isScrollAnimator(obj: Object3D)` from `src/lib/types/scrollAnimator.ts`. It accepts only `Object3D` (from `scene.traverse`/Studio selection), validates the brand flag, callable `applyScrollPercentage`, and `keyframes` array, then narrows to `ScrollAnimatorLike`. For Studio transaction objects (`unknown`), use `obj instanceof Object3D && isScrollAnimator(obj)` before calling the guard. After the guard, no further cast is needed.
+2. **Branded Three.js objects (ScrollAnimator):** Use the cast-free type guard `isScrollAnimator(obj: Object3D)` from `src/lib/types/scrollAnimator.ts`. It uses `Reflect.has`/`Reflect.get` to inspect branded properties without any record cast. For Studio transaction objects (`unknown`), use `obj instanceof Object3D && isScrollAnimator(obj)` before calling the guard.
 
 3. **Dynamic scene registry:** Use `import.meta.glob<SceneModule>(pattern, { eager: true })` where `SceneModule` declares `{ default: ComponentType }`. Access `mod.default` directly.
 
-4. **Heterogeneous Spark settings writes:** For `SparkControls`, use the `setSparkField<K extends keyof SparkSettings>()` helper — each setter accepts `unknown` and validates internally. For `SparkRenderer`, use the exhaustive `RENDERER_SETTERS` map in `createSparkStudioRenderer.ts` — each entry correlates a key with its correct value type and handles the `lodSplatCount` null → undefined conversion explicitly.
+4. **Heterogeneous Spark settings writes:** For `SparkControls`, use the `setSparkField<K extends keyof SparkSettings>()` helper. For `SparkRenderer`, use the exhaustive `RENDERER_SETTERS` map in `createSparkStudioRenderer.ts`.
 
-5. **Default/baseline construction:** Complete typed literal from `FIELD_DEFS` in `SparkControls.createDefaultSettings()` and `deviceProfile.buildBaseline()` — compiler-checked for all 22 keys with correct per-key value types.
+5. **Default/baseline construction:** Generic `FieldDef<T>` with `satisfies FieldDefs` in `SparkControls.ts`. Single shared `buildSparkDefaults()` function returns `SparkSettings` with compiler-checked key/value correlation. Both `createDefaultSettings()` and `buildBaseline()` reuse it.
 
-6. **Test doubles:** Define narrow structural interfaces (`MockWebGLRenderer`, `MockScene`) in `tests/unit/testHelpers.ts` declaring only consumed members (no `extends` from full classes). Use real `THREE.Scene` instances with spied methods. For HMR-safe branded objects, use real `Object3D` subclasses (e.g. `FakeScrollAnimator`) that naturally satisfy the interface without post-construction assertions.
+6. **Test doubles:** Narrow structural interfaces in `tests/unit/testHelpers.ts`. Real `THREE.Scene` with spied methods. Real `Object3D` subclasses for HMR-safe branded objects. One named adapter `asWebGLRendererForSparkTest()` for the unavoidable WebGLRenderer boundary.
 
-7. **SplatMesh inheritance:** `SplatMesh extends SplatGenerator extends Object3D`. Access `wrapper.children.includes(mesh)` directly — no cast needed.
+7. **SplatMesh inheritance:** `SplatMesh extends SplatGenerator extends Object3D`. Access `wrapper.children.includes(mesh)` directly.
 
 ### Regression enforcement
 
-- `rg -n '\bas unknown\b' src tests` must return zero matches (including comments).
-- `tests/unit/noDoubleAssertions.test.ts` runs two filesystem-based checks: (1) the double-cast token assembled at runtime, (2) chained assertions via regex matching `as <TypeToken> as`. Excludes its own file.
+- `tests/unit/noDoubleAssertions.test.ts` uses TypeScript AST parsing to detect chained `AsExpression` nodes (including multiline and parenthesized forms). AST parsing naturally ignores comments and strings, so the test scans its own file safely. The adapter path is explicitly listed in `allowedAdapterPaths`.
 - `npm run check` (svelte-check) and `npm run test:unit` must pass.
 
 ### Source references
 
-- `src/lib/types/scrollAnimator.ts` — `ScrollAnimatorLike` interface and `isScrollAnimator(obj: Object3D)` type guard
+- `src/lib/types/scrollAnimator.ts` — cast-free `isScrollAnimator(obj: Object3D)` using Reflect
 - `src/lib/types/spark-stub-globals.d.ts` — `Window` augmentation for all e2e stub globals
-- `src/lib/spark/createSparkStudioRenderer.ts` — `RENDERER_SETTERS` exhaustive map, `setRendererField()` with key/value correlation
-- `src/lib/spark/SparkControls.ts` — `createDefaultSettings()` complete typed literal
+- `src/lib/spark/SparkControls.ts` — generic `FieldDef<T>`, `satisfies FieldDefs`, `buildSparkDefaults()`
+- `src/lib/spark/createSparkStudioRenderer.ts` — `RENDERER_SETTERS` exhaustive map
 - `src/lib/studio/spark-controls/SparkControlsExtension.svelte` — `setSparkField()` typed setter helper
-- `tests/unit/testHelpers.ts` — narrow mock interfaces and real-instance factories
+- `tests/unit/testHelpers.ts` — narrow mocks, real Scene, `asWebGLRendererForSparkTest()` adapter
 
 ## CORS Note
 

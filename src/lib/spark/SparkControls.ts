@@ -121,16 +121,28 @@ export const SETTINGS_KEYS: (keyof SparkSettings)[] = [
 // Field definitions with validation
 // ---------------------------------------------------------------------------
 
-interface FieldDef {
+/**
+ * Field definition with a value-correlated default.
+ * T is the SparkSettings value type for the corresponding key.
+ */
+interface FieldDef<T extends number | boolean | null> {
   min?: number
   max?: number
   integer?: boolean
   multipleOf?: number
   allowNull?: boolean
-  default: number | boolean | null
+  default: T
 }
 
-export const FIELD_DEFS: Record<keyof SparkSettings, FieldDef> = {
+/**
+ * Mapped type: each key in SparkSettings has a FieldDef whose default
+ * is exactly the value type for that key. Compiler-checked completeness.
+ */
+type FieldDefs = {
+  [K in keyof SparkSettings]: FieldDef<SparkSettings[K]>
+}
+
+export const FIELD_DEFS = {
   lodSplatScale:       { min: 0.01, max: 10,   default: 1 },
   lodRenderScale:      { min: 0.1,  max: 10,   default: 1 },
   maxStdDev:           { min: 1,    max: 100,  default: 8 },
@@ -153,6 +165,37 @@ export const FIELD_DEFS: Record<keyof SparkSettings, FieldDef> = {
   enableLodFetching:   { default: true },
   lodSplatCount:       { min: 10_000, max: 50_000_000, integer: true, allowNull: true, default: null },
   lodInflate:          { default: false },
+} satisfies FieldDefs
+
+/**
+ * Build a complete SparkSettings from FIELD_DEFS defaults.
+ * The generic mapped type ensures every key has a correctly-typed default.
+ */
+export function buildSparkDefaults(): SparkSettings {
+  return {
+    lodSplatScale: FIELD_DEFS.lodSplatScale.default,
+    lodRenderScale: FIELD_DEFS.lodRenderScale.default,
+    maxStdDev: FIELD_DEFS.maxStdDev.default,
+    maxPagedSplats: FIELD_DEFS.maxPagedSplats.default,
+    coneFov0: FIELD_DEFS.coneFov0.default,
+    coneFov: FIELD_DEFS.coneFov.default,
+    coneFoveate: FIELD_DEFS.coneFoveate.default,
+    behindFoveate: FIELD_DEFS.behindFoveate.default,
+    minPixelRadius: FIELD_DEFS.minPixelRadius.default,
+    maxPixelRadius: FIELD_DEFS.maxPixelRadius.default,
+    minAlpha: FIELD_DEFS.minAlpha.default,
+    preBlurAmount: FIELD_DEFS.preBlurAmount.default,
+    blurAmount: FIELD_DEFS.blurAmount.default,
+    falloff: FIELD_DEFS.falloff.default,
+    clipXY: FIELD_DEFS.clipXY.default,
+    focalAdjustment: FIELD_DEFS.focalAdjustment.default,
+    sortRadial: FIELD_DEFS.sortRadial.default,
+    minSortIntervalMs: FIELD_DEFS.minSortIntervalMs.default,
+    enableLod: FIELD_DEFS.enableLod.default,
+    enableLodFetching: FIELD_DEFS.enableLodFetching.default,
+    lodSplatCount: FIELD_DEFS.lodSplatCount.default,
+    lodInflate: FIELD_DEFS.lodInflate.default,
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -327,33 +370,10 @@ export class SparkControls extends Object3D {
 
   /**
    * Create a settings object with all field defaults.
-   * Built from a complete typed literal checked with `satisfies`.
+   * Reuses the shared buildSparkDefaults() — no per-field assertions.
    */
   createDefaultSettings(): SparkSettings {
-    return {
-      lodSplatScale: FIELD_DEFS.lodSplatScale.default as number,
-      lodRenderScale: FIELD_DEFS.lodRenderScale.default as number,
-      maxStdDev: FIELD_DEFS.maxStdDev.default as number,
-      maxPagedSplats: FIELD_DEFS.maxPagedSplats.default as number,
-      coneFov0: FIELD_DEFS.coneFov0.default as number,
-      coneFov: FIELD_DEFS.coneFov.default as number,
-      coneFoveate: FIELD_DEFS.coneFoveate.default as number,
-      behindFoveate: FIELD_DEFS.behindFoveate.default as number,
-      minPixelRadius: FIELD_DEFS.minPixelRadius.default as number,
-      maxPixelRadius: FIELD_DEFS.maxPixelRadius.default as number,
-      minAlpha: FIELD_DEFS.minAlpha.default as number,
-      preBlurAmount: FIELD_DEFS.preBlurAmount.default as number,
-      blurAmount: FIELD_DEFS.blurAmount.default as number,
-      falloff: FIELD_DEFS.falloff.default as number,
-      clipXY: FIELD_DEFS.clipXY.default as number,
-      focalAdjustment: FIELD_DEFS.focalAdjustment.default as number,
-      sortRadial: FIELD_DEFS.sortRadial.default as boolean,
-      minSortIntervalMs: FIELD_DEFS.minSortIntervalMs.default as number,
-      enableLod: FIELD_DEFS.enableLod.default as boolean,
-      enableLodFetching: FIELD_DEFS.enableLodFetching.default as boolean,
-      lodSplatCount: FIELD_DEFS.lodSplatCount.default as number | null,
-      lodInflate: FIELD_DEFS.lodInflate.default as boolean,
-    }
+    return buildSparkDefaults()
   }
 
   /**
