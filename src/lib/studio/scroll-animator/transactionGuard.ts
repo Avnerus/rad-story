@@ -13,6 +13,7 @@
 import { activeSparkControlsRuntime } from '$lib/studio/spark-controls/activeSparkControlsRuntime'
 import type { SparkControls } from '$lib/spark/SparkControls'
 import { isScrollAnimator } from '../../types/scrollAnimator'
+import { Object3D } from 'three'
 
 // Re-export for consumers that need the type guard
 export { isScrollAnimator }
@@ -79,7 +80,7 @@ export function guardScrollAnimatorTransactions(
   transactions: GuardTransaction[],
 ): void {
   for (const tx of transactions) {
-    if (isScrollAnimator(tx.object)) {
+    if (tx.object instanceof Object3D && isScrollAnimator(tx.object)) {
       const sync = tx.sync
       if (sync && !isScrollAnimatorPersistedAttribute(sync.attributeName)) {
         tx.sync = undefined

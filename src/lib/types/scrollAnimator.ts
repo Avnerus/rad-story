@@ -9,10 +9,6 @@
  * Studio selection) already supply an Object3D. It validates the brand
  * flag, the callable method, and the `keyframes` property — everything
  * promised by `ScrollAnimatorLike`.
- *
- * For callers that have `unknown` (e.g. Studio transaction objects),
- * the guard first establishes the input is an Object3D-like value
- * before checking the ScrollAnimator-specific properties.
  */
 
 import type { ScrollKeyframe } from '$lib/spark/scrollAnimation'
@@ -37,19 +33,11 @@ export interface ScrollAnimatorLike extends Object3D {
  * Validates: brand flag === true, applyScrollPercentage is callable,
  * and keyframes property exists and is an array.
  *
- * Overload 1: callers with `Object3D` (scene.traverse, Studio selection).
- * Overload 2: callers with `unknown` (Studio transaction objects).
+ * The parameter type is `Object3D` because all callers (scene.traverse,
+ * Studio selection) already supply an Object3D. This ensures the guard
+ * only narrows values that are genuinely Object3D instances.
  */
-export function isScrollAnimator(obj: Object3D): obj is ScrollAnimatorLike
-export function isScrollAnimator(obj: unknown): obj is ScrollAnimatorLike
-export function isScrollAnimator(obj: unknown): obj is ScrollAnimatorLike {
-  if (
-    obj === null ||
-    typeof obj !== 'object' ||
-    !('uuid' in obj) // Object3D brand check
-  ) {
-    return false
-  }
+export function isScrollAnimator(obj: Object3D): obj is ScrollAnimatorLike {
   const candidate = obj as Record<string, unknown>
   return (
     candidate.isScrollAnimator === true &&

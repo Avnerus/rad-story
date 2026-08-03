@@ -159,11 +159,12 @@ describe('SparkControls transaction semantics', () => {
   it('non-profileSettings transaction has sync stripped by guard', () => {
     const transactions = createMockTransactions()
 
+    const emptyPS: ProfileSettings = { desktop: {}, mobile: {} }
     const tx = transactions.buildTransaction({
-      object: {} as object,
+      object: new (class { })(),
       propertyPath: 'position',
-      value: {} as ProfileSettings,
-      historicValue: {} as ProfileSettings,
+      value: emptyPS,
+      historicValue: emptyPS,
       createHistoryRecord: true,
       sync: true,
     })

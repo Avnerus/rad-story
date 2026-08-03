@@ -1,9 +1,13 @@
 /**
- * Regression test: ensure no unsafe chained type assertions exist in maintained code.
+ * Regression test: ensure no unsafe type assertions exist in maintained code.
  *
- * Scans source files for the token sequence that forms a double assertion
- * pattern. The forbidden token is assembled at runtime so the test file
- * itself never contains the literal sequence.
+ * Scans source files for forbidden patterns:
+ * - Chained assertions (e.g. double-cast through intermediate type) detected
+ *   by matching `as <TypeToken> as` with a TypeScript-like intermediate token
+ * - The specific double-cast token assembled at runtime from two parts
+ *
+ * The forbidden tokens are assembled at runtime so this file never
+ * contains them literally.
  */
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
@@ -28,28 +32,56 @@ function collectFiles(dir: string, results: string[] = []): string[] {
   return results
 }
 
-/** Build the forbidden token at runtime so this file never contains it. */
-const forbiddenToken = 'as ' + 'unknown'
+/** Build forbidden tokens at runtime so this file never contains them. */
+const asUnknownToken = 'as ' + 'unknown'
+/** Regex: `as <TypeToken> as` (chained assertion, possibly across whitespace).
+ * Matches `as` followed by a TypeScript identifier/type token and another `as`.
+ * Excludes natural-language uses by requiring the intermediate token to start
+ * with an uppercase letter, underscore, or common generic markers.
+ */
+const chainedPattern = new RegExp('\\bas\\s+([A-Z_]|\\w+<|Record|Partial|Pick|Omit)\\w*\\s+as', 'g')
 
-describe('no unsafe chained assertions regression', () => {
-  it('no chained double assertions in src/ or tests/', () => {
+describe('no unsafe type assertions regression', () => {
+  it('no double-cast through intermediate type in src/ or tests/', () => {
     const violations: string[] = []
-
+    const ownPath = resolve(__dirname, 'noDoubleAssertions.test.ts')
     for (const dir of ['src', 'tests']) {
-      const files = collectFiles(resolve(root, dir))
-      for (const filePath of files) {
+      for (const filePath of collectFiles(resolve(root, dir))) {
+        if (filePath === ownPath) continue
         const content = readFileSync(filePath, 'utf-8')
-        const relativePath = filePath.slice(root.length + 1)
+        const relPath = filePath.slice(root.length + 1)
         const lines = content.split('\n')
         for (let i = 0; i < lines.length; i++) {
-          const line = lines[i]
-          if (line.includes(forbiddenToken)) {
-            violations.push(`${relativePath}:${i + 1}: ${line.trim()}`)
+          if (lines[i].includes(asUnknownToken)) {
+            violations.push(`${relPath}:${i + 1}: ${lines[i].trim()}`)
           }
         }
       }
     }
+    expect(violations, 'Found double-cast through intermediate type').toEqual([])
+  })
 
-    expect(violations, 'Found chained double assertions in maintained code').toEqual([])
+  it('no chained assertions in src/ or tests/', () => {
+    const violations: string[] = []
+    const ownPath = resolve(__dirname, 'noDoubleAssertions.test.ts')
+    for (const dir of ['src', 'tests']) {
+      for (const filePath of collectFiles(resolve(root, dir))) {
+        if (filePath === ownPath) continue
+        const content = readFileSync(filePath, 'utf-8')
+        const relPath = filePath.slice(root.length + 1)
+        const lines = content.split('\n')
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i]
+          // Skip comment-only lines
+          const trimmed = line.trim()
+          if (trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*')) continue
+          chainedPattern.lastIndex = 0
+          if (chainedPattern.test(line)) {
+            violations.push(`${relPath}:${i + 1}: ${trimmed}`)
+          }
+        }
+      }
+    }
+    expect(violations, 'Found chained type assertions in maintained code').toEqual([])
   })
 })

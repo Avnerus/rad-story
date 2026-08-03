@@ -2,7 +2,7 @@
   import { onMount, onDestroy, type Snippet } from 'svelte'
   import { useStudio } from '@threlte/studio/extend'
   import { useTransactions } from '@threlte/studio/extensions'
-  import type { SparkSettings, SparkControls } from '$lib/spark/SparkControls'
+  import { SparkControls, type SparkSettings } from '$lib/spark/SparkControls'
   import { SPARK_PAGE_SIZE } from '$lib/spark/SparkControls'
   import type { ProfileSettings } from '$lib/spark/SparkControls'
   import { activeSparkControlsRuntime } from './activeSparkControlsRuntime'
@@ -71,10 +71,13 @@
   // Transaction guard: suppress source sync for SparkControls transforms
   let unsubscribeGuard: (() => void) | undefined
 
+  /** Empty settings snapshot used when no controller is active. */
+  const emptySettings = new SparkControls().settings
+
   // Reactive state driven by the active Spark Controls runtime
   let uiState = $state({
     controls: null as SparkControls | null,
-    settings: {} as SparkSettings,
+    settings: emptySettings,
     profileName: 'desktop' as DeviceProfileName,
     reloading: false,
     reloadError: '' as string,
@@ -168,7 +171,7 @@
       initDrafts(current.settings)
     } else {
       uiState.controls = null
-      uiState.settings = {} as SparkSettings
+      uiState.settings = emptySettings
     }
 
     unsubscribeActive = activeSparkControlsRuntime.onChange((controls) => {
@@ -185,7 +188,7 @@
         initDrafts(controls.settings)
       } else {
         uiState.controls = null
-        uiState.settings = {} as SparkSettings
+        uiState.settings = emptySettings
         uiState.sourceSyncEnabled = false
         unsubscribeFromSettings()
         unsubscribeFromReloadStatus()

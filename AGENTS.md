@@ -484,36 +484,38 @@ Verify the profile by checking `navigator.userAgent` or the profile badge: `play
 - **No `@ts-ignore`** — fix the type, don't suppress it.
 - **No broad `Record<string, unknown>` casts** on domain objects — use typed interfaces or key-correlated accessors.
 - **No fabricated full-class mocks** — a `{}` presented as `SplatMesh` or `SparkRenderer` is not a sound test double.
+- **No test helper interfaces extending full Three/Spark classes** — use `Pick<>` or explicit member declarations only.
 
 ### Preferred patterns
 
 1. **Browser/e2e diagnostic globals:** Use the shared `Window` augmentation in `src/lib/types/spark-stub-globals.d.ts`. All stub globals (`__spark_stub`, `__spark_stub_diagnostics`, `__stub_scene_uuid`, etc.) are declared there with lifecycle-accurate optionality. Access them directly as `window.__spark_stub_diagnostics` — no casts needed.
 
-2. **Branded Three.js objects (ScrollAnimator):** Use the sound type guard `isScrollAnimator(obj)` from `src/lib/types/scrollAnimator.ts`. It accepts `Object3D` (from `scene.traverse`/Studio selection) or `unknown` (from Studio transactions), validates the brand flag, callable `applyScrollPercentage`, and `keyframes` array, then narrows to `ScrollAnimatorLike`. After the guard, no further cast is needed — the narrowed type provides all promised properties.
+2. **Branded Three.js objects (ScrollAnimator):** Use the sound type guard `isScrollAnimator(obj: Object3D)` from `src/lib/types/scrollAnimator.ts`. It accepts only `Object3D` (from `scene.traverse`/Studio selection), validates the brand flag, callable `applyScrollPercentage`, and `keyframes` array, then narrows to `ScrollAnimatorLike`. For Studio transaction objects (`unknown`), use `obj instanceof Object3D && isScrollAnimator(obj)` before calling the guard. After the guard, no further cast is needed.
 
 3. **Dynamic scene registry:** Use `import.meta.glob<SceneModule>(pattern, { eager: true })` where `SceneModule` declares `{ default: ComponentType }`. Access `mod.default` directly.
 
 4. **Heterogeneous Spark settings writes:** For `SparkControls`, use the `setSparkField<K extends keyof SparkSettings>()` helper — each setter accepts `unknown` and validates internally. For `SparkRenderer`, use the exhaustive `RENDERER_SETTERS` map in `createSparkStudioRenderer.ts` — each entry correlates a key with its correct value type and handles the `lodSplatCount` null → undefined conversion explicitly.
 
-5. **Default/baseline construction:** Build from `SETTINGS_KEYS.map(key => [key, FIELD_DEFS[key].default])` via `Object.fromEntries()` — no union-valued record assertions.
+5. **Default/baseline construction:** Complete typed literal from `FIELD_DEFS` in `SparkControls.createDefaultSettings()` and `deviceProfile.buildBaseline()` — compiler-checked for all 22 keys with correct per-key value types.
 
-6. **Test doubles:** Define narrow structural interfaces (`MockWebGLRenderer`, `MockScene`) in `tests/unit/testHelpers.ts` describing exactly what the unit under test consumes. Use real `Object3D` instances with `Object.defineProperty` for HMR-safe branded objects. For deliberately invalid inputs, use `@ts-expect-error` with a comment.
+6. **Test doubles:** Define narrow structural interfaces (`MockWebGLRenderer`, `MockScene`) in `tests/unit/testHelpers.ts` declaring only consumed members (no `extends` from full classes). Use real `THREE.Scene` instances with spied methods. For HMR-safe branded objects, use real `Object3D` subclasses (e.g. `FakeScrollAnimator`) that naturally satisfy the interface without post-construction assertions.
 
 7. **SplatMesh inheritance:** `SplatMesh extends SplatGenerator extends Object3D`. Access `wrapper.children.includes(mesh)` directly — no cast needed.
 
 ### Regression enforcement
 
 - `rg -n '\bas unknown\b' src tests` must return zero matches (including comments).
-- `tests/unit/noDoubleAssertions.test.ts` runs a filesystem-based check as part of the unit test suite (forbids the token sequence without containing it).
+- `tests/unit/noDoubleAssertions.test.ts` runs two filesystem-based checks: (1) the double-cast token assembled at runtime, (2) chained assertions via regex matching `as <TypeToken> as`. Excludes its own file.
 - `npm run check` (svelte-check) and `npm run test:unit` must pass.
 
 ### Source references
 
-- `src/lib/types/scrollAnimator.ts` — `ScrollAnimatorLike` interface and sound `isScrollAnimator()` type guard
+- `src/lib/types/scrollAnimator.ts` — `ScrollAnimatorLike` interface and `isScrollAnimator(obj: Object3D)` type guard
 - `src/lib/types/spark-stub-globals.d.ts` — `Window` augmentation for all e2e stub globals
 - `src/lib/spark/createSparkStudioRenderer.ts` — `RENDERER_SETTERS` exhaustive map, `setRendererField()` with key/value correlation
+- `src/lib/spark/SparkControls.ts` — `createDefaultSettings()` complete typed literal
 - `src/lib/studio/spark-controls/SparkControlsExtension.svelte` — `setSparkField()` typed setter helper
-- `tests/unit/testHelpers.ts` — narrow mock interfaces and factories
+- `tests/unit/testHelpers.ts` — narrow mock interfaces and real-instance factories
 
 ## CORS Note
 

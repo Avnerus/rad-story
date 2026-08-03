@@ -3,7 +3,7 @@ import * as THREE from 'three'
 import { SparkRenderer } from '@sparkjsdev/spark'
 import type { SparkRendererOptions } from '@sparkjsdev/spark'
 import { createSparkStudioRenderer } from '$lib/spark/createSparkStudioRenderer'
-import { makeMockRenderer, makeMockScene, makeMockSplatMesh, makeMockSparkRenderer } from './testHelpers'
+import { makeMockRenderer, makeMockScene, makeMockSparkRenderer } from './testHelpers'
 
 /** Base Spark options used by most tests. */
 function makeBaseOptions(renderer: THREE.WebGLRenderer): SparkRendererOptions {
@@ -158,8 +158,8 @@ describe('createSparkStudioRenderer', () => {
       const editorR = handle.editorRenderer!
       const realR = handle.realRenderer!
 
-      const mockMesh = makeMockSplatMesh()
-      const lodData = { lodId: 1, numSplats: 100, indices: new Uint32Array(100), texture: {} as THREE.DataTexture }
+      const mockMesh = new THREE.Object3D()
+      const lodData = { lodId: 1, numSplats: 100, indices: new Uint32Array(100), texture: new THREE.DataTexture(new Uint8Array(4), 1, 1) }
       realR.lodInstances.set(mockMesh, lodData)
       editorR.lodInstances.clear()
 
@@ -244,8 +244,8 @@ describe('createSparkStudioRenderer', () => {
       const editorR = handle.editorRenderer!
       const realR = handle.realRenderer!
 
-      const mockMesh = makeMockSplatMesh()
-      const lodData = { lodId: 42, numSplats: 200, indices: new Uint32Array(200), texture: {} as THREE.DataTexture }
+      const mockMesh = new THREE.Object3D()
+      const lodData = { lodId: 42, numSplats: 200, indices: new Uint32Array(200), texture: new THREE.DataTexture(new Uint8Array(4), 1, 1) }
       realR.lodInstances.set(mockMesh, lodData)
       editorR.lodInstances.clear()
 
