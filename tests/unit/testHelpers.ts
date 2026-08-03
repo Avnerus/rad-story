@@ -13,17 +13,29 @@ import * as THREE from 'three'
 import { SparkRenderer } from '@sparkjsdev/spark'
 import { vi } from 'vitest'
 
-/** Minimal WebGLRenderer shape consumed by SparkRenderer construction. */
-export interface MockWebGLRenderer {
-  render: ReturnType<typeof vi.fn>
-  domElement: HTMLCanvasElement
-  setSize: ReturnType<typeof vi.fn>
-  setPixelRatio: ReturnType<typeof vi.fn>
-  setClearColor: ReturnType<typeof vi.fn>
-  setScissorTest: ReturnType<typeof vi.fn>
-  setScissor: ReturnType<typeof vi.fn>
-  setViewport: ReturnType<typeof vi.fn>
-  getDrawingBufferSize: ReturnType<typeof vi.fn>
+/**
+ * Narrow mock: pick the WebGLRenderer members that SparkRenderer reads
+ * (methods and domElement) so the mock structurally overlaps with
+ * THREE.WebGLRenderer. The non-method properties (info, capabilities, xr)
+ * are declared as narrow test shapes because their real Three.js types
+ * are complex class instances not needed by the tests.
+ *
+ * The Pick creates legitimate structural overlap so a single direct
+ * assertion to THREE.WebGLRenderer is accepted by the compiler.
+ */
+export interface MockWebGLRenderer
+  extends Pick<
+    THREE.WebGLRenderer,
+    | 'render'
+    | 'domElement'
+    | 'setSize'
+    | 'setPixelRatio'
+    | 'setClearColor'
+    | 'setScissorTest'
+    | 'setScissor'
+    | 'setViewport'
+    | 'getDrawingBufferSize'
+  > {
   info: { render: { frame: number } }
   capabilities: { maxTextureSize: number }
   xr: { isPresenting: boolean }
@@ -60,7 +72,7 @@ export function createMockRenderer(): MockWebGLRenderer {
  * reads during construction and the test exercises.
  */
 export function asWebGLRendererForSparkTest(mock: MockWebGLRenderer): THREE.WebGLRenderer {
-  return mock as unknown as THREE.WebGLRenderer
+  return mock as THREE.WebGLRenderer
 }
 
 /**

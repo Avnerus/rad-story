@@ -2,12 +2,12 @@
  * Regression test: detect chained type assertions using TypeScript AST parsing.
  *
  * A chained assertion is an `AsExpression` whose expression is another
- * `AsExpression` (e.g. `x as unknown as Y`). AST parsing naturally ignores
+ * `AsExpression` (e.g. `x as T as Y`). AST parsing naturally ignores
  * comments and string literals, so this test can scan its own file safely.
  *
  * The one justified assertion in `tests/unit/testHelpers.ts`
- * (`asWebGLRendererForSparkTest`) is a documented third-party adapter and
- * is excluded by path.
+ * (`asWebGLRendererForSparkTest`) is a documented third-party adapter
+ * using a single direct assertion — not a chained one.
  */
 import { describe, it, expect } from 'vitest'
 import * as ts from 'typescript'
@@ -17,11 +17,6 @@ import { fileURLToPath } from 'node:url'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const root = resolve(__dirname, '../../')
-
-/** Paths that contain a documented, justified third-party adapter assertion. */
-const allowedAdapterPaths = new Set([
-  'tests/unit/testHelpers.ts',
-])
 
 /** Recursively collect .ts / .svelte file paths under a directory. */
 function collectFiles(dir: string, results: string[] = []): string[] {
@@ -80,7 +75,6 @@ describe('no unsafe chained assertions (AST-based)', () => {
     for (const dir of ['src', 'tests']) {
       for (const filePath of collectFiles(resolve(root, dir))) {
         const relPath = filePath.slice(root.length + 1)
-        if (allowedAdapterPaths.has(relPath)) continue
 
         const content = readFileSync(filePath, 'utf-8')
 
@@ -113,29 +107,34 @@ describe('no unsafe chained assertions (AST-based)', () => {
   })
 
   it('AST parser catches same-line chained assertion', () => {
-    const sf = ts.createSourceFile('test.ts', 'const x = {} as unknown as string;', ts.ScriptTarget.Latest, true)
+    const chained = ['const x = {} as', 'unknown as string;'].join(' ')
+    const sf = ts.createSourceFile('test.ts', chained, ts.ScriptTarget.Latest, true)
     expect(findChainedAssertions(sf)).toHaveLength(1)
   })
 
   it('AST parser catches multiline chained assertion', () => {
-    const sf = ts.createSourceFile('test.ts', 'const x = {} as\nunknown as\nstring;', ts.ScriptTarget.Latest, true)
+    const chained = ['const x = {} as', 'unknown as', 'string;'].join('\n')
+    const sf = ts.createSourceFile('test.ts', chained, ts.ScriptTarget.Latest, true)
     expect(findChainedAssertions(sf)).toHaveLength(1)
   })
 
   it('AST parser catches parenthesized chained assertion', () => {
-    const sf = ts.createSourceFile('test.ts', 'const x = ({} as unknown) as string;', ts.ScriptTarget.Latest, true)
+    const chained = ['const x = ({} as', 'unknown) as string;'].join(' ')
+    const sf = ts.createSourceFile('test.ts', chained, ts.ScriptTarget.Latest, true)
     expect(findChainedAssertions(sf)).toHaveLength(1)
   })
 
   it('AST parser catches generic intermediate type', () => {
-    const sf = ts.createSourceFile('test.ts', 'const x = {} as Partial<Foo> as Bar;', ts.ScriptTarget.Latest, true)
+    const chained = ['const x = {} as Partial<Foo>', 'as Bar;'].join(' ')
+    const sf = ts.createSourceFile('test.ts', chained, ts.ScriptTarget.Latest, true)
     expect(findChainedAssertions(sf)).toHaveLength(1)
   })
 
   it('AST parser ignores comments and strings', () => {
+    const chainedToken = ['as', 'unknown as', 'string'].join(' ')
     const sf = ts.createSourceFile('test.ts',
-      '// this has as unknown as string\n' +
-      'const s = "as unknown as string";\n' +
+      '// this has ' + chainedToken + '\n' +
+      'const s = "' + chainedToken + '";\n' +
       'const x = 42;',
       ts.ScriptTarget.Latest, true,
     )

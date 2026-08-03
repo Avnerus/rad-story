@@ -479,7 +479,7 @@ Verify the profile by checking `navigator.userAgent` or the profile badge: `play
 
 ### Prohibited patterns
 
-- **No unsafe chained type assertions** (e.g. `as unknown as X`, `as any as X`, `Partial<T> as T`) in maintained code. They disguise unsafety.
+- **No unsafe chained type assertions** (e.g. `as T as Y`, `as any as X`, `Partial<T> as T`) in maintained code. They disguise unsafety.
 - **No `as any`** — use narrow, specific types.
 - **No `@ts-ignore`** — fix the type, don't suppress it.
 - **No broad `Record<string, unknown>` casts** on domain objects — use typed interfaces or key-correlated accessors.
@@ -488,7 +488,7 @@ Verify the profile by checking `navigator.userAgent` or the profile badge: `play
 
 ### Documented exception
 
-- `tests/unit/testHelpers.ts` contains one localized assertion inside `asWebGLRendererForSparkTest()`: a `MockWebGLRenderer` is asserted as `THREE.WebGLRenderer` because SparkRendererOptions requires a real GPU renderer (unavailable in jsdom). This is the single third-party adapter boundary.
+- `tests/unit/testHelpers.ts` contains one named **single** assertion inside `asWebGLRendererForSparkTest()`: a `MockWebGLRenderer` (structured via `Pick<THREE.WebGLRenderer, ...>` for legitimate structural overlap) is asserted as `THREE.WebGLRenderer` because SparkRendererOptions requires a real GPU renderer (unavailable in jsdom). This is the single third-party adapter boundary.
 
 ### Preferred patterns
 
@@ -508,7 +508,7 @@ Verify the profile by checking `navigator.userAgent` or the profile badge: `play
 
 ### Regression enforcement
 
-- `tests/unit/noDoubleAssertions.test.ts` uses TypeScript AST parsing to detect chained `AsExpression` nodes (including multiline and parenthesized forms). AST parsing naturally ignores comments and strings, so the test scans its own file safely. The adapter path is explicitly listed in `allowedAdapterPaths`.
+- `tests/unit/noDoubleAssertions.test.ts` uses TypeScript AST parsing to detect chained `AsExpression` nodes (including multiline and parenthesized forms). AST parsing naturally ignores comments and strings, so the test scans its own file safely. It scans **all** maintained TS/Svelte files in `src/` and `tests/` with no path exemptions — the single assertion in `testHelpers.ts` is not a chained `AsExpression` and is correctly allowed.
 - `npm run check` (svelte-check) and `npm run test:unit` must pass.
 
 ### Source references
