@@ -4,7 +4,6 @@
   import { useThrelte, useTask } from '@threlte/core'
   import { CameraHelper, PerspectiveCamera, Object3D } from 'three'
   import { isScrollAnimator } from './transactionGuard'
-  import type { ScrollAnimatorLike } from '../../types/scrollAnimator'
   import { findAllDescendantCameras } from './descendantCameraResolver'
 
   /**
@@ -80,8 +79,8 @@
     // Only create helper for opted-in ScrollAnimators
     if (!isScrollAnimator(obj)) return
 
-    const animator = obj as ScrollAnimatorLike
-    if (!animator.showChildCameraFrustumWhenSelected) return
+    // obj is narrowed to ScrollAnimatorLike by isScrollAnimator above
+    if (!obj.showChildCameraFrustumWhenSelected) return
 
     // Exact-one contract: resolve ALL descendant cameras
     const cameras = findAllDescendantCameras(obj)

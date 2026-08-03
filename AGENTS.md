@@ -479,39 +479,41 @@ Verify the profile by checking `navigator.userAgent` or the profile badge: `play
 
 ### Prohibited patterns
 
-- **No `as unknown as X` double assertions** in maintained code (`src/`, `tests/`). They disguise unsafety and are the primary anti-pattern this project eliminates.
+- **No unsafe chained type assertions** (e.g. `as unknown as X`, `as any as X`, `Partial<T> as T`) in maintained code. They disguise unsafety.
 - **No `as any`** — use narrow, specific types.
 - **No `@ts-ignore`** — fix the type, don't suppress it.
 - **No broad `Record<string, unknown>` casts** on domain objects — use typed interfaces or key-correlated accessors.
+- **No fabricated full-class mocks** — a `{}` presented as `SplatMesh` or `SparkRenderer` is not a sound test double.
 
 ### Preferred patterns
 
 1. **Browser/e2e diagnostic globals:** Use the shared `Window` augmentation in `src/lib/types/spark-stub-globals.d.ts`. All stub globals (`__spark_stub`, `__spark_stub_diagnostics`, `__stub_scene_uuid`, etc.) are declared there with lifecycle-accurate optionality. Access them directly as `window.__spark_stub_diagnostics` — no casts needed.
 
-2. **Branded Three.js objects (ScrollAnimator):** Use the reusable type guard `isScrollAnimator(obj)` from `src/lib/types/scrollAnimator.ts`. It narrows to `ScrollAnimatorLike` (structural interface with `keyframes`, `applyScrollPercentage`, `showChildCameraFrustumWhenSelected`). When svelte-check cannot follow the type predicate, cast to `ScrollAnimatorLike` after the guard — a single narrow assertion, not `as unknown`.
+2. **Branded Three.js objects (ScrollAnimator):** Use the sound type guard `isScrollAnimator(obj)` from `src/lib/types/scrollAnimator.ts`. It accepts `Object3D` (from `scene.traverse`/Studio selection) or `unknown` (from Studio transactions), validates the brand flag, callable `applyScrollPercentage`, and `keyframes` array, then narrows to `ScrollAnimatorLike`. After the guard, no further cast is needed — the narrowed type provides all promised properties.
 
-3. **Dynamic scene registry:** `import.meta.glob` is typed as `Record<string, { default: ComponentType }>`. Access `mod.default` directly — no double casts.
+3. **Dynamic scene registry:** Use `import.meta.glob<SceneModule>(pattern, { eager: true })` where `SceneModule` declares `{ default: ComponentType }`. Access `mod.default` directly.
 
-4. **Heterogeneous Spark settings writes:** Use `SparkSettings` key correlation. For individual field setters on `SparkControls`, use the `setSparkField()` helper (typed generic `K extends keyof SparkSettings`, accepts `unknown` value). For `SparkRenderer` fields, use the `SparkRendererWithSettings` intersection type and `setRendererField()` helper.
+4. **Heterogeneous Spark settings writes:** For `SparkControls`, use the `setSparkField<K extends keyof SparkSettings>()` helper — each setter accepts `unknown` and validates internally. For `SparkRenderer`, use the exhaustive `RENDERER_SETTERS` map in `createSparkStudioRenderer.ts` — each entry correlates a key with its correct value type and handles the `lodSplatCount` null → undefined conversion explicitly.
 
-5. **Third-party Spark/Three boundaries:** When a library type is missing a property that exists at runtime, create a narrow intersection type (e.g., `SparkRendererWithSettings extends SparkRenderer, SparkSettings`) rather than casting to `Record<string, unknown>`.
+5. **Default/baseline construction:** Build from `SETTINGS_KEYS.map(key => [key, FIELD_DEFS[key].default])` via `Object.fromEntries()` — no union-valued record assertions.
 
-6. **Test doubles:** Use `Partial<T> as T` for mock objects (single assertion). For deliberately invalid inputs, use `@ts-expect-error` with a comment explaining the intent.
+6. **Test doubles:** Define narrow structural interfaces (`MockWebGLRenderer`, `MockScene`) in `tests/unit/testHelpers.ts` describing exactly what the unit under test consumes. Use real `Object3D` instances with `Object.defineProperty` for HMR-safe branded objects. For deliberately invalid inputs, use `@ts-expect-error` with a comment.
 
 7. **SplatMesh inheritance:** `SplatMesh extends SplatGenerator extends Object3D`. Access `wrapper.children.includes(mesh)` directly — no cast needed.
 
 ### Regression enforcement
 
-- `rg -n '\bas unknown\b' src tests` must return no code matches (comments are OK).
-- `tests/unit/noDoubleAssertions.test.ts` runs this check as part of the unit test suite.
+- `rg -n '\bas unknown\b' src tests` must return zero matches (including comments).
+- `tests/unit/noDoubleAssertions.test.ts` runs a filesystem-based check as part of the unit test suite (forbids the token sequence without containing it).
 - `npm run check` (svelte-check) and `npm run test:unit` must pass.
 
 ### Source references
 
-- `src/lib/types/scrollAnimator.ts` — `ScrollAnimatorLike` interface and `isScrollAnimator()` type guard
+- `src/lib/types/scrollAnimator.ts` — `ScrollAnimatorLike` interface and sound `isScrollAnimator()` type guard
 - `src/lib/types/spark-stub-globals.d.ts` — `Window` augmentation for all e2e stub globals
-- `src/lib/spark/createSparkStudioRenderer.ts` — `SparkRendererWithSettings` intersection, `setRendererField()` helper
+- `src/lib/spark/createSparkStudioRenderer.ts` — `RENDERER_SETTERS` exhaustive map, `setRendererField()` with key/value correlation
 - `src/lib/studio/spark-controls/SparkControlsExtension.svelte` — `setSparkField()` typed setter helper
+- `tests/unit/testHelpers.ts` — narrow mock interfaces and factories
 
 ## CORS Note
 

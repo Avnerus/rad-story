@@ -37,7 +37,11 @@ export function validateSceneName(raw: string): string | null {
 /**
  * Build the scene registry from Vite's static glob.
  */
-const sceneModules = import.meta.glob('./[a-z0-9_]*.svelte', { eager: true }) as Record<string, { default: ComponentType }>
+interface SceneModule {
+  default: ComponentType
+}
+
+const sceneModules = import.meta.glob<SceneModule>('./[a-z0-9_]*.svelte', { eager: true })
 
 /**
  * Map from normalized scene name → component.

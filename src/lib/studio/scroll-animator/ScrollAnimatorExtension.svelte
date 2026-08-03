@@ -124,26 +124,25 @@
   function handleInsertKeyframe(): void {
     const animator = uiState.animator
     if (!animator || !isScrollAnimator(animator)) return
-    const sa = animator as ScrollAnimatorLike
     if (!transactions.vitePluginEnabled) return
 
     const normalized = clampPercentage(currentPercentage)
 
     // Read local position and Euler rotation from the animator
     const pos = [
-      Math.round(sa.position.x * 10000) / 10000,
-      Math.round(sa.position.y * 10000) / 10000,
-      Math.round(sa.position.z * 10000) / 10000,
+      Math.round(animator.position.x * 10000) / 10000,
+      Math.round(animator.position.y * 10000) / 10000,
+      Math.round(animator.position.z * 10000) / 10000,
     ] as [number, number, number]
 
-    const euler = sa.rotation.toArray()
+    const euler = animator.rotation.toArray()
     const rot = [
       Math.round(euler[0] * 10000) / 10000,
       Math.round(euler[1] * 10000) / 10000,
       Math.round(euler[2] * 10000) / 10000,
     ] as [number, number, number]
 
-    const currentKfs = sa.keyframes ?? []
+    const currentKfs = animator.keyframes ?? []
     const newKeyframes = upsertKeyframe(currentKfs, normalized, pos, rot)
 
     // Commit as a transaction with source sync
@@ -166,10 +165,9 @@
   function handleDeleteKeyframe(scroll: number): void {
     const animator = uiState.animator
     if (!animator || !isScrollAnimator(animator)) return
-    const sa = animator as ScrollAnimatorLike
     if (!transactions.vitePluginEnabled) return
 
-    const currentKfs = sa.keyframes ?? []
+    const currentKfs = animator.keyframes ?? []
     const newKeyframes = deleteKeyframe(currentKfs, scroll)
 
     const historicKeyframes = canonicalizeKeyframes(currentKfs)

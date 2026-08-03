@@ -329,11 +329,9 @@ export class SparkControls extends Object3D {
    * Create a settings object with all field defaults.
    */
   createDefaultSettings(): SparkSettings {
-    const s = {} as Record<keyof SparkSettings, SparkSettings[keyof SparkSettings]>
-    for (const [key, def] of Object.entries(FIELD_DEFS)) {
-      s[key as keyof SparkSettings] = def.default as SparkSettings[keyof SparkSettings]
-    }
-    return s as SparkSettings
+    return Object.fromEntries(
+      SETTINGS_KEYS.map((key) => [key, FIELD_DEFS[key].default]),
+    ) as SparkSettings
   }
 
   /**

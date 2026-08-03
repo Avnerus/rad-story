@@ -5,7 +5,6 @@
   import { ScrollTrigger } from 'gsap/ScrollTrigger'
   import { gsap } from 'gsap'
   import { isScrollAnimator } from '$lib/studio/scroll-animator/transactionGuard'
-  import type { ScrollAnimatorLike } from '$lib/types/scrollAnimator'
   import { scrollAnimatorRuntime } from '$lib/studio/scroll-animator/scrollAnimatorRuntime'
   import { activeSparkControlsRuntime } from '$lib/studio/spark-controls/activeSparkControlsRuntime'
   import type { SparkControls } from '$lib/spark/SparkControls'
@@ -64,7 +63,7 @@
     if (!scene) return
     scene.traverse((object: Object3D) => {
       if (isScrollAnimator(object)) {
-        (object as ScrollAnimatorLike).applyScrollPercentage(percent)
+        object.applyScrollPercentage(percent)
       }
     })
   }

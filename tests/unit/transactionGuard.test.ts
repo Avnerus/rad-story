@@ -24,11 +24,35 @@ describe('isScrollAnimator', () => {
   })
 
   it('returns true for structurally matching objects (HMR-safe)', () => {
+    // Must provide all properties validated by the sound guard:
+    // uuid (Object3D brand), isScrollAnimator, applyScrollPercentage, keyframes (array)
     const fake = {
+      uuid: 'fake-animator',
       isScrollAnimator: true,
       applyScrollPercentage: () => {},
+      keyframes: [],
     }
     expect(isScrollAnimator(fake)).toBe(true)
+  })
+
+  it('returns false for branded object missing keyframes array', () => {
+    const fake = {
+      uuid: 'fake',
+      isScrollAnimator: true,
+      applyScrollPercentage: () => {},
+      // keyframes missing
+    }
+    expect(isScrollAnimator(fake)).toBe(false)
+  })
+
+  it('returns false for branded object with non-array keyframes', () => {
+    const fake = {
+      uuid: 'fake',
+      isScrollAnimator: true,
+      applyScrollPercentage: () => {},
+      keyframes: 'not-an-array',
+    }
+    expect(isScrollAnimator(fake)).toBe(false)
   })
 })
 

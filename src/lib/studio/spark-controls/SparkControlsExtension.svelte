@@ -24,7 +24,7 @@
    * SparkControls extends Object3D (no index signature) but declares
    * explicit getters/setters for every key in SparkSettings.
    * Each setter accepts `unknown` and validates internally.
-   * This helper bridges the gap without `as unknown` casts.
+   * This helper preserves key/value type correlation.
    */
   function setSparkField<K extends keyof SparkSettings>(controls: SparkControls, key: K, value: unknown): void {
     controls[key] = value

@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest'
 import { Object3D, PerspectiveCamera } from 'three'
 import { createSceneObjects } from '$lib/scenes/sceneObjects'
 import type { DeviceProfileName } from '$lib/types'
-import { ScrollAnimator } from '$lib/spark/ScrollAnimator'
 import type { ScrollKeyframe } from '$lib/spark/scrollAnimation'
 
 /** Active profile name for testing. */
@@ -95,9 +94,9 @@ describe('createSceneObjects isolation', () => {
     const b = createSceneObjects(testProfileName)
 
     const aKf: ScrollKeyframe[] = [{ scroll: 50, position: [1, 2, 3], rotation: [0, 0, 0] }]
-    ;(a.cameraAnimator as ScrollAnimator).keyframes = aKf
-    expect((a.cameraAnimator as ScrollAnimator).keyframes).toHaveLength(1)
-    expect((b.cameraAnimator as ScrollAnimator).keyframes).toHaveLength(0)
+    a.cameraAnimator.keyframes = aKf
+    expect(a.cameraAnimator.keyframes).toHaveLength(1)
+    expect(b.cameraAnimator.keyframes).toHaveLength(0)
   })
 
   it('mutating wrapper position does not affect another wrapper', () => {

@@ -2,7 +2,7 @@
  * E2e test helpers for accessing Spark-stub diagnostic globals.
  *
  * Uses the Window augmentation from `src/lib/types/spark-stub-globals.d.ts`
- * to avoid `as unknown as` casts when reading stub diagnostics.
+ * so direct property access is type-safe without casts.
  */
 import type { Page } from '@playwright/test'
 import type { StubDiagnostics, CameraFrustumDiagnostic } from '$lib/types/spark-stub-globals'

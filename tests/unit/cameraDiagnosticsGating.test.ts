@@ -21,7 +21,7 @@ describe('camera diagnostics gating', () => {
     it('does not call updateDebugState in the ScrollTrigger hot path', () => {
       // applyScrollToAllAnimators should not reference updateDebugState
       const applyFnMatch = sceneRuntimeSource.match(
-        /function applyScrollToAllAnimators[\s\S]*?^  }/m,
+        /function applyScrollToAllAnimators[\s\S]*?^ {2}}/m,
       )
       expect(applyFnMatch).not.toBeNull()
       expect(applyFnMatch![0]).not.toContain('updateDebugState')
