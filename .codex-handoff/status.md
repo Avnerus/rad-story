@@ -9,7 +9,7 @@ Fixed all 4 remaining discrepancies between the typing claims and the actual imp
 ### Production typing
 - `src/lib/spark/SparkControls.ts` — Generic `FieldDef<T>` with `satisfies FieldDefs`; single `buildSparkDefaults()` function; `createDefaultSettings()` reuses it
 - `src/lib/spark/deviceProfile.ts` — `buildBaseline()` reuses `buildSparkDefaults()` with `{ ...defaults, ...overrides }`
-- `src/lib/types/scrollAnimator.ts` — Cast-free `isScrollAnimator` using `Reflect.has`/`Reflect.get`
+- `src/lib/types/scrollAnimator.ts` — Cast-free `isScrollAnimator` using `'prop' in obj` narrowing (Object3D's `userData: Record<string, any>` permits direct access after `in` checks)
 
 ### Tests
 - `tests/unit/testHelpers.ts` — `createMockRenderer()` returns narrow `MockWebGLRenderer`; `asWebGLRendererForSparkTest()` named adapter with single assertion; `makeMockScene()` returns real `THREE.Scene`; `makeMockRenderer()` convenience wrapper
@@ -25,7 +25,7 @@ Fixed all 4 remaining discrepancies between the typing claims and the actual imp
 | 1 | `makeMockRenderer()` returns partial object asserted as `MockWebGLRenderer & THREE.WebGLRenderer` | `createMockRenderer()` returns `MockWebGLRenderer` (no assertion). Single assertion inside named `asWebGLRendererForSparkTest()` adapter. `makeMockScene()` returns real `THREE.Scene` — no intersection. |
 | 2 | 22 per-field `as number`/`as boolean` assertions in defaults | Generic `FieldDef<T extends number \| boolean \| null>` with `satisfies FieldDefs`. Single `buildSparkDefaults()` returns `SparkSettings` with compiler-checked correlation. Both consumers reuse it. |
 | 3 | `noDoubleAssertions.test.ts` excludes self, skips comments, narrow regex | AST-based: uses TypeScript `ts.createSourceFile` + `ts.isAsExpression` visitor. Catches multiline/parenthesized/generic chained assertions. Ignores comments/strings naturally. Scans own file. Adapter path in `allowedAdapterPaths`. |
-| 4 | `isScrollAnimator` casts `obj` to `Record<string, unknown>` | Uses `Reflect.has(obj, 'key')` and `Reflect.get(obj, 'key')` — no record cast. |
+| 4 | `isScrollAnimator` used `Record<string, unknown>` cast | Uses `'prop' in obj` narrowing followed by direct property access — no record cast. Works because Object3D's `userData: Record<string, any>` permits indexed access after `in` checks. |
 
 ## Assertion inventory
 
@@ -52,7 +52,7 @@ All other code is free of `as unknown`, `as any`, `Partial<T> as T`, `{} as X`, 
 
 - [x] `FIELD_DEFS` statically correlates every key with `SparkSettings[K]` via `satisfies FieldDefs`
 - [x] Exactly one shared `buildSparkDefaults()`; both consumers reuse it without assertions
-- [x] `isScrollAnimator` uses `Reflect.has`/`Reflect.get` — no broad record cast
+- [x] `isScrollAnimator` uses `'prop' in obj` narrowing — no broad record cast
 - [x] No helper return type falsely intersects a partial mock with a full class
 - [x] One named adapter `asWebGLRendererForSparkTest()` with documented justification
 - [x] Real `Scene` fixtures require no asserted intersection

@@ -494,7 +494,7 @@ Verify the profile by checking `navigator.userAgent` or the profile badge: `play
 
 1. **Browser/e2e diagnostic globals:** Use the shared `Window` augmentation in `src/lib/types/spark-stub-globals.d.ts`. All stub globals (`__spark_stub`, `__spark_stub_diagnostics`, `__stub_scene_uuid`, etc.) are declared there with lifecycle-accurate optionality. Access them directly as `window.__spark_stub_diagnostics` — no casts needed.
 
-2. **Branded Three.js objects (ScrollAnimator):** Use the cast-free type guard `isScrollAnimator(obj: Object3D)` from `src/lib/types/scrollAnimator.ts`. It uses `Reflect.has`/`Reflect.get` to inspect branded properties without any record cast. For Studio transaction objects (`unknown`), use `obj instanceof Object3D && isScrollAnimator(obj)` before calling the guard.
+2. **Branded Three.js objects (ScrollAnimator):** Use the cast-free type guard `isScrollAnimator(obj: Object3D)` from `src/lib/types/scrollAnimator.ts`. It uses `'prop' in obj` narrowing followed by direct property access (Object3D's `userData: Record<string, any>` permits indexed access after `in` checks) — no record cast needed. For Studio transaction objects (`unknown`), use `obj instanceof Object3D && isScrollAnimator(obj)` before calling the guard.
 
 3. **Dynamic scene registry:** Use `import.meta.glob<SceneModule>(pattern, { eager: true })` where `SceneModule` declares `{ default: ComponentType }`. Access `mod.default` directly.
 
@@ -513,7 +513,7 @@ Verify the profile by checking `navigator.userAgent` or the profile badge: `play
 
 ### Source references
 
-- `src/lib/types/scrollAnimator.ts` — cast-free `isScrollAnimator(obj: Object3D)` using Reflect
+- `src/lib/types/scrollAnimator.ts` — cast-free `isScrollAnimator(obj: Object3D)` using `in` narrowing
 - `src/lib/types/spark-stub-globals.d.ts` — `Window` augmentation for all e2e stub globals
 - `src/lib/spark/SparkControls.ts` — generic `FieldDef<T>`, `satisfies FieldDefs`, `buildSparkDefaults()`
 - `src/lib/spark/createSparkStudioRenderer.ts` — `RENDERER_SETTERS` exhaustive map
