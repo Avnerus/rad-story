@@ -6,11 +6,7 @@
 
   let { children }: { children?: Snippet } = $props()
   import type { ScrollKeyframe } from '$lib/spark/scrollAnimation'
-
-  /** Structural type for accessing ScrollAnimator properties via brand. */
-  interface ScrollAnimatorLike extends Object3D {
-    keyframes: ScrollKeyframe[]
-  }
+  import type { ScrollAnimatorLike } from '../../types/scrollAnimator'
 
   import {
     clampPercentage,
@@ -41,7 +37,7 @@
 
   // Reactive derived values from selection
   const selectedObjects = $derived(objectSelection.selectedObjects ?? [])
-  const singleAnimator = $derived<Object3D | null>(
+  const singleAnimator = $derived<ScrollAnimatorLike | null>(
     selectedObjects.length === 1 && isScrollAnimator(selectedObjects[0])
       ? selectedObjects[0]
       : null,
@@ -74,9 +70,9 @@
     const rev = revision // re-run on transaction revision bump
     void rev
     uiState.animator = sa
-    if (sa && isScrollAnimator(sa)) {
+    if (sa) {
       // Read keyframes via the getter (always returns a deep copy)
-      uiState.keyframes = (sa as unknown as ScrollAnimatorLike).keyframes ?? []
+      uiState.keyframes = sa.keyframes ?? []
     } else {
       uiState.keyframes = []
     }
@@ -128,25 +124,26 @@
   function handleInsertKeyframe(): void {
     const animator = uiState.animator
     if (!animator || !isScrollAnimator(animator)) return
+    const sa = animator as ScrollAnimatorLike
     if (!transactions.vitePluginEnabled) return
 
     const normalized = clampPercentage(currentPercentage)
 
     // Read local position and Euler rotation from the animator
     const pos = [
-      Math.round(animator.position.x * 10000) / 10000,
-      Math.round(animator.position.y * 10000) / 10000,
-      Math.round(animator.position.z * 10000) / 10000,
+      Math.round(sa.position.x * 10000) / 10000,
+      Math.round(sa.position.y * 10000) / 10000,
+      Math.round(sa.position.z * 10000) / 10000,
     ] as [number, number, number]
 
-    const euler = animator.rotation.toArray()
+    const euler = sa.rotation.toArray()
     const rot = [
       Math.round(euler[0] * 10000) / 10000,
       Math.round(euler[1] * 10000) / 10000,
       Math.round(euler[2] * 10000) / 10000,
     ] as [number, number, number]
 
-    const currentKfs = (animator as unknown as ScrollAnimatorLike).keyframes ?? []
+    const currentKfs = sa.keyframes ?? []
     const newKeyframes = upsertKeyframe(currentKfs, normalized, pos, rot)
 
     // Commit as a transaction with source sync
@@ -169,9 +166,10 @@
   function handleDeleteKeyframe(scroll: number): void {
     const animator = uiState.animator
     if (!animator || !isScrollAnimator(animator)) return
+    const sa = animator as ScrollAnimatorLike
     if (!transactions.vitePluginEnabled) return
 
-    const currentKfs = (animator as unknown as ScrollAnimatorLike).keyframes ?? []
+    const currentKfs = sa.keyframes ?? []
     const newKeyframes = deleteKeyframe(currentKfs, scroll)
 
     const historicKeyframes = canonicalizeKeyframes(currentKfs)

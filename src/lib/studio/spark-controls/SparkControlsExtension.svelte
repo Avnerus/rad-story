@@ -19,6 +19,17 @@
     help?: string
   }
 
+  /**
+   * Set a SparkControls field through its typed individual setter.
+   * SparkControls extends Object3D (no index signature) but declares
+   * explicit getters/setters for every key in SparkSettings.
+   * Each setter accepts `unknown` and validates internally.
+   * This helper bridges the gap without `as unknown` casts.
+   */
+  function setSparkField<K extends keyof SparkSettings>(controls: SparkControls, key: K, value: unknown): void {
+    controls[key] = value
+  }
+
   const FIELD_META: FieldMeta[] = [
     { key: 'lodSplatScale', label: 'LOD Splat Scale', type: 'number', help: 'LOD splat budget multiplier' },
     { key: 'lodRenderScale', label: 'LOD Render Scale', type: 'number', help: 'Min projected LOD splat size' },
@@ -233,14 +244,13 @@
     }
 
     const key = meta.key
-    const ctrl = controls as unknown as Record<string, unknown>
 
     // Capture historic snapshot BEFORE mutation (onChange fires synchronously)
     const historicSettings = controls.settings
     const historicProfileOverrides = controls.profileSettings
 
-    // Validate through the setter (fires onChange → refreshes uiState.settings)
-    ctrl[key] = raw
+    // Validate through the individual setter (fires onChange → refreshes uiState.settings)
+    setSparkField(controls, key, raw)
 
     // Capture new snapshot AFTER mutation (includes coupled invariant changes)
     const newSettings = controls.settings
@@ -270,14 +280,13 @@
     if (!controls) return
 
     const key = meta.key
-    const ctrl = controls as unknown as Record<string, unknown>
 
     // Capture historic snapshot BEFORE mutation (onChange fires synchronously)
     const historicSettings = controls.settings
     const historicProfileOverrides = controls.profileSettings
 
-    // Validate through the setter (fires onChange → refreshes uiState.settings)
-    ctrl[key] = checked
+    // Validate through the individual setter (fires onChange → refreshes uiState.settings)
+    setSparkField(controls, key, checked)
 
     // Capture new snapshot AFTER mutation (includes coupled invariant changes)
     const newSettings = controls.settings

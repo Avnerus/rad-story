@@ -1062,7 +1062,7 @@ test.describe('RAD Story', () => {
 
     // Capture mesh count before reload
     const beforeReload = await page.evaluate(() => {
-      const d = (window as unknown as Record<string, unknown>).__spark_stub_diagnostics as {
+      const d = window.__spark_stub_diagnostics as {
         meshes: unknown[];
         pagers: { disposed: boolean }[];
       }
@@ -1088,7 +1088,7 @@ test.describe('RAD Story', () => {
 
     // Reload should have created new mesh and disposed old pager
     const afterReload = await page.evaluate(() => {
-      const d = (window as unknown as Record<string, unknown>).__spark_stub_diagnostics as {
+      const d = window.__spark_stub_diagnostics as {
         meshes: unknown[];
         pagers: { disposed: boolean }[];
       }
@@ -1159,7 +1159,7 @@ test.describe('RAD Story', () => {
     await page.waitForTimeout(1000)
 
     const isStub = await page.evaluate(() => {
-      return (window as unknown as Record<string, unknown>).__spark_stub === true
+      return window.__spark_stub === true
     })
     expect(isStub, 'expected Spark stub to be active in e2e build').toBe(true)
   })
@@ -1176,7 +1176,7 @@ test.describe('RAD Story', () => {
     const newCapacity = String(parseInt(originalCapacity) / 2)
 
     // Close activation gate — pager assignment will be withheld
-    await page.evaluate(() => { (window as unknown as Record<string, unknown>).__stubActivationGate = true })
+    await page.evaluate(() => { window.__stubActivationGate = true })
 
     await capacityInput.fill(newCapacity)
     await capacityInput.press('Enter')
@@ -1189,7 +1189,7 @@ test.describe('RAD Story', () => {
     expect(reloadingWhileGated, 'reload progress visible while gate closed').toBe(true)
 
     // Release gate — pager assignment proceeds
-    await page.evaluate(() => { delete (window as unknown as Record<string, unknown>).__stubActivationGate })
+    await page.evaluate(() => { delete window.__stubActivationGate })
     await page.waitForTimeout(3000)
 
     // Progress must clear after gate release
@@ -1215,7 +1215,7 @@ test.describe('RAD Story', () => {
 
     // Capture pre-reload exact IDs
     const before = await page.evaluate(() => {
-      const d = (window as unknown as Record<string, unknown>).__spark_stub_diagnostics as {
+      const d = window.__spark_stub_diagnostics as {
         meshes: { id: number; disposed: boolean }[];
         pagers: { id: number; disposed: boolean }[];
         drivingPagerId: number;
@@ -1234,7 +1234,7 @@ test.describe('RAD Story', () => {
 
     // Capture post-reload exact IDs
     const after = await page.evaluate((beforeIds) => {
-      const d = (window as unknown as Record<string, unknown>).__spark_stub_diagnostics as {
+      const d = window.__spark_stub_diagnostics as {
         meshes: { id: number; disposed: boolean; paged?: { pager?: { id: number } } }[];
         pagers: { id: number; disposed: boolean; maxSplats: number }[];
         drivingPagerId: number;
@@ -1310,7 +1310,7 @@ test.describe('RAD Story', () => {
 
     // Final generation owns sole active mesh/pager
     const final = await page.evaluate(() => {
-      const d = (window as unknown as Record<string, unknown>).__spark_stub_diagnostics as {
+      const d = window.__spark_stub_diagnostics as {
         pagers: { id: number; disposed: boolean; maxSplats: number }[];
         meshes: { id: number; disposed: boolean; paged?: { pager?: { id: number } } }[];
         drivingPagerId: number;
@@ -1343,7 +1343,7 @@ test.describe('RAD Story', () => {
 
     // Set an unmistakable non-default wrapper transform and capture it
     const wrapperTransform = await page.evaluate(() => {
-      const d = (window as unknown as Record<string, unknown>).__spark_stub_diagnostics as {
+      const d = window.__spark_stub_diagnostics as {
         wrapper: { position: { set: (x: number, y: number, z: number) => void; x: number; y: number; z: number }; rotation: { set: (x: number, y: number, z: number) => void; x: number; y: number; z: number }; scale: { set: (x: number, y: number, z: number) => void; x: number; y: number; z: number } } | null
       }
       const wrapper = d.wrapper
@@ -1378,7 +1378,7 @@ test.describe('RAD Story', () => {
 
     // Unconditionally assert wrapper transform preserved exactly
     const wrapperAfter = await page.evaluate(() => {
-      const d = (window as unknown as Record<string, unknown>).__spark_stub_diagnostics as {
+      const d = window.__spark_stub_diagnostics as {
         wrapper: { position: { x: number; y: number; z: number }; rotation: { x: number; y: number; z: number }; scale: { x: number; y: number; z: number } } | null
       }
       const wrapper = d.wrapper
@@ -1413,7 +1413,7 @@ test.describe('RAD Story', () => {
     const capacityInput = page.locator('input#spark-maxPagedSplats')
 
     // Close activation gate so reload stays in progress
-    await page.evaluate(() => { (window as unknown as Record<string, unknown>).__stubActivationGate = true })
+    await page.evaluate(() => { window.__stubActivationGate = true })
 
     // Trigger reload
     await capacityInput.fill('131072')
@@ -1445,7 +1445,7 @@ test.describe('RAD Story', () => {
     expect(stillReloading, 'reload still in progress after reselect').toBe(true)
 
     // Release gate so reload completes
-    await page.evaluate(() => { delete (window as unknown as Record<string, unknown>).__stubActivationGate })
+    await page.evaluate(() => { delete window.__stubActivationGate })
     await page.waitForTimeout(3000)
 
     // Reload should complete

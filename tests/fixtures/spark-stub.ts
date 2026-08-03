@@ -148,7 +148,7 @@ export class SparkRenderer extends Object3D {
   update(): void {
     if (!this.enableDriveLod || !this.pager || this.pager.disposed) return
     // Test-only gate: withhold pager assignment when gate is closed
-    if ((globalThis as unknown as Record<string, unknown>).__stubActivationGate) return
+    if ((globalThis as Window).__stubActivationGate) return
 
     for (const mesh of _allMeshes) {
       if (mesh.type === 'SplatMesh' && mesh.paged && !mesh.paged.pager) {
@@ -222,16 +222,16 @@ interface StubDiagnostics {
 /** Marker: proves the running build uses the Spark stub. */
 ;(() => {
   if (typeof window !== 'undefined') {
-    ;(window as unknown as Record<string, unknown>).__spark_stub = true
+    window.__spark_stub = true
 
     // Test-only: hook for SparkSplats to register its wrapper
-    ;(window as unknown as Record<string, unknown>).__spark_stub_set_wrapper = (w: Object3D) => {
+    window.__spark_stub_set_wrapper = (w: Object3D) => {
       _testWrapper = w
     }
 
     // Test-only: hook for SceneRuntime to register SparkControls for disposal tracking
     // Also captures the complete settings snapshot at registration time
-    ;(window as unknown as Record<string, unknown>).__spark_stub_register_controls = (ctrl: { uuid: string; settings?: Record<string, unknown> }) => {
+    window.__spark_stub_register_controls = (ctrl: import('$lib/types/spark-stub-globals').SparkControlsStubEntry) => {
       const id = `spark_${++_sparkControlsCounter}`
       ;(ctrl as Record<string, unknown>).__stub_controls_id = id
       _sparkControlsDisposals.set(id, 0)
@@ -242,7 +242,7 @@ interface StubDiagnostics {
     }
 
     // Test-only: hook for SceneRuntime to record a SparkControls disposal
-    ;(window as unknown as Record<string, unknown>).__spark_stub_record_controls_disposal = (ctrl: { uuid: string }) => {
+    window.__spark_stub_record_controls_disposal = (ctrl: import('$lib/types/spark-stub-globals').SparkControlsDisposalEntry) => {
       const id = (ctrl as Record<string, unknown>).__stub_controls_id as string | undefined
       if (id && _sparkControlsDisposals.has(id)) {
         _sparkControlsDisposals.set(id, (_sparkControlsDisposals.get(id) ?? 0) + 1)

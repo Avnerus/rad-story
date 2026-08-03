@@ -13,9 +13,9 @@ import { computeEffectiveSettings as _computeEffectiveSettings, computeOverrides
  * comparisons always use all 22 effective fields.
  */
 function buildBaseline(overrides: Partial<SparkSettings>): SparkSettings {
-  const baseline = {} as SparkSettings
+  const baseline = {} as Record<keyof SparkSettings, SparkSettings[keyof SparkSettings]>
   for (const [key, def] of Object.entries(FIELD_DEFS)) {
-    ;(baseline as unknown as Record<string, unknown>)[key] = def.default
+    baseline[key as keyof SparkSettings] = def.default as SparkSettings[keyof SparkSettings]
   }
   return { ...baseline, ...overrides } as SparkSettings
 }

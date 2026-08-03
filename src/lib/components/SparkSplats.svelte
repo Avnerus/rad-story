@@ -39,8 +39,8 @@
    * checks that the mesh is actually the current child before removing.
    */
   function detachMesh(m: SplatMesh): void {
-    if (wrapper.children.includes(m as unknown as Object3D)) {
-      wrapper.remove(m as unknown as Object3D)
+    if (wrapper.children.includes(m)) {
+      wrapper.remove(m)
     }
     m.dispose()
   }
@@ -114,7 +114,7 @@
 
         if (targetPager) {
           // Pager exists — check mesh attachment
-          const meshPager = (newMesh as unknown as { paged?: { pager?: unknown } }).paged?.pager
+          const meshPager = (newMesh.paged as import('@sparkjsdev/spark').PagedSplats | undefined)?.pager
           if (meshPager === targetPager) {
             // Verify pager is not disposed
             const pagerInfo = targetPager as { disposed?: boolean }
@@ -151,7 +151,7 @@
 
     // Test-only: expose wrapper for e2e transform assertions
     if (typeof window !== 'undefined') {
-      const hook = (window as unknown as Record<string, unknown>).__spark_stub_set_wrapper
+      const hook = window.__spark_stub_set_wrapper
       if (typeof hook === 'function') hook(wrapper)
     }
 

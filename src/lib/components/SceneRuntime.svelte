@@ -5,6 +5,7 @@
   import { ScrollTrigger } from 'gsap/ScrollTrigger'
   import { gsap } from 'gsap'
   import { isScrollAnimator } from '$lib/studio/scroll-animator/transactionGuard'
+  import type { ScrollAnimatorLike } from '$lib/types/scrollAnimator'
   import { scrollAnimatorRuntime } from '$lib/studio/scroll-animator/scrollAnimatorRuntime'
   import { activeSparkControlsRuntime } from '$lib/studio/spark-controls/activeSparkControlsRuntime'
   import type { SparkControls } from '$lib/spark/SparkControls'
@@ -63,7 +64,7 @@
     if (!scene) return
     scene.traverse((object: Object3D) => {
       if (isScrollAnimator(object)) {
-        (object as unknown as { applyScrollPercentage: (p: number) => void }).applyScrollPercentage(percent)
+        (object as ScrollAnimatorLike).applyScrollPercentage(percent)
       }
     })
   }
@@ -89,14 +90,14 @@
 
     // Stub-only: expose scene UUID, app camera UUID, and register SparkControls
     // for disposal tracking — all for e2e identity assertions
-    if ((window as unknown as Record<string, unknown>).__spark_stub === true) {
+    if (window.__spark_stub === true) {
       const scene = threlte.scene
-      ;(window as unknown as Record<string, unknown>).__stub_scene_uuid = scene?.uuid ?? null
-      ;(window as unknown as Record<string, unknown>).__stub_app_camera_uuid = appCamera.uuid
-      const register = (window as unknown as Record<string, unknown>).__spark_stub_register_controls
+      window.__stub_scene_uuid = scene?.uuid ?? null
+      window.__stub_app_camera_uuid = appCamera.uuid
+      const register = window.__spark_stub_register_controls
       if (typeof register === 'function') register(sparkControls)
       // Expose the active controller for e2e external-setter tests
-      ;(window as unknown as Record<string, unknown>).__spark_stub_active_controls = sparkControls
+      window.__spark_stub_active_controls = sparkControls
     }
 
     // Register GSAP ScrollTrigger
@@ -140,16 +141,16 @@
     detachSparkControls = null
     // Stub-only: identity-safe clear of active controls reference
     // (only delete if it still points to this scene's sparkControls)
-    if ((window as unknown as Record<string, unknown>).__spark_stub === true) {
-      const current = (window as unknown as Record<string, unknown>).__spark_stub_active_controls
+    if (window.__spark_stub === true) {
+      const current = window.__spark_stub_active_controls
       if (current === sparkControls) {
-        delete (window as unknown as Record<string, unknown>).__spark_stub_active_controls
+        delete window.__spark_stub_active_controls
       }
     }
     // Dispose SparkControls on scene unmount (single owner)
     // Stub-only: record disposal for e2e lifecycle assertions
-    if ((window as unknown as Record<string, unknown>).__spark_stub === true) {
-      const record = (window as unknown as Record<string, unknown>).__spark_stub_record_controls_disposal
+    if (window.__spark_stub === true) {
+      const record = window.__spark_stub_record_controls_disposal
       if (typeof record === 'function') record(sparkControls)
     }
     sparkControls.dispose()

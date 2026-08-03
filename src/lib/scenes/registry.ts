@@ -37,7 +37,7 @@ export function validateSceneName(raw: string): string | null {
 /**
  * Build the scene registry from Vite's static glob.
  */
-const sceneModules = import.meta.glob<ComponentType>('./[a-z0-9_]*.svelte', { eager: true })
+const sceneModules = import.meta.glob('./[a-z0-9_]*.svelte', { eager: true }) as Record<string, { default: ComponentType }>
 
 /**
  * Map from normalized scene name → component.
@@ -51,7 +51,7 @@ for (const path of Object.keys(sceneModules)) {
   if (name) {
     const mod = sceneModules[path]
     // Svelte components are the default export of the module
-    const component = (mod as unknown as Record<string, unknown>).default as ComponentType ?? mod as unknown as ComponentType
+    const component = mod.default
     registry.set(name, component)
   }
 }

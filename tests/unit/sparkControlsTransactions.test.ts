@@ -177,7 +177,7 @@ describe('SparkControls transaction semantics', () => {
     let notifiedKeys: Set<string> | null = null
     const unsub = controls.onChange((keys) => { notifiedKeys = keys })
 
-    ;(controls as unknown as Record<string, unknown>).blurAmount = 0.5
+    controls.blurAmount = 0.5
     expect(notifiedKeys).not.toBeNull()
     expect(notifiedKeys!.has('blurAmount')).toBe(true)
     expect(controls.settings.blurAmount).toBe(0.5)
@@ -191,7 +191,7 @@ describe('SparkControls transaction semantics', () => {
     const unsub = controls.onChange((keys) => { notifiedKeys = keys })
 
     // Set coneFov0 above default coneFov (120)
-    ;(controls as unknown as Record<string, unknown>).coneFov0 = 150
+    controls.coneFov0 = 150
 
     expect(notifiedKeys).not.toBeNull()
     // Both coneFov0 and coneFov should be in the changed set

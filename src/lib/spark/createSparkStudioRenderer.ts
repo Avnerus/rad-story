@@ -84,6 +84,24 @@ const LIVE_FIELDS = new Set<keyof SparkSettings>([
 // ---------------------------------------------------------------------------
 
 /**
+ * SparkRenderer declares all SparkSettings fields as instance properties.
+ * This intersection type lets us index into them with SparkSettings keys.
+ */
+interface SparkRendererWithSettings extends SparkRenderer, SparkSettings {}
+
+/**
+ * Set a property on a SparkRenderer using a SparkSettings key.
+ * Handles the lodSplatCount null → undefined mapping.
+ */
+function setRendererField(renderer: SparkRendererWithSettings, key: keyof SparkSettings, value: SparkSettings[keyof SparkSettings]): void {
+  if (key === 'lodSplatCount') {
+    renderer[key] = (value as number | null) === null ? undefined : value
+  } else {
+    renderer[key] = value
+  }
+}
+
+/**
  * Apply only the changed fields from `newSettings` to a SparkRenderer,
  * comparing against `oldSettings`. Returns the set of ChangeKinds that
  * were triggered.
@@ -101,16 +119,8 @@ export function applyChangedSettings(
     const newVal = newSettings[key]
     if (oldVal === newVal) continue
 
-    const k = key as keyof SparkRenderer
     const kind = FIELD_KINDS[key]
-
-    // Handle lodSplatCount: null → undefined (automatic), number → number
-    if (key === 'lodSplatCount') {
-      ;(renderer as unknown as Record<string, unknown>)[k] = newVal === null ? undefined : newVal
-    } else {
-      ;(renderer as unknown as Record<string, unknown>)[k] = newVal
-    }
-
+    setRendererField(renderer, key, newVal)
     kinds.add(kind)
   }
 
@@ -339,17 +349,10 @@ export function createSparkStudioRenderer(
    * Apply all live settings from a complete snapshot to a renderer.
    * Used after recreation to ensure new renderers have all settings.
    */
-  function applyLiveSettingsToRenderer(r: SparkRenderer, settings: SparkSettings): void {
+  function applyLiveSettingsToRenderer(r: SparkRendererWithSettings, settings: SparkSettings): void {
     for (const key of SETTINGS_KEYS) {
       if (!LIVE_FIELDS.has(key)) continue
-      const val = settings[key]
-      const k = key as keyof SparkRenderer
-
-      if (key === 'lodSplatCount') {
-        ;(r as unknown as Record<string, unknown>)[k] = val === null ? undefined : val
-      } else {
-        ;(r as unknown as Record<string, unknown>)[k] = val
-      }
+      setRendererField(r, key, settings[key])
     }
   }
 

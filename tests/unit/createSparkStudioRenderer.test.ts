@@ -19,7 +19,7 @@ function makeMockRenderer(): THREE.WebGLRenderer {
     info: { render: { frame: 0 } },
     capabilities: { maxTextureSize: 4096 },
     xr: { isPresenting: false },
-  } as unknown as THREE.WebGLRenderer
+  } as Partial<THREE.WebGLRenderer> as THREE.WebGLRenderer
 }
 
 /** Build a minimal mock scene. */
@@ -28,7 +28,7 @@ function makeMockScene(): THREE.Scene {
     add: vi.fn(),
     remove: vi.fn(),
     children: [],
-  } as unknown as THREE.Scene
+  } as Partial<THREE.Scene> as THREE.Scene
 }
 
 /** Base Spark options used by most tests. */
@@ -184,7 +184,7 @@ describe('createSparkStudioRenderer', () => {
       const editorR = handle.editorRenderer!
       const realR = handle.realRenderer!
 
-      const mockMesh = {} as unknown as SplatMesh
+      const mockMesh = {} as Partial<SplatMesh> as SplatMesh
       const lodData = { lodId: 1, numSplats: 100, indices: new Uint32Array(100), texture: {} as THREE.DataTexture }
       realR.lodInstances.set(mockMesh, lodData)
       editorR.lodInstances.clear()
@@ -254,7 +254,7 @@ describe('createSparkStudioRenderer', () => {
       editorCamera.userData.editorCamera = true
 
       // Simulate a pre-existing foreign override (e.g. from a nested render)
-      const foreignOverride = {} as unknown as SparkRenderer
+      const foreignOverride = {} as Partial<SparkRenderer> as SparkRenderer
       SparkRenderer.sparkOverride = foreignOverride
 
       editorR.onBeforeRender(renderer, scene, editorCamera)
@@ -270,7 +270,7 @@ describe('createSparkStudioRenderer', () => {
       const editorR = handle.editorRenderer!
       const realR = handle.realRenderer!
 
-      const mockMesh = {} as unknown as SplatMesh
+      const mockMesh = {} as Partial<SplatMesh> as SplatMesh
       const lodData = { lodId: 42, numSplats: 200, indices: new Uint32Array(200), texture: {} as THREE.DataTexture }
       realR.lodInstances.set(mockMesh, lodData)
       editorR.lodInstances.clear()
@@ -290,7 +290,7 @@ describe('createSparkStudioRenderer', () => {
       const { handle } = createWithMockedOnBeforeRender()
       const editorR = handle.editorRenderer!
 
-      const previousOverride = {} as unknown as SparkRenderer
+      const previousOverride = {} as Partial<SparkRenderer> as SparkRenderer
       SparkRenderer.sparkOverride = previousOverride
 
       const editorCamera = new THREE.PerspectiveCamera()
@@ -309,7 +309,7 @@ describe('createSparkStudioRenderer', () => {
       const editorR = handle.editorRenderer!
       const realR = handle.realRenderer!
 
-      const previousOverride = {} as unknown as SparkRenderer
+      const previousOverride = {} as Partial<SparkRenderer> as SparkRenderer
       SparkRenderer.sparkOverride = previousOverride
 
       const realCamera = new THREE.PerspectiveCamera()
@@ -328,7 +328,7 @@ describe('createSparkStudioRenderer', () => {
       const { handle } = createWithMockedOnBeforeRender(mockFn)
       const editorR = handle.editorRenderer!
 
-      const previousOverride = {} as unknown as SparkRenderer
+      const previousOverride = {} as Partial<SparkRenderer> as SparkRenderer
       SparkRenderer.sparkOverride = previousOverride
 
       const editorCamera = new THREE.PerspectiveCamera()
@@ -343,7 +343,7 @@ describe('createSparkStudioRenderer', () => {
       const { handle } = createWithMockedOnBeforeRender(mockFn)
       const editorR = handle.editorRenderer!
 
-      const previousOverride = {} as unknown as SparkRenderer
+      const previousOverride = {} as Partial<SparkRenderer> as SparkRenderer
       SparkRenderer.sparkOverride = previousOverride
 
       const realCamera = new THREE.PerspectiveCamera()

@@ -21,7 +21,7 @@ function makeMockRenderer(): THREE.WebGLRenderer {
     capabilities: { maxTextureSize: 4096 },
     xr: { isPresenting: false },
     setDirty: vi.fn(),
-  } as unknown as THREE.WebGLRenderer
+  } as Partial<THREE.WebGLRenderer> as THREE.WebGLRenderer
 }
 
 /** Build a minimal mock scene. */
@@ -30,7 +30,7 @@ function makeMockScene(): THREE.Scene {
     add: vi.fn(),
     remove: vi.fn(),
     children: [],
-  } as unknown as THREE.Scene
+  } as Partial<THREE.Scene> as THREE.Scene
 }
 
 /** Base Spark options used by most tests. */

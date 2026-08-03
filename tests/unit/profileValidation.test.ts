@@ -57,7 +57,8 @@ describe('SparkControls profile validation', () => {
     })
 
     it('handles malformed input (non-object, null)', () => {
-      const ctrl = new SparkControls(undefined, 'desktop', null as unknown as ProfileSettings, desktopBaseline)
+      // @ts-expect-error -- deliberately passing null to verify runtime hardening
+      const ctrl = new SparkControls(undefined, 'desktop', null, desktopBaseline)
       // Should not crash, should use baseline
       expect(ctrl.settings.blurAmount).toBe(desktopBaseline.blurAmount)
     })

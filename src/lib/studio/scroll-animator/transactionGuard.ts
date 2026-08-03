@@ -12,6 +12,10 @@
  */
 import { activeSparkControlsRuntime } from '$lib/studio/spark-controls/activeSparkControlsRuntime'
 import type { SparkControls } from '$lib/spark/SparkControls'
+import { isScrollAnimator } from '../../types/scrollAnimator'
+
+// Re-export for consumers that need the type guard
+export { isScrollAnimator }
 
 /**
  * Narrow structural transaction type for the guard.
@@ -25,22 +29,9 @@ export interface GuardTransaction {
 }
 
 /**
- * Check if an object is a branded ScrollAnimator (HMR-safe structural check).
+ * HMR-safe type guard: check if an object is a branded SparkControls.
  */
-export function isScrollAnimator(obj: unknown): boolean {
-  return (
-    obj !== null &&
-    typeof obj === 'object' &&
-    'isScrollAnimator' in obj &&
-    (obj as Record<string, unknown>).isScrollAnimator === true &&
-    typeof (obj as Record<string, unknown>).applyScrollPercentage === 'function'
-  )
-}
-
-/**
- * Check if an object is a branded SparkControls (HMR-safe structural check).
- */
-export function isSparkControls(obj: unknown): boolean {
+export function isSparkControls(obj: unknown): obj is SparkControls {
   return (
     obj !== null &&
     typeof obj === 'object' &&
@@ -102,7 +93,7 @@ export function guardScrollAnimatorTransactions(
       // Identity-aware check: only allow source sync if this exact controller
       // is the current active controller AND its registration permits it.
       // Stale/detached controllers never inherit a newer controller's permission.
-      if (!activeSparkControlsRuntime.canSourceSync(tx.object as SparkControls)) {
+      if (!activeSparkControlsRuntime.canSourceSync(tx.object)) {
         tx.sync = undefined
         continue
       }

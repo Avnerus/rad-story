@@ -475,6 +475,44 @@ Verify the profile by checking `navigator.userAgent` or the profile badge: `play
 - `tests/unit/sparkControlsTransactions.test.ts` — actual public transaction `write` for commit/undo/redo: forward write updates `profileSettings`/`settings`/notifications, undo restores historic state, redo re-applies, out-of-range persisted values are clamped, inactive profile preserved across all three phases, coupled invariant fields in notification.
 - `tests/unit/studioBuildTransaction.test.ts` — Studio transaction write semantics using `resolvePropertyPath` from `@threlte/core` and the exact write callback pattern from Studio's internal `buildTransaction`. Tests forward write, undo (historicValue), redo, out-of-range validation, inactive profile preservation, coupled invariants, and property path resolution.
 
+## TypeScript Typing Best Practices
+
+### Prohibited patterns
+
+- **No `as unknown as X` double assertions** in maintained code (`src/`, `tests/`). They disguise unsafety and are the primary anti-pattern this project eliminates.
+- **No `as any`** — use narrow, specific types.
+- **No `@ts-ignore`** — fix the type, don't suppress it.
+- **No broad `Record<string, unknown>` casts** on domain objects — use typed interfaces or key-correlated accessors.
+
+### Preferred patterns
+
+1. **Browser/e2e diagnostic globals:** Use the shared `Window` augmentation in `src/lib/types/spark-stub-globals.d.ts`. All stub globals (`__spark_stub`, `__spark_stub_diagnostics`, `__stub_scene_uuid`, etc.) are declared there with lifecycle-accurate optionality. Access them directly as `window.__spark_stub_diagnostics` — no casts needed.
+
+2. **Branded Three.js objects (ScrollAnimator):** Use the reusable type guard `isScrollAnimator(obj)` from `src/lib/types/scrollAnimator.ts`. It narrows to `ScrollAnimatorLike` (structural interface with `keyframes`, `applyScrollPercentage`, `showChildCameraFrustumWhenSelected`). When svelte-check cannot follow the type predicate, cast to `ScrollAnimatorLike` after the guard — a single narrow assertion, not `as unknown`.
+
+3. **Dynamic scene registry:** `import.meta.glob` is typed as `Record<string, { default: ComponentType }>`. Access `mod.default` directly — no double casts.
+
+4. **Heterogeneous Spark settings writes:** Use `SparkSettings` key correlation. For individual field setters on `SparkControls`, use the `setSparkField()` helper (typed generic `K extends keyof SparkSettings`, accepts `unknown` value). For `SparkRenderer` fields, use the `SparkRendererWithSettings` intersection type and `setRendererField()` helper.
+
+5. **Third-party Spark/Three boundaries:** When a library type is missing a property that exists at runtime, create a narrow intersection type (e.g., `SparkRendererWithSettings extends SparkRenderer, SparkSettings`) rather than casting to `Record<string, unknown>`.
+
+6. **Test doubles:** Use `Partial<T> as T` for mock objects (single assertion). For deliberately invalid inputs, use `@ts-expect-error` with a comment explaining the intent.
+
+7. **SplatMesh inheritance:** `SplatMesh extends SplatGenerator extends Object3D`. Access `wrapper.children.includes(mesh)` directly — no cast needed.
+
+### Regression enforcement
+
+- `rg -n '\bas unknown\b' src tests` must return no code matches (comments are OK).
+- `tests/unit/noDoubleAssertions.test.ts` runs this check as part of the unit test suite.
+- `npm run check` (svelte-check) and `npm run test:unit` must pass.
+
+### Source references
+
+- `src/lib/types/scrollAnimator.ts` — `ScrollAnimatorLike` interface and `isScrollAnimator()` type guard
+- `src/lib/types/spark-stub-globals.d.ts` — `Window` augmentation for all e2e stub globals
+- `src/lib/spark/createSparkStudioRenderer.ts` — `SparkRendererWithSettings` intersection, `setRendererField()` helper
+- `src/lib/studio/spark-controls/SparkControlsExtension.svelte` — `setSparkField()` typed setter helper
+
 ## CORS Note
 
 Remote RAD files and their `.radc` chunk files must be served with CORS headers.

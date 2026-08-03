@@ -329,11 +329,11 @@ export class SparkControls extends Object3D {
    * Create a settings object with all field defaults.
    */
   createDefaultSettings(): SparkSettings {
-    const s = {} as SparkSettings
+    const s = {} as Record<keyof SparkSettings, SparkSettings[keyof SparkSettings]>
     for (const [key, def] of Object.entries(FIELD_DEFS)) {
-      ;(s as unknown as Record<string, unknown>)[key] = def.default
+      s[key as keyof SparkSettings] = def.default as SparkSettings[keyof SparkSettings]
     }
-    return s
+    return s as SparkSettings
   }
 
   /**

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { Object3D } from 'three'
 import { isScrollAnimator } from '$lib/studio/scroll-animator/transactionGuard'
+import type { ScrollAnimatorLike } from '$lib/types/scrollAnimator'
 
 /**
  * Minimal HMR-safe ScrollAnimator stand-in for testing.
@@ -39,7 +40,7 @@ describe('scene-wide ScrollAnimator traversal', () => {
     // Simulate the scene.traverse pattern used in RadStoryScene
     scene.traverse((object) => {
       if (isScrollAnimator(object)) {
-        ;(object as unknown as { applyScrollPercentage: (p: number) => void }).applyScrollPercentage(50)
+        ;(object as ScrollAnimatorLike).applyScrollPercentage(50)
       }
     })
 
@@ -57,7 +58,7 @@ describe('scene-wide ScrollAnimator traversal', () => {
 
     scene.traverse((object) => {
       if (isScrollAnimator(object)) {
-        ;(object as unknown as { applyScrollPercentage: (p: number) => void }).applyScrollPercentage(75)
+        ;(object as ScrollAnimatorLike).applyScrollPercentage(75)
       }
     })
 
