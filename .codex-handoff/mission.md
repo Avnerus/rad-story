@@ -1,154 +1,117 @@
-# Mission: eliminate double assertions and establish clean type boundaries
+# Follow-up mission: make the typing cleanup genuinely sound
 
 ## Objective
 
-Remove every `as unknown` double assertion from the maintained application and test code, replacing each one with accurate, maintainable TypeScript typing. Fix the underlying type boundaries rather than disguising the same unsafety with `as any`, broad casts, non-null assertions, suppression comments, or unvalidated generic records. Preserve runtime behavior.
+Correct the first typing-cleanup pass so it removes the underlying unsafety, not only the literal `as unknown` spelling. The implementation must use honest boundary types, sound type predicates, key/value-correlated settings writes, and narrow test seams. Make the occurrence audit and completion report accurate.
 
-The current baseline is **92 occurrences across 20 files** under `src/` and `tests/` (`rg -n '\bas unknown\b' src tests`). Treat that search as the authoritative starting inventory, but also clean up directly adjacent typing where necessary to make the replacements sound.
+## Verification findings to address
+
+1. The required raw audit still has four matches under `src/` and `tests/`; comments were not exempt from the mission.
+2. `tests/unit/noDoubleAssertions.test.ts` is self-defeating: it excludes itself, filters comments, and `execSync('rg ...')` throws when the desired state (no matches) is reached because `rg` exits 1. It also depends on an external binary during unit tests.
+3. `tests/unit/createSparkStudioRenderer.test.ts` and `tests/unit/sparkStudioSettings.test.ts` replaced double assertions with `Partial<T> as T`, including `{}` presented as full `SplatMesh`/`SparkRenderer`. This explicitly violates the original narrow-test-double constraint.
+4. `tests/unit/scrollAnimatorTypeGuard.test.ts` introduces `as any` and constructs a fake full `Object3D` shape. The report's claim of zero `as any` is therefore false.
+5. `isScrollAnimator(unknown): obj is ScrollAnimatorLike` is unsound: it returns true for a plain object containing only a brand and function, while `ScrollAnimatorLike extends Object3D` and promises `keyframes`. Consumers then rely on properties the predicate never establishes. Several consumers still add redundant assertions after the guard.
+6. `registry.ts` casts the whole `import.meta.glob` result instead of supplying Vite's generic or validating the runtime module shape.
+7. `createDefaultSettings()` and `buildBaseline()` use union-valued record assertions. `setRendererField()` accepts an uncorrelated union key and union value. These compile by widening the relationship rather than proving the correct value type for each key—the exact pitfall called out in the original mission.
+8. `SparkRendererWithSettings extends SparkRenderer, SparkSettings` asserts that every domain setting has the same runtime property contract. In particular, conversions such as `lodSplatCount: null -> undefined` show that the contracts are not identical. Model the real installed public renderer API rather than declaring a convenient intersection.
+9. `AGENTS.md` currently blesses `Partial<T> as T`, says comment matches are acceptable, and recommends the unsound intersection/generic setter patterns. Those rules must be corrected.
+10. `.codex-handoff/status.md` reports lint failure but checks “all verification commands pass.” The next report must be internally consistent and include the exact lint failure if one remains.
 
 ## Files likely involved
 
-- Runtime/component boundaries:
-  - `src/lib/components/SceneRuntime.svelte`
-  - `src/lib/components/SparkSplats.svelte`
-  - `src/lib/scenes/registry.ts`
-- Spark settings and renderer integration:
-  - `src/lib/spark/SparkControls.ts`
-  - `src/lib/spark/deviceProfile.ts`
-  - `src/lib/spark/createSparkStudioRenderer.ts`
-  - `src/lib/studio/spark-controls/SparkControlsExtension.svelte`
-- Scroll Animator Studio integration:
-  - `src/lib/studio/scroll-animator/ScrollAnimatorExtension.svelte`
-  - `src/lib/studio/scroll-animator/CameraFrustumHelper.svelte`
-- Shared declarations/types (add a focused `.d.ts` or type module if appropriate):
-  - `src/lib/types.ts`, `src/lib/types/`, or a narrowly named new declaration file
-- Tests and fixtures currently containing double assertions:
-  - `tests/fixtures/spark-stub.ts`
-  - `tests/unit/createSparkStudioRenderer.test.ts`
-  - `tests/unit/sparkStudioSettings.test.ts`
-  - `tests/unit/profileSettingsTransaction.test.ts`
-  - `tests/unit/profileValidation.test.ts`
-  - `tests/unit/sceneObjects.test.ts`
-  - `tests/unit/sceneTraversal.test.ts`
-  - `tests/unit/sparkControlsTransactions.test.ts`
-  - `tests/e2e/scene-routing.spec.ts`
-  - `tests/e2e/rad-story.spec.ts`
-  - `tests/e2e/playback-edit.spec.ts`
+- `src/lib/types/scrollAnimator.ts`
+- `src/lib/components/SceneRuntime.svelte`
+- `src/lib/studio/scroll-animator/{transactionGuard.ts,ScrollAnimatorExtension.svelte,CameraFrustumHelper.svelte}`
+- `src/lib/scenes/registry.ts`
+- `src/lib/spark/{SparkControls.ts,deviceProfile.ts,createSparkStudioRenderer.ts}`
+- Tests around renderer construction/settings, scene traversal, and the guard
+- `tests/unit/noDoubleAssertions.test.ts` (replace or redesign)
 - `AGENTS.md`
+- `.codex-handoff/status.md`
 
-Use `rg -l '\bas unknown\b' src tests` to refresh this list before editing; it is possible the branch changes while the mission is in progress.
+Refresh the changed-file list and occurrence inventory before editing. Keep fixes scoped to the findings above.
 
-## Constraints
+## Constraints and implementation guidance
 
-- End state: zero matches for `\bas unknown\b` under `src/` and `tests/`.
-- Do not mechanically replace double assertions with `as any`, `as never`, broad `Record<string, unknown>` assertions, `!`, `@ts-ignore`, or weakened compiler/linter settings.
-- A single assertion at a genuine external boundary is acceptable only when TypeScript cannot infer an already-established truth and the asserted type is narrow. Prefer parsing, a type guard, a typed adapter, module/global augmentation, `satisfies`, or a typed factory first.
-- Keep `strict` TypeScript behavior. Do not relax `tsconfig.json`, Svelte checking, or ESLint rules.
-- Preserve all runtime semantics, public behavior, scene source-sync behavior, Spark reload behavior, and e2e diagnostics. This is a typing/refactoring mission, not a feature redesign.
-- Avoid new production dependencies unless there is a compelling and documented reason.
-- Keep production-only abstractions out of test code and test-only globals out of the ordinary public API. Shared diagnostic declarations may live in a clearly named ambient test/e2e declaration that is included by the existing TypeScript config.
-- Do not widen core domain models merely to accommodate incomplete mocks. Give mocks deliberate narrow interfaces/factories instead.
-- Do not edit unrelated files or reformat unrelated code.
-
-## Implementation tips
-
-Work by type-boundary category, not line by line:
-
-1. **Browser diagnostic globals:** Define an explicit `Window`/`globalThis` contract for `__spark_stub`, diagnostic functions/data, UUIDs, activation gates, active controls, and fixture callbacks. Reuse exported diagnostic interfaces where production and e2e genuinely share a shape. Make optionality match lifecycle reality, and use normal property access/delete afterward. Avoid an untyped index signature on `Window`.
-2. **Branded Three.js objects:** Add or reuse narrow type guards such as `isScrollAnimator(value): value is ScrollAnimator` (or a minimal branded structural interface where importing the concrete class would create coupling). Let `scene.traverse` narrow before calling `applyScrollPercentage`. Type Studio selection guards similarly so ScrollAnimator properties need no double cast.
-3. **Dynamic scene registry:** Give `import.meta.glob` an appropriate generic module shape and validate the module/default export at the boundary. Do not cast the entire module through `unknown`; retain the current fallback/validation semantics only if they are actually required by Vite's typed result.
-4. **Keyed settings writes:** Avoid casting controllers/settings/renderers to `Record<string, unknown>`. Prefer a typed key/value relationship (`K extends keyof ...`), a typed field-definition map whose setter preserves each value type, or an exhaustive setter/apply function. Be alert that a union key plus union value is not proof that a matching key/value pair exists. An exhaustive switch or per-field typed callback is often clearer and safer for the 22 heterogeneous fields.
-5. **Third-party Spark/Three boundaries:** First check the installed public types. If the runtime object truly has a missing/mistyped public member, contain that mismatch in one narrow adapter or accurate module augmentation and document why. For `SplatMesh`/`Object3D`, use the real inheritance/type relationship when present; do not perpetuate library-shape assumptions through casts. For optional internal pager probing, use a runtime predicate that validates the accessed structure.
-6. **Test doubles:** Create small typed factory helpers using `Pick<>`, explicit minimal dependency interfaces, and `satisfies`. If production functions currently require huge concrete WebGL/Scene/Spark classes but only consume a few members, consider accepting a narrow structural interface at the internal seam without weakening the public runtime contract. Do not fabricate fully typed class instances from `{}`.
-7. **Deliberately invalid-input tests:** Express compile-time-invalid calls with a narrowly scoped `@ts-expect-error` only when the test specifically verifies runtime hardening against untyped callers, and explain that intent. Better still, expose/test a validation function whose input is honestly `unknown` when validation is the actual contract. Never replace these with `as never` merely to satisfy the search.
-8. **Mutation tests:** When a test needs to invoke a real writable property, use the real property type. When it intentionally models an external transaction payload, construct and validate that payload at the same boundary production uses rather than mutating through `Record<string, unknown>`.
-9. **Regression prevention:** Add an ESLint restriction or a small test/script that fails on `as unknown as` / `as unknown` in maintained TS/Svelte code if it fits the existing tooling cleanly. Do not make a brittle check that scans dependencies or generated output. The acceptance grep remains required regardless.
-
-Critical illustrative pattern (adapt names to the real domain; do not copy blindly):
-
-```ts
-interface SceneModule {
-  default: ComponentType
-}
-
-const modules = import.meta.glob<SceneModule>('./[a-z0-9_]*.svelte', { eager: true })
-```
-
-For globals, prefer a precise ambient declaration rather than casting `window`:
-
-```ts
-declare global {
-  interface Window {
-    __spark_stub?: boolean
-    __camera_frustum_helper_diagnostic?: () => CameraFrustumDiagnostic
-  }
-}
-```
+- Zero raw matches from `rg -n '\bas unknown\b' src tests`; this includes comments and test strings.
+- Zero `as any` introduced by this work. Do not substitute `as never`, chained assertions of another form, broad record/domain casts, non-null assertions, or suppression comments.
+- A type predicate may promise only facts established by its input type plus its runtime checks. A good design here is likely a guard accepting `Object3D` (because traversal/selection already supplies one) and checking the ScrollAnimator brand, callable method, and any additional domain property consumers require. If unknown input support is retained, first establish the full promised shape. Once narrowed, consumers must not re-cast to the predicate's result.
+- Prefer the actual `ScrollAnimator` instances in tests. For HMR structural tests, start from a real `Object3D` and add the minimal branded domain properties through a typed helper whose return type is constructed honestly.
+- Use `import.meta.glob<SceneModule>(pattern, { eager: true })` or validate unknown module values with a runtime guard. Do not assert the returned record wholesale.
+- Preserve key/value correlation for heterogeneous settings. Good options include:
+  - field definitions carrying a typed setter/apply callback;
+  - an exhaustive switch that narrows each key and applies the corresponding correctly typed value;
+  - constructing defaults from a complete typed literal checked with `satisfies SparkSettings`;
+  - a generic callback invoked while `K` remains correlated with `SparkSettings[K]`.
+  A function accepting `keyof SparkSettings` plus `SparkSettings[keyof SparkSettings]` is not correlated.
+- Inspect the installed Spark declarations and model only the renderer fields actually exposed. Keep the `null -> undefined` conversion explicit in an adapter whose input and output types reflect that difference. Do not declare `SparkRenderer & SparkSettings` merely to make indexed writes compile.
+- Test doubles must describe what the unit consumes. Extract or accept narrow structural dependency interfaces where useful, use real lightweight Three objects when practical, and use typed factories/`satisfies` for minimal mocks. Do not claim a partial object is a complete heavyweight class.
+- A regression rule must pass when there are genuinely zero occurrences, must not hide comments or its own file, and should not require `rg` at unit-test runtime. Prefer an ESLint AST restriction if it can cover TS and Svelte; otherwise implement a small filesystem-based test/check whose forbidden token is assembled without containing the token itself. It should detect chained double assertions, including across whitespace/newlines, without flagging documentation accidentally.
+- Preserve all runtime behavior and all existing negative-path test intent. Do not relax compiler/linter settings or remove tests.
+- Do not fix unrelated lint problems. If lint fails outside this diff, record the exact file/rule and mark that acceptance item honestly rather than claiming success.
 
 ## AGENTS.md update
 
-Update `AGENTS.md` with concise, current typing guidance and source references that a fresh agent can act on. Include:
+Correct the TypeScript best-practices section so it:
 
-- the preferred patterns for typed browser diagnostics, branded-object narrowing, typed dynamic scene modules, heterogeneous settings mutation, and narrow test doubles;
-- a rule prohibiting double assertions and cast substitutions that merely move unsafety (`as any`, `as never`, broad record casts);
-- where the shared types/guards/factories introduced by this mission live;
-- the command used to enforce the zero-occurrence invariant;
-- any architecture facts changed by the implementation.
-
-Keep this as durable best-practice documentation, not a chronological implementation log.
+- prohibits unsafe chained assertions generally, not just one spelling;
+- does not recommend `Partial<T> as T`, uncorrelated generic setters, or domain intersections that are not true runtime contracts;
+- documents the final sound guard, registry, renderer adapter, settings construction/mutation, globals, and test-double patterns with source references;
+- states the exact regression command and zero-match expectation;
+- remains concise fresh-session documentation, not an implementation log.
 
 ## Acceptance criteria
 
-- `rg -n '\bas unknown\b' src tests` returns no matches.
-- No replacement pattern evades the goal (`as any`, unjustified `as never`, broad record assertions, suppression comments, non-null assertions, or weakened configs).
-- Runtime/external values are checked with sound narrowing before use.
-- Browser/e2e globals have one precise, reusable contract with lifecycle-accurate optional properties.
-- ScrollAnimator traversal and Studio selection use a reusable type guard or real class type.
-- Scene registry modules are typed at `import.meta.glob` or validated through a sound boundary.
-- Spark setting key/value writes maintain the correct correlation between each key and its value type.
-- Test doubles model only the interfaces consumed by the unit under test and no longer pretend `{}` is a full Three/Spark class instance.
-- Existing behavior and test intent remain unchanged.
-- New unit tests cover any new type guards, runtime validators, adapters, or helpers with meaningful behavior.
-- A maintainable regression check is added if feasible with current tooling.
-- `AGENTS.md` contains concise, up-to-date typing best practices and source references.
-- All verification commands below pass.
-- Re-check every item in this Acceptance criteria section immediately before finalizing.
+- The raw command `rg -n '\bas unknown\b' src tests` prints nothing and exits with no code matches expected.
+- No unsafe substitutes exist in the changed solution: `as any`, unjustified `as never`, chained assertions, fabricated full-class mocks, broad domain-record casts, or new suppression directives.
+- `isScrollAnimator` is a sound predicate; every property promised follows from its parameter type or is runtime-validated. All post-guard assertions are removed.
+- Guard tests use real `Object3D`/`ScrollAnimator` values or honestly typed factories and cover malformed branded objects.
+- Scene registry typing is established through the glob generic or runtime validation, not a wholesale result assertion.
+- Default/baseline construction is complete and checked without union-valued record assertions.
+- Every settings mutation preserves its key/value relationship.
+- The Spark renderer adapter reflects the actual installed Spark property types, including the automatic `lodSplatCount` representation.
+- Renderer/scene/mesh tests use narrow seams, real instances, or honest factories—never `Partial<T> as T`.
+- The regression enforcement succeeds in the true zero-match state and cannot exempt its own violation.
+- `AGENTS.md` documents only the final sound patterns.
+- Reported verification and checklist results are mutually consistent.
+- Re-check every acceptance item before finalizing.
 
 ## Tests to run
 
-Run at minimum:
+Add or update focused tests for the sound guard, malformed objects, typed settings adapters, and regression enforcement. Then run:
 
 ```sh
 rg -n '\bas unknown\b' src tests
+rg -n '\bas any\b|\bas never\b|Partial<[^>]+>\s+as\s+' src tests
 npm run check
 npm run lint
 npm run test:unit
 npm run build
 npm run test:e2e
+git diff --check
 ```
 
-Also add and run focused new unit tests for any runtime type guards/validators/adapters introduced. If a full e2e run is environment-blocked, report the exact blocker and run the most relevant affected specs where possible; do not silently omit it.
+The first two audits should produce no relevant unsafe-code matches. Explain any legitimate pre-existing result precisely rather than filtering it away.
 
 ## Things Pi must not change
 
-- Do not change scene URLs, routes, camera animation semantics, source-sync allowlists, Spark setting defaults/bounds, profile resolution, renderer behavior, reload coordination, or diagnostic behavior.
-- Do not weaken types or validation to make tests compile.
-- Do not remove useful negative-path tests just because their inputs are awkward to type.
-- Do not add generated/build artifacts or unrelated cleanup.
-- Do not modify `.codex-handoff/mission.md`.
+- Do not change scene/routing/camera behavior, Spark defaults or validation, profile resolution, source-sync rules, renderer/reload semantics, e2e diagnostic behavior, or dependencies.
+- Do not weaken public types solely for mocks.
+- Do not delete negative tests or reduce their assertions.
+- Do not modify unrelated files or `.codex-handoff/mission.md`.
 
 ## Expected completion report format
 
-Write the report to `.codex-handoff/status.md` with:
+Write `.codex-handoff/status.md` with:
 
-1. **Summary** — concise description of the typing strategy and outcome.
-2. **Changed files** — grouped by production types/boundaries, tests/fixtures, and documentation.
-3. **Occurrence audit** — starting count, final `rg` result, and a note confirming no unsafe substitute patterns were introduced.
-4. **Key design decisions** — especially globals, type guards, registry typing, heterogeneous settings writes, third-party adapters, and mock seams.
-5. **Tests added/updated** — what each new test protects.
-6. **Verification** — exact commands and pass/fail outcomes (include any blocker verbatim).
-7. **Acceptance checklist** — every criterion above checked individually.
-8. **Risks/follow-ups** — remaining concerns, or `None`.
-9. **Commit(s)** — hashes and subjects pushed to the current branch.
+1. Summary of the corrected type-boundary design.
+2. Changed files grouped by production, tests, and documentation.
+3. Each verification finding above mapped to its fix.
+4. Raw occurrence/unsafe-substitute audit outputs.
+5. Tests added or changed and what they prove.
+6. Exact verification commands and honest outcomes, including the exact lint blocker if any.
+7. Itemized acceptance checklist with no contradictory claims.
+8. Remaining risks/follow-ups or `None`.
+9. Pushed commit hashes and subjects.
 
-Always write `status.md` as the **last action before committing and pushing**. After the final push, perform no more verification, edits, or modifications. Before writing that report, re-check that every Acceptance criteria item is met. Push the completed implementation and report to the current branch.
+Re-check all acceptance criteria immediately before finalizing. Always write `status.md` as the last action before committing and pushing. After the final push, perform no more verification or modifications. Push the implementation and report to the current branch.
